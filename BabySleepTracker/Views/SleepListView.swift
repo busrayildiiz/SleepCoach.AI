@@ -610,9 +610,6 @@ struct SleepListView: View {
                         bedtimeWindowCard
                     }
                        todayTimelineCard
-                    if !isStillInNightSleep || shouldShowWakeUpCard {
-                        todayWakeUpCard
-                    }
                        coachInsightCard
                        totalSleepCard
                        statsRow
@@ -821,31 +818,6 @@ struct SleepListView: View {
         )
     }
     
-    // MARK: - Regular Next Nap / Bedtime Card
-
-    private var regularNextNapOrBedtimeCard: some View {
-        let isBedtime    = orchestrator.snapshot?.nextSleepKind == .bedtime
-        let isOverdue    = isNextNapOverdue
-        let displayTime  = isBedtime
-            ? (orchestrator.snapshot?.night.optimalBedtimeStart ?? nextNapTime)
-            : nextNapTime
-
-        return Button {
-            // Kart tıklama aksiyonu (sheet veya navigation tetikleyiciniz)
-            activeSheet = .addSleep(editing: nil, defaultDate: isOverdue ? Date() : displayTime)
-        } label: {
-            NextSleepCard(
-                isBedtime:         isBedtime,
-                isOverdue:         isOverdue,
-                displayTime:       displayTime,
-                windowText:        recommendationWindow,
-                confidencePercent: confidencePercent,
-                bedtimeWindowEnd:  orchestrator.snapshot?.night.optimalBedtimeEnd,
-                overtiredRiskTime: orchestrator.snapshot?.night.overtiredRiskTime
-            )
-        }
-        .buttonStyle(.plain)
-    }
     
     // MARK: - Today Wake Up Card
 
@@ -906,129 +878,220 @@ struct SleepListView: View {
             .buttonStyle(CardPressButtonStyle())
         }
     }
+    // MARK: - Regular Next Nap / Bedtime Card
 
-    // MARK: - NextSleepCard Component
+    private var regularNextNapOrBedtimeCard: some View {
+        let isBedtime    = orchestrator.snapshot?.nextSleepKind == .bedtime
+        let isOverdue    = isNextNapOverdue
+        let displayTime  = isBedtime
+            ? (orchestrator.snapshot?.night.optimalBedtimeStart ?? nextNapTime)
+            : nextNapTime
+
+        return Button {
+            activeSheet = .addSleep(editing: nil, defaultDate: isOverdue ? Date() : displayTime)
+        } label: {
+            NextSleepCard(
+                isBedtime:         isBedtime,
+                isOverdue:         isOverdue,
+                displayTime:       displayTime,
+                windowText:        recommendationWindow,
+                confidencePercent: confidencePercent,
+                bedtimeWindowEnd:  orchestrator.snapshot?.night.optimalBedtimeEnd,
+                overtiredRiskTime: orchestrator.snapshot?.night.overtiredRiskTime
+            )
+        }
+        .buttonStyle(CardPressButtonStyle())
+    }
+    // MARK: - NextSleepCard
 
     struct NextSleepCard: View {
-        let isBedtime: Bool
-        let isOverdue: Bool
-        let displayTime: Date
-        let windowText: String
+
+        let isBedtime:         Bool
+        let isOverdue:         Bool
+        let displayTime:       Date
+        let windowText:        String
         let confidencePercent: Int
-        let bedtimeWindowEnd: Date?
+        let bedtimeWindowEnd:  Date?
         let overtiredRiskTime: Date?
 
-        @State private var pulse = false
+        @State private var pulse        = false
         @State private var starOpacity1: Double = 0.3
         @State private var starOpacity2: Double = 0.6
         @State private var starOpacity3: Double = 0.2
 
-        // MARK: - State Detection
+        // MARK: - State Kind (önce tanımlanmalı)
 
-        private var isNightMode: Bool {
-            guard isBedtime else { return false }
-            return Date() >= displayTime
-        }
+        enum StateKind { case nextNap, overdueNap, bedtimeApproaching, nightMode, overtired }
 
-        private var isOvertiredMode: Bool {
-            guard let risk = overtiredRiskTime else { return false }
-            return isBedtime && Date() >= risk
-        }
-
-        private var minutesUntilBedtime: Int {
-            guard isBedtime, !isNightMode else { return 0 }
-            return max(0, Int(displayTime.timeIntervalSince(Date()) / 60))
-        }
-
-        // MARK: - Theme Engine
-
-        enum CardThemeKind {
-            case nextNap, overdueNap, bedtimeApproaching, nightMode, overtired
-        }
-        
-        private var currentThemeKind: CardThemeKind {
-            if isOvertiredMode { return .overtired }
-            if isOverdue       { return .overdueNap }
-            if isNightMode     { return .nightMode }
-            if isBedtime       { return .bedtimeApproaching }
+        private var stateKind: StateKind {
+            if isBedtime, let risk = overtiredRiskTime, Date() >= risk { return .overtired }
+            if isOverdue          { return .overdueNap }
+            if isBedtime, Date() >= displayTime { return .nightMode }
+            if isBedtime          { return .bedtimeApproaching }
             return .nextNap
         }
 
-        private var cardTheme: CardTheme {
-            switch currentThemeKind {
-            case .nextNap:            return Self.nextNap
-            case .overdueNap:         return Self.overdueNap
-            case .bedtimeApproaching: return Self.bedtimeApproaching
-            case .nightMode:          return Self.nightMode
-            case .overtired:          return Self.overtired
+        // MARK: - Theme
+
+        struct CardTheme {
+            let bg:         [Color]
+            let border:     Color
+            let shadow:     Color
+            let label:      Color
+            let title:      Color
+            let subtitle:   Color
+            let ringTrack:  Color
+            let ringArc:    [Color]
+            let ringText:   Color
+            let bottom:     Color
+            let labelText:  String
+            let showStars:  Bool
+            let showPulse:  Bool
+        }
+
+        private var theme: CardTheme {
+            switch stateKind {
+            case .nextNap:
+                return CardTheme(
+                    bg:        [Color(red:0.28,green:0.18,blue:0.65), Color(red:0.20,green:0.12,blue:0.50)],
+                    border:    Color(red:0.55,green:0.45,blue:0.98).opacity(0.35),
+                    shadow:    Color(red:0.20,green:0.12,blue:0.50).opacity(0.55),
+                    label:     Color(red:0.80,green:0.74,blue:1.0),
+                    title:     .white,
+                    subtitle:  Color(red:0.80,green:0.74,blue:1.0).opacity(0.85),
+                    ringTrack: Color.white.opacity(0.10),
+                    ringArc:   [Color(red:0.72,green:0.65,blue:0.98).opacity(0.6), Color(red:0.72,green:0.65,blue:0.98), .white],
+                    ringText:  .white,
+                    bottom:    Color(red:0.72,green:0.65,blue:0.98).opacity(0.8),
+                    labelText: "NEXT NAP",
+                    showStars: false,
+                    showPulse: true
+                )
+            case .overdueNap:
+                return CardTheme(
+                    bg:        [Color(red:0.52,green:0.25,blue:0.04), Color(red:0.38,green:0.16,blue:0.02)],
+                    border:    Color.orange.opacity(0.4),
+                    shadow:    Color(red:0.38,green:0.16,blue:0.02).opacity(0.55),
+                    label:     Color(red:1.0,green:0.72,blue:0.3),
+                    title:     .white,
+                    subtitle:  Color(red:1.0,green:0.72,blue:0.3).opacity(0.85),
+                    ringTrack: Color.white.opacity(0.10),
+                    ringArc:   [Color.orange.opacity(0.6), Color.orange, .white],
+                    ringText:  .white,
+                    bottom:    Color(red:1.0,green:0.72,blue:0.3).opacity(0.8),
+                    labelText: "NAP WINDOW PASSED",
+                    showStars: false,
+                    showPulse: true
+                )
+            case .bedtimeApproaching:
+                return CardTheme(
+                    bg:        [Color(red:0.22,green:0.14,blue:0.52), Color(red:0.15,green:0.09,blue:0.38)],
+                    border:    Color(red:0.45,green:0.35,blue:0.88).opacity(0.35),
+                    shadow:    Color(red:0.15,green:0.09,blue:0.38).opacity(0.55),
+                    label:     Color(red:0.72,green:0.65,blue:0.98),
+                    title:     .white,
+                    subtitle:  Color(red:0.72,green:0.65,blue:0.98).opacity(0.85),
+                    ringTrack: Color.white.opacity(0.10),
+                    ringArc:   [Color(red:0.72,green:0.65,blue:0.98).opacity(0.6), Color(red:0.72,green:0.65,blue:0.98), .white],
+                    ringText:  .white,
+                    bottom:    Color(red:0.72,green:0.65,blue:0.98).opacity(0.8),
+                    labelText: "BEDTIME",
+                    showStars: true,
+                    showPulse: false
+                )
+            case .nightMode:
+                return CardTheme(
+                    bg:        [Color(red:0.12,green:0.08,blue:0.35), Color(red:0.08,green:0.05,blue:0.25)],
+                    border:    Color(red:0.32,green:0.22,blue:0.72).opacity(0.4),
+                    shadow:    Color(red:0.08,green:0.05,blue:0.25).opacity(0.6),
+                    label:     Color(red:0.72,green:0.65,blue:0.98),
+                    title:     .white,
+                    subtitle:  Color(red:0.72,green:0.65,blue:0.98).opacity(0.85),
+                    ringTrack: Color.white.opacity(0.10),
+                    ringArc:   [Color(red:0.72,green:0.65,blue:0.98).opacity(0.6), Color(red:0.72,green:0.65,blue:0.98), .white],
+                    ringText:  .white,
+                    bottom:    Color(red:0.72,green:0.65,blue:0.98).opacity(0.8),
+                    labelText: "BEDTIME",
+                    showStars: true,
+                    showPulse: true
+                )
+            case .overtired:
+                return CardTheme(
+                    bg:        [Color(red:0.50,green:0.06,blue:0.06), Color(red:0.35,green:0.04,blue:0.04)],
+                    border:    Color.red.opacity(0.4),
+                    shadow:    Color(red:0.35,green:0.04,blue:0.04).opacity(0.55),
+                    label:     Color(red:1.0,green:0.72,blue:0.3),
+                    title:     .white,
+                    subtitle:  Color(red:1.0,green:0.72,blue:0.3).opacity(0.85),
+                    ringTrack: Color.white.opacity(0.10),
+                    ringArc:   [Color.red.opacity(0.6), Color.red, .white],
+                    ringText:  .white,
+                    bottom:    Color(red:1.0,green:0.72,blue:0.3).opacity(0.8),
+                    labelText: "OVERTIRED RISK",
+                    showStars: false,
+                    showPulse: true
+                )
             }
         }
 
         // MARK: - Body
 
         var body: some View {
-            let t = cardTheme
+            let t = theme
             ZStack {
-                // Arka plan
                 RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .fill(LinearGradient(
-                        colors: [t.gradientTop, t.gradientBot],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ))
+                    .fill(LinearGradient(colors: t.bg, startPoint: .topLeading, endPoint: .bottomTrailing))
 
-                // Yıldız texture (gece state'lerinde)
                 if t.showStars { starsLayer }
 
-                // İçerik
                 VStack(spacing: 0) {
                     topRow(t)
-                    Divider()
-                        .background(Color.white.opacity(0.08))
-                        .padding(.horizontal, 16)
+                    Divider().background(Color.white.opacity(0.08)).padding(.horizontal, 16)
                     bottomRow(t)
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .stroke(t.borderColor, lineWidth: 1)
-            )
-            .shadow(color: t.shadowColor, radius: 16, x: 0, y: 8)
+            .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(t.border, lineWidth: 1))
+            .shadow(color: t.shadow, radius: 16, x: 0, y: 8)
             .onAppear {
                 pulse = true
                 withAnimation(.easeInOut(duration: 2.1).repeatForever(autoreverses: true)) { starOpacity1 = 0.9 }
                 withAnimation(.easeInOut(duration: 1.6).repeatForever(autoreverses: true).delay(0.4)) { starOpacity2 = 0.2 }
                 withAnimation(.easeInOut(duration: 2.5).repeatForever(autoreverses: true).delay(0.9)) { starOpacity3 = 0.8 }
             }
-            .animation(.easeInOut(duration: 0.4), value: currentThemeKind)
         }
 
-        // MARK: - Rows
+        // MARK: - Top Row
 
         private func topRow(_ t: CardTheme) -> some View {
             HStack(alignment: .center, spacing: 16) {
                 VStack(alignment: .leading, spacing: 6) {
-                    // Etiket satırı
+                    // Etiket
                     HStack(spacing: 5) {
-                        if t.showPulseDot {
+                        if t.showPulse {
                             Circle()
-                                .fill(t.labelColor)
+                                .fill(t.label)
                                 .frame(width: 6, height: 6)
                                 .scaleEffect(pulse ? 1.4 : 0.8)
                                 .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: pulse)
                         }
                         Text(t.labelText)
                             .font(.system(size: 10, weight: .bold))
-                            .foregroundStyle(t.labelColor)
+                            .foregroundStyle(t.label)
                             .tracking(0.5)
                     }
 
                     // Ana başlık
-                    mainTitle(t)
+                    Text(mainTitleText)
+                        .font(.system(size: 22, weight: .bold, design: .rounded))
+                        .foregroundStyle(t.title)
+                        .monospacedDigit()
 
                     // Alt açıklama
-                    subLabel(t)
+                    Text(subLabelText)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(t.subtitle)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 Spacer()
@@ -1039,71 +1102,46 @@ struct SleepListView: View {
             .padding(.bottom, 14)
         }
 
-        @ViewBuilder
-        private func mainTitle(_ t: CardTheme) -> some View {
-            switch currentThemeKind {
-            case .overdueNap:
-                Text("Add nap now")
-                    .font(.system(size: 22, weight: .bold, design: .rounded))
-                    .foregroundStyle(t.titleColor)
-            case .overtired:
-                Text("Sleep now!")
-                    .font(.system(size: 22, weight: .bold, design: .rounded))
-                    .foregroundStyle(t.titleColor)
-            default:
-                Text(ampm(displayTime))
-                    .font(.system(size: 22, weight: .bold, design: .rounded))
-                    .foregroundStyle(t.titleColor)
-                    .monospacedDigit()
+        private var mainTitleText: String {
+            switch stateKind {
+            case .overdueNap:  return "Add nap now"
+            case .overtired:   return "Sleep now!"
+            default:           return ampm(displayTime)
             }
         }
 
-        @ViewBuilder
-        private func subLabel(_ t: CardTheme) -> some View {
-            switch currentThemeKind {
+        private var subLabelText: String {
+            switch stateKind {
             case .nextNap:
-                Text("Window: \(windowText)")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(t.subtitleColor)
+                return "Window: \(windowText)"
             case .overdueNap:
-                Text("Expected \(ampm(displayTime)) — may be overtired")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(t.subtitleColor)
+                return "Expected \(ampm(displayTime)) — may be overtired"
             case .bedtimeApproaching:
-                VStack(alignment: .leading, spacing: 4) {
-                    if minutesUntilBedtime > 0 {
-                        HStack(spacing: 4) {
-                            Image(systemName: "timer")
-                                .font(.system(size: 10))
-                                .foregroundStyle(t.subtitleColor)
-                            Text(countdownText)
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(t.subtitleColor)
-                        }
-                    }
-                }
+                let m = minutesUntilBedtime
+                if m >= 60 { return "\(m/60)h \(m%60 > 0 ? "\(m%60)m " : "")until bedtime" }
+                return "\(m)m until bedtime"
             case .nightMode:
-                Text("Time to sleep · Sweet dreams 🌙")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(t.subtitleColor)
+                return "Time to sleep · Sweet dreams 🌙"
             case .overtired:
-                Text("Past optimal window — put baby to sleep immediately")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(t.subtitleColor)
-                    .fixedSize(horizontal: false, vertical: true)
+                return "Past optimal window — put baby to sleep immediately"
             }
         }
+
+        private var minutesUntilBedtime: Int {
+            guard isBedtime, stateKind == .bedtimeApproaching else { return 0 }
+            return max(0, Int(displayTime.timeIntervalSince(Date()) / 60))
+        }
+
+        // MARK: - Circular Right
 
         private func circularRight(_ t: CardTheme) -> some View {
             ZStack {
-                Circle()
-                    .stroke(t.ringTrack, lineWidth: 5)
-                    .frame(width: 72, height: 72)
+                Circle().stroke(t.ringTrack, lineWidth: 5).frame(width: 72, height: 72)
 
                 Circle()
                     .trim(from: 0, to: ringProgress)
                     .stroke(
-                        AngularGradient(colors: t.ringFill, center: .center),
+                        AngularGradient(colors: t.ringArc, center: .center),
                         style: StrokeStyle(lineWidth: 5, lineCap: .round)
                     )
                     .frame(width: 72, height: 72)
@@ -1111,94 +1149,103 @@ struct SleepListView: View {
                     .animation(.easeInOut(duration: 1.0), value: ringProgress)
 
                 VStack(spacing: 1) {
-                    Text(ringLabel)
-                        .font(.system(size: 15, weight: .bold, design: .rounded))
-                        .foregroundStyle(t.ringTextColor)
+                    Text(ringCenterLabel)
+                        .font(.system(size: ringCenterLabel.count > 3 ? 12 : 15, weight: .bold, design: .rounded))
+                        .foregroundStyle(t.ringText)
                         .monospacedDigit()
+                        .minimumScaleFactor(0.7)
                     Text(ringSubLabel)
                         .font(.system(size: 8, weight: .semibold))
-                        .foregroundStyle(t.labelColor.opacity(0.7))
-                        .multilineTextAlignment(.center)
+                        .foregroundStyle(t.label.opacity(0.7))
                 }
             }
         }
 
         private var ringProgress: Double {
-            switch currentThemeKind {
+            switch stateKind {
             case .nextNap, .overdueNap, .overtired:
                 return Double(confidencePercent) / 100.0
             case .bedtimeApproaching:
-                let total = 4 * 60
-                let elapsed = total - minutesUntilBedtime
-                return min(1.0, max(0, Double(elapsed) / Double(total)))
+                let total = Double(4 * 60)
+                let elapsed = total - Double(minutesUntilBedtime)
+                return min(1.0, max(0, elapsed / total))
             case .nightMode:
                 return 1.0
             }
         }
 
-        private var ringLabel: String {
-            switch currentThemeKind {
-            case .nextNap, .overdueNap:      return "\(confidencePercent)%"
-            case .bedtimeApproaching: return countdownShort
-            case .nightMode:          return "🌙"
-            case .overtired:          return "!"
+        private var ringCenterLabel: String {
+            switch stateKind {
+            case .nextNap, .overdueNap: return "\(confidencePercent)%"
+            case .bedtimeApproaching:
+                let m = minutesUntilBedtime
+                return m >= 60 ? "\(m/60)h\(m%60>0 ? "\(m%60)m" : "")" : "\(m)m"
+            case .nightMode:   return "🌙"
+            case .overtired:   return "!"
             }
         }
 
         private var ringSubLabel: String {
-            switch currentThemeKind {
-            case .nextNap, .overdueNap:      return "conf."
-            case .bedtimeApproaching: return "to bed"
-            case .nightMode:          return "sleep"
-            case .overtired:          return "urgent"
+            switch stateKind {
+            case .nextNap, .overdueNap: return "conf."
+            case .bedtimeApproaching:   return "to bed"
+            case .nightMode:            return "night"
+            case .overtired:            return "urgent"
             }
         }
+
+        // MARK: - Bottom Row
 
         private func bottomRow(_ t: CardTheme) -> some View {
             HStack(spacing: 8) {
                 HStack(spacing: 6) {
                     Image(systemName: bottomIcon)
                         .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(t.bottomTextColor)
+                        .foregroundStyle(t.bottom)
                     Text(bottomLeftText)
                         .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(t.bottomTextColor)
+                        .foregroundStyle(t.bottom)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
                 }
                 Spacer()
                 Text(bottomRightText)
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(t.labelColor)
+                    .foregroundStyle(t.label)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
             }
             .padding(.horizontal, 18)
             .padding(.vertical, 12)
         }
 
         private var bottomIcon: String {
-            switch currentThemeKind {
-            case .nextNap:            return "moon.fill"
-            case .overdueNap:         return "exclamationmark.triangle"
-            case .bedtimeApproaching: return "moon.stars"
-            case .nightMode:          return "waveform.path"
-            case .overtired:          return "exclamationmark.triangle.fill"
+            switch stateKind {
+            case .nextNap:             return "moon.fill"
+            case .overdueNap:          return "exclamationmark.triangle"
+            case .bedtimeApproaching:  return "moon.stars"
+            case .nightMode:           return "waveform.path"
+            case .overtired:           return "exclamationmark.triangle.fill"
             }
         }
 
         private var bottomLeftText: String {
-            switch currentThemeKind {
-            case .nextNap:            return "Nap soon"
+            switch stateKind {
+            case .nextNap:            return "Nap coming up"
             case .overdueNap:         return "Tap to log nap now"
-            case .bedtimeApproaching, .nightMode:
-                if let end = bedtimeWindowEnd {
-                    return "Earliest \(ampm(displayTime)) · Latest \(ampm(end))"
-                }
+            case .bedtimeApproaching:
+                if let end = bedtimeWindowEnd { return "Earliest \(ampm(displayTime)) · Latest \(ampm(end))" }
                 return "Bedtime window"
+            case .nightMode:
+                if let end = bedtimeWindowEnd { return "Window \(ampm(displayTime)) – \(ampm(end))" }
+                return "Sleep time"
             case .overtired:          return "Overtired — act now"
             }
         }
 
         private var bottomRightText: String {
-            switch currentThemeKind {
-            case .nextNap:            return "Window: \(windowText)"
+            switch stateKind {
+            case .nextNap:            return windowText
             case .overdueNap:         return "Log now →"
             case .bedtimeApproaching:
                 if let risk = overtiredRiskTime { return "Overtired after \(ampm(risk))" }
@@ -1210,43 +1257,29 @@ struct SleepListView: View {
             }
         }
 
+        // MARK: - Stars (NightWatchCard ile birebir aynı)
+
         private var starsLayer: some View {
             GeometryReader { geo in
                 let w = geo.size.width
                 let h = geo.size.height
                 ZStack {
-                    Circle().fill(Color.white).frame(width: 2.5, height: 2.5).position(x: w * 0.15, y: h * 0.22).opacity(starOpacity1)
-                    Circle().fill(Color.white).frame(width: 1.5, height: 1.5).position(x: w * 0.75, y: h * 0.15).opacity(starOpacity2)
-                    Circle().fill(Color.white).frame(width: 2, height: 2).position(x: w * 0.88, y: h * 0.40).opacity(starOpacity3)
-                    Circle().fill(Color.white).frame(width: 1.5, height: 1.5).position(x: w * 0.25, y: h * 0.70).opacity(starOpacity2)
-                    Circle().fill(Color.white).frame(width: 1, height: 1).position(x: w * 0.60, y: h * 0.25).opacity(starOpacity1)
-                    Image(systemName: "moon.stars.fill")
-                        .font(.system(size: 56, weight: .thin))
+                    Circle().fill(Color.white).frame(width:2.5,height:2.5).position(x:w*0.15,y:h*0.22).opacity(starOpacity1)
+                    Circle().fill(Color.white).frame(width:1.5,height:1.5).position(x:w*0.75,y:h*0.15).opacity(starOpacity2)
+                    Circle().fill(Color.white).frame(width:2,height:2).position(x:w*0.88,y:h*0.40).opacity(starOpacity3)
+                    Circle().fill(Color.white).frame(width:1.5,height:1.5).position(x:w*0.25,y:h*0.70).opacity(starOpacity2)
+                    Circle().fill(Color.white).frame(width:1,height:1).position(x:w*0.60,y:h*0.25).opacity(starOpacity1)
+                    Image(systemName:"moon.stars.fill")
+                        .font(.system(size:56,weight:.thin))
                         .foregroundStyle(LinearGradient(
-                            colors: [Color.white.opacity(0.06), Color.white.opacity(0.03)],
-                            startPoint: .topLeading, endPoint: .bottomTrailing
-                        ))
-                        .position(x: w * 0.82, y: h * 0.38)
+                            colors:[Color.white.opacity(0.06),Color.white.opacity(0.03)],
+                            startPoint:.topLeading,endPoint:.bottomTrailing))
+                        .position(x:w*0.82,y:h*0.38)
                 }
             }
         }
 
-        // MARK: - Helpers
-
-        private var countdownText: String {
-            let m = minutesUntilBedtime
-            if m >= 60 {
-                let h = m / 60; let r = m % 60
-                return r == 0 ? "\(h)h until bedtime" : "\(h)h \(r)m until bedtime"
-            }
-            return "\(m)m until bedtime"
-        }
-
-        private var countdownShort: String {
-            let m = minutesUntilBedtime
-            if m >= 60 { return "\(m/60)h\(m%60 > 0 ? "\(m%60)m" : "")" }
-            return "\(m)m"
-        }
+        // MARK: - Helper
 
         private func ampm(_ date: Date) -> String {
             let f = DateFormatter()
@@ -1254,103 +1287,7 @@ struct SleepListView: View {
             f.dateFormat = "h:mm a"
             return f.string(from: date)
         }
-
-        // MARK: - Static Themes
-
-        struct CardTheme {
-            let gradientTop: Color
-            let gradientBot: Color
-            let borderColor: Color
-            let shadowColor: Color
-            let labelColor: Color
-            let titleColor: Color
-            let subtitleColor: Color
-            let ringTrack: Color
-            let ringFill: [Color]
-            let ringTextColor: Color
-            let bottomTextColor: Color
-            let labelText: String
-            let iconName: String
-            let showStars: Bool
-            let showPulseDot: Bool
-        }
-
-        private static let nextNap = CardTheme(
-            gradientTop: Color(red: 0.28, green: 0.18, blue: 0.65),
-            gradientBot: Color(red: 0.20, green: 0.12, blue: 0.50),
-            borderColor: Color(red: 0.55, green: 0.45, blue: 0.98).opacity(0.35),
-            shadowColor: Color(red: 0.20, green: 0.12, blue: 0.50).opacity(0.55),
-            labelColor: Color(red: 0.80, green: 0.74, blue: 1.0),
-            titleColor: .white,
-            subtitleColor: Color(red: 0.80, green: 0.74, blue: 1.0).opacity(0.85),
-            ringTrack: Color.white.opacity(0.10),
-            ringFill: [Color(red: 0.72, green: 0.65, blue: 0.98).opacity(0.6), Color(red: 0.72, green: 0.65, blue: 0.98), .white],
-            ringTextColor: .white,
-            bottomTextColor: Color(red: 0.72, green: 0.65, blue: 0.98).opacity(0.8),
-            labelText: "NEXT NAP", iconName: "moon.fill", showStars: false, showPulseDot: true
-        )
-
-        private static let overdueNap = CardTheme(
-            gradientTop: Color(red: 0.52, green: 0.25, blue: 0.04),
-            gradientBot: Color(red: 0.38, green: 0.16, blue: 0.02),
-            borderColor: Color.orange.opacity(0.4),
-            shadowColor: Color(red: 0.38, green: 0.16, blue: 0.02).opacity(0.55),
-            labelColor: Color(red: 1.0, green: 0.72, blue: 0.3),
-            titleColor: .white,
-            subtitleColor: Color(red: 1.0, green: 0.72, blue: 0.3).opacity(0.85),
-            ringTrack: Color.white.opacity(0.10),
-            ringFill: [Color.orange.opacity(0.6), Color.orange, .white],
-            ringTextColor: .white,
-            bottomTextColor: Color(red: 1.0, green: 0.72, blue: 0.3).opacity(0.8),
-            labelText: "NAP WINDOW PASSED", iconName: "exclamationmark.triangle.fill", showStars: false, showPulseDot: true
-        )
-
-        private static let bedtimeApproaching = CardTheme(
-            gradientTop: Color(red: 0.22, green: 0.14, blue: 0.52),
-            gradientBot: Color(red: 0.15, green: 0.09, blue: 0.38),
-            borderColor: Color(red: 0.45, green: 0.35, blue: 0.88).opacity(0.35),
-            shadowColor: Color(red: 0.15, green: 0.09, blue: 0.38).opacity(0.55),
-            labelColor: Color(red: 0.72, green: 0.65, blue: 0.98),
-            titleColor: .white,
-            subtitleColor: Color(red: 0.72, green: 0.65, blue: 0.98).opacity(0.85),
-            ringTrack: Color.white.opacity(0.10),
-            ringFill: [Color(red: 0.72, green: 0.65, blue: 0.98).opacity(0.6), Color(red: 0.72, green: 0.65, blue: 0.98), .white],
-            ringTextColor: .white,
-            bottomTextColor: Color(red: 0.72, green: 0.65, blue: 0.98).opacity(0.8),
-            labelText: "BEDTIME", iconName: "moon.stars.fill", showStars: true, showPulseDot: false
-        )
-
-        private static let nightMode = CardTheme(
-            gradientTop: Color(red: 0.12, green: 0.08, blue: 0.35),
-            gradientBot: Color(red: 0.08, green: 0.05, blue: 0.25),
-            borderColor: Color(red: 0.32, green: 0.22, blue: 0.72).opacity(0.4),
-            shadowColor: Color(red: 0.08, green: 0.05, blue: 0.25).opacity(0.6),
-            labelColor: Color(red: 0.72, green: 0.65, blue: 0.98),
-            titleColor: .white,
-            subtitleColor: Color(red: 0.72, green: 0.65, blue: 0.98).opacity(0.85),
-            ringTrack: Color.white.opacity(0.10),
-            ringFill: [Color(red: 0.72, green: 0.65, blue: 0.98).opacity(0.6), Color(red: 0.72, green: 0.65, blue: 0.98), .white],
-            ringTextColor: .white,
-            bottomTextColor: Color(red: 0.72, green: 0.65, blue: 0.98).opacity(0.8),
-            labelText: "BEDTIME", iconName: "moon.stars.fill", showStars: true, showPulseDot: true
-        )
-
-        private static let overtired = CardTheme(
-            gradientTop: Color(red: 0.50, green: 0.06, blue: 0.06),
-            gradientBot: Color(red: 0.35, green: 0.04, blue: 0.04),
-            borderColor: Color.red.opacity(0.4),
-            shadowColor: Color(red: 0.35, green: 0.04, blue: 0.04).opacity(0.55),
-            labelColor: Color(red: 1.0, green: 0.72, blue: 0.3),
-            titleColor: .white,
-            subtitleColor: Color(red: 1.0, green: 0.72, blue: 0.3).opacity(0.85),
-            ringTrack: Color.white.opacity(0.10),
-            ringFill: [Color.red.opacity(0.6), Color.red, .white],
-            ringTextColor: .white,
-            bottomTextColor: Color(red: 1.0, green: 0.72, blue: 0.3).opacity(0.8),
-            labelText: "OVERTIRED RISK", iconName: "exclamationmark.triangle.fill", showStars: false, showPulseDot: true
-        )
     }
-
     // MARK: - NightWatchCard Component
 
     struct NightWatchCard: View {
@@ -1840,7 +1777,6 @@ struct SleepListView: View {
             }
 
             if isStillInNightSleep {
-                // Gece uykusu devam ediyor — sadece plan mesajı göster
                 HStack(spacing: 7) {
                     Image(systemName: "sparkles")
                         .font(.system(size: 11, weight: .semibold))
