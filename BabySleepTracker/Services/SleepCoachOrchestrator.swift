@@ -23,7 +23,10 @@ struct DataQualityReport {
     let level: DataQuality
     let completenessScore: Int
     let consistencyScore: Int
+    let rhythmStabilityScore: Int
     let plausibilityScore: Int
+    let plausibilityAnomalyCount: Int
+    let plausibilityWarnings: [String]
     let timelinessScore: Int
     let averageLoggingDelayMinutes: Int?
     let trackedDays: Int
@@ -462,8 +465,14 @@ final class SleepCoachOrchestrator: ObservableObject {
         }
 
         let completeness = dailyScores.isEmpty ? 0 : dailyScores.reduce(0, +) / dailyScores.count
-        let consistency = Int((Double(completeDays) / Double(lookbackDays)) * 100)
-        let plausibility = plausibilityScore(records: records, breaks: breaks, now: now)
+        let coverageConsistency = Int((Double(completeDays) / Double(lookbackDays)) * 100)
+        let rhythmStability = rhythmStabilityScore(
+            records: records,
+            wakeRecords: wakeRecords,
+            now: now
+        )
+        let consistency = clamp(Int(Double(coverageConsistency) * 0.55 + Double(rhythmStability) * 0.45))
+        let plausibility = plausibilityResult(records: records, breaks: breaks, now: now)
         let timeliness = timelinessResult(records: records)
 
         let score = clamp(
@@ -471,7 +480,7 @@ final class SleepCoachOrchestrator: ObservableObject {
                 Double(completeness) * 0.35 +
                 Double(timeliness.score) * 0.20 +
                 Double(consistency) * 0.25 +
-                Double(plausibility) * 0.20
+                Double(plausibility.score) * 0.20
             )
         )
 
@@ -480,7 +489,10 @@ final class SleepCoachOrchestrator: ObservableObject {
             breaks: breaks,
             completeDays: completeDays,
             missedStreak: longestRecentMissedStreak,
-            plausibility: plausibility
+            consistency: consistency,
+            rhythmStability: rhythmStability,
+            plausibility: plausibility.score,
+            plausibilityWarnings: plausibility.warnings
         )
 
         return DataQualityReport(
@@ -488,7 +500,10 @@ final class SleepCoachOrchestrator: ObservableObject {
             level: quality(forScore: score),
             completenessScore: clamp(completeness),
             consistencyScore: clamp(consistency),
-            plausibilityScore: plausibility,
+            rhythmStabilityScore: rhythmStability,
+            plausibilityScore: plausibility.score,
+            plausibilityAnomalyCount: plausibility.anomalyCount,
+            plausibilityWarnings: plausibility.warnings,
             timelinessScore: timeliness.score,
             averageLoggingDelayMinutes: timeliness.averageDelayMinutes,
             trackedDays: trackedDays,
@@ -500,14 +515,18 @@ final class SleepCoachOrchestrator: ObservableObject {
         )
     }
 
-    private func plausibilityScore(
+    private func plausibilityResult(
         records: [SleepRecord],
         breaks: [SleepRecord],
         now: Date
-    ) -> Int {
-        guard !records.isEmpty else { return 0 }
+    ) -> (score: Int, anomalyCount: Int, warnings: [String]) {
+        guard !records.isEmpty else { return (0, 0, []) }
 
-        let anomalyCount = records.reduce(0) { count, record in
+        var warnings = Set<String>()
+        var anomalyCount = 0
+        let sleepRecords = records.filter { $0.kind != .break }
+
+        for record in records {
             let netMinutes = record.totalMinutes(breaks: breaks)
             let hasNegativeDuration = record.duration < 0
             let startsInFuture = record.date > now.addingTimeInterval(5 * 60)
@@ -522,11 +541,63 @@ final class SleepCoachOrchestrator: ObservableObject {
                 durationIsImplausible = !(1...180).contains(record.duration)
             }
 
-            return count + ((hasNegativeDuration || startsInFuture || durationIsImplausible) ? 1 : 0)
+            if hasNegativeDuration {
+                anomalyCount += 1
+                warnings.insert("A record has negative duration.")
+            }
+            if startsInFuture {
+                anomalyCount += 1
+                warnings.insert("A record starts in the future.")
+            }
+            if durationIsImplausible {
+                anomalyCount += 1
+                switch record.kind {
+                case .dayNap:
+                    warnings.insert("A day nap duration is outside the expected 5-240 minute range.")
+                case .nightSleep:
+                    warnings.insert("A night sleep duration is outside the expected 2-13 hour range.")
+                case .break:
+                    warnings.insert("A wake period duration is outside the expected 1-180 minute range.")
+                }
+            }
+
+            if record.kind == .break, record.parentNapID == nil {
+                anomalyCount += 1
+                warnings.insert("A wake period is not attached to a sleep record.")
+            }
+
+            if record.kind == .break,
+               let parentNapID = record.parentNapID,
+               let parent = records.first(where: { $0.id == parentNapID }) {
+                let parentEnd = parent.date.addingTimeInterval(Double(parent.effectiveDuration) * 60)
+                let breakEnd = record.date.addingTimeInterval(Double(record.duration) * 60)
+                if record.date < parent.date || breakEnd > parentEnd {
+                    anomalyCount += 1
+                    warnings.insert("A wake period falls outside its parent sleep interval.")
+                }
+            }
+        }
+
+        let sortedSleepRecords = sleepRecords.sorted { $0.date < $1.date }
+        for pair in zip(sortedSleepRecords, sortedSleepRecords.dropFirst()) {
+            let firstEnd = pair.0.date.addingTimeInterval(Double(pair.0.effectiveDuration) * 60)
+            if pair.1.date < firstEnd {
+                anomalyCount += 1
+                warnings.insert("Two sleep records overlap in time.")
+            }
+        }
+
+        let dailyGroups = Dictionary(grouping: sleepRecords) { Calendar.current.startOfDay(for: $0.date) }
+        for dayRecords in dailyGroups.values {
+            let dayTotal = dayRecords.reduce(0) { $0 + $1.totalMinutes(breaks: breaks) }
+            if dayTotal > 20 * 60 {
+                anomalyCount += 1
+                warnings.insert("A day has more than 20 hours of total sleep.")
+            }
         }
 
         let penalty = min(70, anomalyCount * 15)
-        return max(0, 100 - penalty)
+        return (max(0, 100 - penalty), anomalyCount, Array(warnings).sorted())
     }
 
     private func timelinessResult(records: [SleepRecord]) -> (score: Int, averageDelayMinutes: Int?) {
@@ -551,12 +622,81 @@ final class SleepCoachOrchestrator: ObservableObject {
         return (scoredDelays.reduce(0, +) / scoredDelays.count, averageDelay)
     }
 
+    private func rhythmStabilityScore(
+        records: [SleepRecord],
+        wakeRecords: [DailyWakeRecord],
+        now: Date
+    ) -> Int {
+        let calendar = Calendar.current
+        guard let windowStart = calendar.date(byAdding: .day, value: -13, to: calendar.startOfDay(for: now)) else {
+            return 0
+        }
+
+        let recentRecords = records.filter { $0.date >= windowStart && $0.kind != .break }
+        let recentWakeRecords = wakeRecords.filter { $0.day >= windowStart }
+
+        var components: [Int] = []
+
+        let wakeMinutes = recentWakeRecords.map { minutesSinceStartOfDay($0.wakeTime) }
+        if let score = stabilityScore(for: wakeMinutes, excellentSpread: 30, poorSpread: 150) {
+            components.append(score)
+        }
+
+        let nightStartMinutes = recentRecords
+            .filter { $0.kind == .nightSleep }
+            .map { minutesSinceStartOfDay($0.date) }
+        if let score = stabilityScore(for: nightStartMinutes, excellentSpread: 45, poorSpread: 180) {
+            components.append(score)
+        }
+
+        let dayNaps = recentRecords.filter { $0.kind == .dayNap }
+        let napsByDay = Dictionary(grouping: dayNaps) { calendar.startOfDay(for: $0.date) }
+        let napCounts = napsByDay.values.map { $0.count }
+        if let score = stabilityScore(for: napCounts, excellentSpread: 1, poorSpread: 3) {
+            components.append(score)
+        }
+
+        guard !components.isEmpty else { return 0 }
+        return clamp(components.reduce(0, +) / components.count)
+    }
+
+    private func stabilityScore(
+        for values: [Int],
+        excellentSpread: Double,
+        poorSpread: Double
+    ) -> Int? {
+        guard values.count >= 3 else { return nil }
+        let spread = standardDeviation(values)
+        if spread <= excellentSpread { return 100 }
+        if spread >= poorSpread { return 35 }
+
+        let normalized = (spread - excellentSpread) / (poorSpread - excellentSpread)
+        return clamp(Int(100 - normalized * 65))
+    }
+
+    private func standardDeviation(_ values: [Int]) -> Double {
+        guard values.count > 1 else { return 0 }
+        let average = Double(values.reduce(0, +)) / Double(values.count)
+        let variance = values
+            .map { pow(Double($0) - average, 2) }
+            .reduce(0, +) / Double(values.count)
+        return sqrt(variance)
+    }
+
+    private func minutesSinceStartOfDay(_ date: Date) -> Int {
+        let components = Calendar.current.dateComponents([.hour, .minute], from: date)
+        return (components.hour ?? 0) * 60 + (components.minute ?? 0)
+    }
+
     private func dataQualityWarnings(
         records: [SleepRecord],
         breaks: [SleepRecord],
         completeDays: Int,
         missedStreak: Int,
-        plausibility: Int
+        consistency: Int,
+        rhythmStability: Int,
+        plausibility: Int,
+        plausibilityWarnings: [String]
     ) -> [String] {
         var warnings: [String] = []
 
@@ -566,9 +706,16 @@ final class SleepCoachOrchestrator: ObservableObject {
         if missedStreak >= 2 {
             warnings.append("\(missedStreak) consecutive missed day(s) increase prediction variance.")
         }
+        if consistency < 70 {
+            warnings.append("Tracking consistency is low across the last 14 days.")
+        }
+        if rhythmStability < 70 {
+            warnings.append("Sleep timing varies enough to make pattern learning less stable.")
+        }
         if plausibility < 80 {
             warnings.append("Some sleep durations look unusual and should be reviewed.")
         }
+        warnings.append(contentsOf: plausibilityWarnings.prefix(3))
         let timeliness = timelinessResult(records: records)
         if timeliness.score < 70, let averageDelay = timeliness.averageDelayMinutes {
             warnings.append("Average logging delay is \(averageDelay) minutes, which lowers prediction reliability.")
