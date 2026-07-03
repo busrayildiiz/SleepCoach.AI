@@ -28,6 +28,9 @@ struct DataQualityReport {
     let plausibilityAnomalyCount: Int
     let plausibilityWarnings: [String]
     let timelinessScore: Int
+    let contextRichnessScore: Int
+    let contextSignals: [String]
+    let missingContextSignals: [String]
     let averageLoggingDelayMinutes: Int?
     let trackedDays: Int
     let completeDays: Int
@@ -474,13 +477,19 @@ final class SleepCoachOrchestrator: ObservableObject {
         let consistency = clamp(Int(Double(coverageConsistency) * 0.55 + Double(rhythmStability) * 0.45))
         let plausibility = plausibilityResult(records: records, breaks: breaks, now: now)
         let timeliness = timelinessResult(records: records)
+        let contextRichness = contextRichnessResult(
+            records: records,
+            wakeRecords: wakeRecords,
+            completeDays: completeDays
+        )
 
         let score = clamp(
             Int(
-                Double(completeness) * 0.35 +
+                Double(completeness) * 0.30 +
                 Double(timeliness.score) * 0.20 +
-                Double(consistency) * 0.25 +
-                Double(plausibility.score) * 0.20
+                Double(consistency) * 0.20 +
+                Double(plausibility.score) * 0.20 +
+                Double(contextRichness.score) * 0.10
             )
         )
 
@@ -492,7 +501,8 @@ final class SleepCoachOrchestrator: ObservableObject {
             consistency: consistency,
             rhythmStability: rhythmStability,
             plausibility: plausibility.score,
-            plausibilityWarnings: plausibility.warnings
+            plausibilityWarnings: plausibility.warnings,
+            contextRichness: contextRichness.score
         )
 
         return DataQualityReport(
@@ -505,6 +515,9 @@ final class SleepCoachOrchestrator: ObservableObject {
             plausibilityAnomalyCount: plausibility.anomalyCount,
             plausibilityWarnings: plausibility.warnings,
             timelinessScore: timeliness.score,
+            contextRichnessScore: contextRichness.score,
+            contextSignals: contextRichness.signals,
+            missingContextSignals: contextRichness.missingSignals,
             averageLoggingDelayMinutes: timeliness.averageDelayMinutes,
             trackedDays: trackedDays,
             completeDays: completeDays,
@@ -660,6 +673,53 @@ final class SleepCoachOrchestrator: ObservableObject {
         return clamp(components.reduce(0, +) / components.count)
     }
 
+    private func contextRichnessResult(
+        records: [SleepRecord],
+        wakeRecords: [DailyWakeRecord],
+        completeDays: Int
+    ) -> (score: Int, signals: [String], missingSignals: [String]) {
+        var score = 0
+        var signals: [String] = []
+        var missingSignals: [String] = []
+
+        if !wakeRecords.isEmpty {
+            score += 25
+            signals.append("wake times")
+        } else {
+            missingSignals.append("wake times")
+        }
+
+        if records.contains(where: { $0.kind == .dayNap }) {
+            score += 20
+            signals.append("day naps")
+        } else {
+            missingSignals.append("day naps")
+        }
+
+        if records.contains(where: { $0.kind == .nightSleep }) {
+            score += 20
+            signals.append("night sleep")
+        } else {
+            missingSignals.append("night sleep")
+        }
+
+        if records.contains(where: { $0.kind == .break }) {
+            score += 15
+            signals.append("wake periods")
+        } else {
+            missingSignals.append("wake periods")
+        }
+
+        if completeDays >= 7 {
+            score += 20
+            signals.append("multi-day coverage")
+        } else {
+            missingSignals.append("7+ complete days")
+        }
+
+        return (clamp(score), signals, missingSignals)
+    }
+
     private func stabilityScore(
         for values: [Int],
         excellentSpread: Double,
@@ -696,7 +756,8 @@ final class SleepCoachOrchestrator: ObservableObject {
         consistency: Int,
         rhythmStability: Int,
         plausibility: Int,
-        plausibilityWarnings: [String]
+        plausibilityWarnings: [String],
+        contextRichness: Int
     ) -> [String] {
         var warnings: [String] = []
 
@@ -716,6 +777,9 @@ final class SleepCoachOrchestrator: ObservableObject {
             warnings.append("Some sleep durations look unusual and should be reviewed.")
         }
         warnings.append(contentsOf: plausibilityWarnings.prefix(3))
+        if contextRichness < 60 {
+            warnings.append("Context is thin, so recommendations should stay more general.")
+        }
         let timeliness = timelinessResult(records: records)
         if timeliness.score < 70, let averageDelay = timeliness.averageDelayMinutes {
             warnings.append("Average logging delay is \(averageDelay) minutes, which lowers prediction reliability.")

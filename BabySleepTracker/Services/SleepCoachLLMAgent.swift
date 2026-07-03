@@ -177,6 +177,7 @@ final class DefaultSleepCoachLLMAgent: SleepCoachLLMAgentProtocol {
             "- Rhythm stability: \(report.rhythmStabilityScore)/100",
             "- Plausibility: \(report.plausibilityScore)/100",
             "- Plausibility anomalies: \(report.plausibilityAnomalyCount)",
+            "- Context richness: \(report.contextRichnessScore)/100",
             "- Tracked days in last 14 days: \(report.trackedDays)",
             "- Complete days in last 14 days: \(report.completeDays)",
             "- Consecutive missed days: \(report.consecutiveMissedDays)",
@@ -189,6 +190,12 @@ final class DefaultSleepCoachLLMAgent: SleepCoachLLMAgentProtocol {
 
         if !report.missingCriticalFields.isEmpty {
             lines.append("- Missing critical fields: \(report.missingCriticalFields.joined(separator: ", "))")
+        }
+        if !report.contextSignals.isEmpty {
+            lines.append("- Available context signals: \(report.contextSignals.joined(separator: ", "))")
+        }
+        if !report.missingContextSignals.isEmpty {
+            lines.append("- Missing context signals: \(report.missingContextSignals.joined(separator: ", "))")
         }
         if !report.warnings.isEmpty {
             lines.append("- Warnings: \(report.warnings.joined(separator: " | "))")
