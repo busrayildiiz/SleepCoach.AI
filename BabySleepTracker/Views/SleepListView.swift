@@ -611,8 +611,7 @@ struct SleepListView: View {
                     }
                        todayTimelineCard
                        coachInsightCard
-                       totalSleepCard
-                       statsRow
+                        todaySummaryCard
 
                     if !records.isEmpty { recentDaysSection }
                 }
@@ -716,53 +715,181 @@ struct SleepListView: View {
         .padding(.top, 6)
     }
     
-    //MARK: Total Sleep Card
-    
-    private var totalSleepCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("TOTAL SLEEP TODAY")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(Color.sleepPurpleDeep)
+    // MARK: - Today Summary Card
 
-                    HStack(alignment: .lastTextBaseline, spacing: 4) {
-                        Text("\(todayTotal / 60)")
-                            .font(.system(size: 32, weight: .medium, design: .rounded))
-                            .foregroundStyle(.primary)
-                        Text("h")
-                            .font(.system(size: 15))
-                            .foregroundStyle(.secondary)
-                        Text("\(todayTotal % 60)")
-                            .font(.system(size: 32, weight: .medium, design: .rounded))
-                            .foregroundStyle(.primary)
-                        Text("min")
-                            .font(.system(size: 15))
-                            .foregroundStyle(.secondary)
-                    }
+    private var todaySummaryCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
 
-                    Text(changeLabel(todayDelta))
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(todayDelta >= 0 ? Color.sleepPurpleDeep : .orange)
-                }
+            // Başlık
+            Text("TODAY'S SUMMARY")
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(Color(red: 0.45, green: 0.35, blue: 0.92))
+                .tracking(0.5)
 
-                Spacer()
+            // 3 kutu yan yana
+            HStack(spacing: 10) {
 
-                VStack(alignment: .trailing, spacing: 2) {
-                    Text("Goal").font(.system(size: 11)).foregroundStyle(.secondary)
-                    Text("14h").font(.system(size: 18, weight: .semibold)).foregroundStyle(.primary)
-                    Text("AAP guideline").font(.system(size: 10)).foregroundStyle(.secondary)
-                }
+                // 1. Total Sleep
+                summaryCell(
+                    icon: "moon.fill",
+                    iconColor: Color(red: 0.45, green: 0.35, blue: 0.92),
+                    title: "Total sleep",
+                    value: todayTotal > 0
+                        ? "\(todayTotal / 60)h \(todayTotal % 60)m"
+                        : "0m",
+                    badge: goalBadgeText,
+                    badgeColor: goalBadgeColor
+                )
+
+                // 2. Naps
+                summaryCell(
+                    icon: "moon.zzz.fill",
+                    iconColor: Color(red: 0.45, green: 0.35, blue: 0.92),
+                    title: "Naps",
+                    value: "\(todayNapCount)",
+                    badge: napBadgeText,
+                    badgeColor: napBadgeColor
+                )
+
+                // 3. Wake Window
+                summaryCell(
+                    icon: "waveform.path",
+                    iconColor: Color(red: 0.45, green: 0.35, blue: 0.92),
+                    title: "Wake windows",
+                    value: TimeFormat.minutes(
+                        orchestrator.snapshot?.pattern?.averageWakeWindowMinutes ?? wakeWindowBeforeLatest
+                    ),
+                    badge: wakeWindowBadgeText,
+                    badgeColor: wakeWindowBadgeColor
+                )
             }
 
-            ProgressView(value: min(Double(todayTotal), 840), total: 840)
-                .tint(Color.sleepPurple)
+            // Progress bar
+            VStack(spacing: 4) {
+                ProgressView(value: min(Double(todayTotal), 840), total: 840)
+                    .tint(Color(red: 0.55, green: 0.45, blue: 0.98))
+                HStack {
+                    Text("\(Int(min(Double(todayTotal) / 840.0 * 100, 100)))% of daily goal")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(Color(.secondaryLabel))
+                    Spacer()
+                    Text("Goal: 14h")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(Color(.tertiaryLabel))
+                }
+            }
         }
         .padding(16)
         .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(Color(.systemBackground))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(Color(red: 0.55, green: 0.45, blue: 0.98).opacity(0.12), lineWidth: 1)
+        )
+        .shadow(color: Color(red: 0.45, green: 0.35, blue: 0.92).opacity(0.07), radius: 12, x: 0, y: 4)
+    }
+
+    // MARK: - Summary Cell
+
+    private func summaryCell(
+        icon: String,
+        iconColor: Color,
+        title: String,
+        value: String,
+        badge: String,
+        badgeColor: Color
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            // İkon
+            ZStack {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(iconColor.opacity(0.10))
+                    .frame(width: 32, height: 32)
+                Image(systemName: icon)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(iconColor.opacity(0.7))
+            }
+
+            // Başlık
+            Text(title)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Color(.secondaryLabel))
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+
+            // Değer
+            Text(value)
+                .font(.system(size: 18, weight: .bold, design: .rounded))
+                .foregroundStyle(Color(.label))
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+
+            // Badge
+            Text(badge)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(badgeColor)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(Color(.secondarySystemGroupedBackground))
         )
+    }
+
+    // MARK: - Badge Helpers
+
+    private var todayNapCount: Int {
+        todaySleeps.filter { $0.kind == .dayNap }.count
+    }
+
+    private var goalBadgeText: String {
+        let pct = Int(min(Double(todayTotal) / 840.0 * 100, 100))
+        if pct >= 100 { return "Goal reached ✓" }
+        if pct >= 70  { return "\(pct)% of goal" }
+        return "\(pct)% of goal"
+    }
+
+    private var goalBadgeColor: Color {
+        let pct = Int(min(Double(todayTotal) / 840.0 * 100, 100))
+        if pct >= 100 { return Color(red: 0.16, green: 0.68, blue: 0.46) }
+        if pct >= 70  { return Color(red: 0.45, green: 0.35, blue: 0.92) }
+        return Color(.secondaryLabel)
+    }
+
+    private var napBadgeText: String {
+        guard let ageMonths = orchestrator.snapshot?.ageMonths else { return "–" }
+        let profile = DefaultAgeBasedSleepProfileProvider().profile(forAgeMonths: ageMonths)
+        let expected = profile.expectedNapCount
+        if todayNapCount >= expected.lowerBound { return "On track" }
+        let remaining = expected.lowerBound - todayNapCount
+        return "\(remaining) more needed"
+    }
+
+    private var napBadgeColor: Color {
+        guard let ageMonths = orchestrator.snapshot?.ageMonths else { return Color(.secondaryLabel) }
+        let profile = DefaultAgeBasedSleepProfileProvider().profile(forAgeMonths: ageMonths)
+        let expected = profile.expectedNapCount
+        if todayNapCount >= expected.lowerBound { return Color(red: 0.16, green: 0.68, blue: 0.46) }
+        return Color(.secondaryLabel)
+    }
+
+    private var wakeWindowBadgeText: String {
+        let pct = consistencyPercent
+        if pct >= 80 { return "Good" }
+        if pct >= 60 { return "Building" }
+        return "Low"
+    }
+
+    private var wakeWindowBadgeColor: Color {
+        let pct = consistencyPercent
+        if pct >= 80 { return Color(red: 0.16, green: 0.68, blue: 0.46) }
+        if pct >= 60 { return Color(red: 0.45, green: 0.35, blue: 0.92) }
+        return Color(.secondaryLabel)
     }
     
     // Henüz typical wake time gelmediyse ve bugün hiç kayıt yoksa, bebek hâlâ gece uykusunda kabul edilir
@@ -1551,26 +1678,7 @@ struct SleepListView: View {
     }
     
     
-    //MARK: Stats Row
-    
-    private var statsRow: some View {
-        HStack(spacing: 10) {
-            statCard(
-                title: "WAKE WINDOW",
-                value: TimeFormat.minutes(
-                    orchestrator.snapshot?.pattern?.averageWakeWindowMinutes ?? wakeWindowBeforeLatest
-                ),
-                subtitle: "Observed avg",
-                subtitleColor: .secondary
-            )
-            statCard(
-                title: "CONSISTENCY",
-                value: consistencyPercent > 80 ? "Good" : "Building",
-                subtitle: "\(consistencyPercent)% this week",
-                subtitleColor: Color.green
-            )
-        }
-    }
+
 
     private func statCard(title: String, value: String, subtitle: String, subtitleColor: Color) -> some View {
         VStack(alignment: .leading, spacing: 4) {
