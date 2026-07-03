@@ -145,6 +145,9 @@ final class DefaultSleepCoachLLMAgent: SleepCoachLLMAgentProtocol {
         - Daily sleep status: \(snapshot.sleepStatus.label)
         - Nap transition: \(transitionNote)
 
+        DATA QUALITY REPORT:
+        \(buildDataQualitySection(snapshot.dataQualityReport))
+
         PATTERN ANALYSIS:
         \(buildPatternSection(snapshot.pattern, babyName: snapshot.babyName))
 
@@ -158,9 +161,38 @@ final class DefaultSleepCoachLLMAgent: SleepCoachLLMAgentProtocol {
           "pattern_insight": "1-2 sentences about the baby's sleep pattern trend",
           "coach_message": "2-3 warm, supportive sentences for the parent with a specific actionable tip",
           "alert": null or "1 sentence if there is something urgent",
-          "confidence_note": "1 sentence about prediction reliability"
+          "confidence_note": "1 sentence about prediction reliability, explicitly considering the data quality report"
         }
         """
+    }
+
+    // MARK: - Data Quality Section
+
+    private func buildDataQualitySection(_ report: DataQualityReport) -> String {
+        var lines = [
+            "- Overall score: \(report.score)/100 (\(describeQuality(report.level)))",
+            "- Completeness: \(report.completenessScore)/100",
+            "- Timeliness: \(report.timelinessScore)/100",
+            "- Consistency: \(report.consistencyScore)/100",
+            "- Plausibility: \(report.plausibilityScore)/100",
+            "- Tracked days in last 14 days: \(report.trackedDays)",
+            "- Complete days in last 14 days: \(report.completeDays)",
+            "- Consecutive missed days: \(report.consecutiveMissedDays)",
+            "- Reliability note: \(report.confidenceNote)"
+        ]
+
+        if let averageDelay = report.averageLoggingDelayMinutes {
+            lines.append("- Average logging delay: \(averageDelay) minutes")
+        }
+
+        if !report.missingCriticalFields.isEmpty {
+            lines.append("- Missing critical fields: \(report.missingCriticalFields.joined(separator: ", "))")
+        }
+        if !report.warnings.isEmpty {
+            lines.append("- Warnings: \(report.warnings.joined(separator: " | "))")
+        }
+
+        return lines.joined(separator: "\n")
     }
 
     // MARK: - Pattern Section

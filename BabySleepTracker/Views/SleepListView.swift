@@ -148,7 +148,8 @@ struct SleepListView: View {
                     duration: min(duration, 12 * 60),
                     kind: ongoing.kind,
                     parentNapID: ongoing.parentNapID,
-                    isOngoing: false
+                    isOngoing: false,
+                    createdAt: ongoing.createdAt
                 )
                 upsert(closed)
             }
@@ -941,7 +942,9 @@ struct SleepListView: View {
 
         return NightWatchCard(
             ongoingNight: ongoingNight,
-            expectedWakeTime: expectedWake
+            expectedWakeTime: expectedWake,
+            dataQualityReport: orchestrator.snapshot?.dataQualityReport,
+            trackedDays: orchestrator.snapshot.map { max(0, 14 - $0.readiness.daysUntilPersonalized) } ?? 0
         )
     }
     
@@ -1420,6 +1423,8 @@ struct SleepListView: View {
     struct NightWatchCard: View {
         let ongoingNight: SleepRecord?
         let expectedWakeTime: Date
+        let dataQualityReport: DataQualityReport?
+        let trackedDays: Int
 
         @State private var pulse = false
         @State private var starOpacity1: Double = 0.3
@@ -1451,6 +1456,31 @@ struct SleepListView: View {
             Int(progress * 100)
         }
 
+        private var dataQualityPercent: Int {
+            dataQualityReport?.score ?? 0
+        }
+
+        private var dataQualityProgress: Double {
+            min(1.0, max(0.0, Double(dataQualityPercent) / 100.0))
+        }
+
+        private var learningDays: Int {
+            min(14, max(0, trackedDays))
+        }
+
+        private var learningProgress: Double {
+            min(1.0, Double(learningDays) / 14.0)
+        }
+
+        private var dataQualityLabel: String {
+            switch dataQualityPercent {
+            case 90...100: return "excellent"
+            case 70..<90:  return "good"
+            case 50..<70:  return "building"
+            default:       return "low"
+            }
+        }
+
         var body: some View {
             ZStack {
                 RoundedRectangle(cornerRadius: 20, style: .continuous)
@@ -1463,6 +1493,10 @@ struct SleepListView: View {
 
                 VStack(spacing: 0) {
                     topRow
+                    Divider()
+                        .background(Color.white.opacity(0.08))
+                        .padding(.horizontal, 16)
+                    aiLearningProgress
                     Divider()
                         .background(Color.white.opacity(0.08))
                         .padding(.horizontal, 16)
@@ -1515,41 +1549,88 @@ struct SleepListView: View {
                     }
                 }
                 Spacer()
-                circularProgress
+                dataQualityRing
             }
             .padding(.horizontal, 18)
             .padding(.top, 18)
             .padding(.bottom, 14)
         }
 
-        private var circularProgress: some View {
+        private var dataQualityRing: some View {
             ZStack {
                 Circle()
                     .stroke(Color.white.opacity(0.10), lineWidth: 5)
                     .frame(width: 72, height: 72)
 
                 Circle()
-                    .trim(from: 0, to: progress)
+                    .trim(from: 0, to: dataQualityProgress)
                     .stroke(
-                        AngularGradient(colors: [lilac.opacity(0.6), lilac, Color.white], center: .center),
+                        AngularGradient(colors: [gold.opacity(0.7), lilac, Color.white], center: .center),
                         style: StrokeStyle(lineWidth: 5, lineCap: .round)
                     )
                     .frame(width: 72, height: 72)
                     .rotationEffect(.degrees(-90))
-                    .animation(.easeInOut(duration: 1.0), value: progress)
+                    .animation(.easeInOut(duration: 1.0), value: dataQualityProgress)
 
                 VStack(spacing: 1) {
-                    TimelineView(.periodic(from: .now, by: 60)) { _ in
-                        Text("\(progressPercent)%")
-                            .font(.system(size: 17, weight: .bold, design: .rounded))
-                            .foregroundStyle(Color.white)
-                            .monospacedDigit()
-                    }
-                    Text("of night")
+                    Text("\(dataQualityPercent)%")
+                        .font(.system(size: 17, weight: .bold, design: .rounded))
+                        .foregroundStyle(Color.white)
+                        .monospacedDigit()
+                    Text("data")
                         .font(.system(size: 8, weight: .semibold))
                         .foregroundStyle(lilac.opacity(0.7))
                 }
             }
+        }
+
+        private var aiLearningProgress: some View {
+            VStack(alignment: .leading, spacing: 7) {
+                HStack(spacing: 8) {
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(gold)
+
+                    Text("AI learning")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(lilac)
+                        .tracking(0.4)
+
+                    Spacer()
+
+                    Text("\(learningDays)/14 days")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(Color.white.opacity(0.82))
+                        .monospacedDigit()
+                }
+
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule()
+                            .fill(Color.white.opacity(0.10))
+                        Capsule()
+                            .fill(LinearGradient(
+                                colors: [gold, lilac],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            ))
+                            .frame(width: max(8, geo.size.width * learningProgress))
+                    }
+                }
+                .frame(height: 7)
+
+                HStack {
+                    Text("Data quality \(dataQualityLabel)")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(lilac.opacity(0.75))
+                    Spacer()
+                    Text(learningDays >= 14 ? "Personalized" : "\(14 - learningDays) days left")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(learningDays >= 14 ? gold : lilac.opacity(0.75))
+                }
+            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 12)
         }
 
         private var bottomRow: some View {

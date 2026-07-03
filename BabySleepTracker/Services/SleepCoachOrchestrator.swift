@@ -18,6 +18,22 @@ enum DataQuality {
     case excellent
 }
 
+struct DataQualityReport {
+    let score: Int
+    let level: DataQuality
+    let completenessScore: Int
+    let consistencyScore: Int
+    let plausibilityScore: Int
+    let timelinessScore: Int
+    let averageLoggingDelayMinutes: Int?
+    let trackedDays: Int
+    let completeDays: Int
+    let consecutiveMissedDays: Int
+    let missingCriticalFields: [String]
+    let warnings: [String]
+    let confidenceNote: String
+}
+
 struct OrchestratedSnapshot {
        let generatedAt:        Date
        let babyName:           String
@@ -31,6 +47,7 @@ struct OrchestratedSnapshot {
        let night:              NightPredictionAgent
        let transition:         NapTransitionAssessment
        let insights:           SleepInsightBundle
+       let dataQualityReport:  DataQualityReport
 
        // Günlük uyku durumu
        let todayTotalMinutes:  Int
@@ -215,6 +232,12 @@ final class SleepCoachOrchestrator: ObservableObject {
             babyName:    babyName
         )
 
+        let dataQualityReport = makeDataQualityReport(
+            records: records,
+            wakeRecords: wakeRecords,
+            now: now
+        )
+
         // 10. Sleep status
         let sleepStatus = overtiredCalc.dailySleepStatus(
             totalMinutes: todayTotal,
@@ -233,6 +256,7 @@ final class SleepCoachOrchestrator: ObservableObject {
             night:             night,
             transition:        transition,
             insights:          insights,
+            dataQualityReport: dataQualityReport,
             todayTotalMinutes: todayTotal,
             sleepStatus:       sleepStatus,
             nextSleepKind:     nextSleepKind
@@ -322,7 +346,8 @@ final class SleepCoachOrchestrator: ObservableObject {
                 duration:    duration,
                 kind:        record.kind,
                 parentNapID: record.parentNapID,
-                isOngoing:   false              // ← kapatıldı
+                isOngoing:   false,             // ← kapatıldı
+                createdAt:   record.createdAt
             )
         }
     }
@@ -390,14 +415,198 @@ final class SleepCoachOrchestrator: ObservableObject {
     }
     // MARK: - Data Quality
 
-    private func quality(for days: Int) -> DataQuality {
-        switch days {
-        case 0...3:  return .poor
-        case 4...7:  return .fair
-        case 8...13: return .good
-        default:     return .excellent
+    private func makeDataQualityReport(
+        records: [SleepRecord],
+        wakeRecords: [DailyWakeRecord],
+        now: Date
+    ) -> DataQualityReport {
+        let calendar = Calendar.current
+        let breaks = records.filter { $0.kind == .break }
+        let lookbackDays = 14
+        let today = calendar.startOfDay(for: now)
+
+        var dailyScores: [Int] = []
+        var completeDays = 0
+        var trackedDays = 0
+        var missedStreak = 0
+        var longestRecentMissedStreak = 0
+        var missingCriticalFields = Set<String>()
+
+        for offset in 0..<lookbackDays {
+            guard let day = calendar.date(byAdding: .day, value: -offset, to: today) else { continue }
+
+            let dayRecords = records.filter { calendar.isDate($0.date, inSameDayAs: day) }
+            let naps = dayRecords.filter { $0.kind == .dayNap }
+            let nightSleeps = dayRecords.filter { $0.kind == .nightSleep }
+            let hasWake = wakeRecords.contains { calendar.isDate($0.day, inSameDayAs: day) }
+
+            var dayScore = 0
+            if hasWake { dayScore += 25 } else { missingCriticalFields.insert("daily wake time") }
+            if !naps.isEmpty { dayScore += 25 } else { missingCriticalFields.insert("day naps") }
+            if !nightSleeps.isEmpty { dayScore += 35 } else { missingCriticalFields.insert("night sleep") }
+            if dayRecords.contains(where: { $0.kind != .break }) { dayScore += 15 }
+
+            dailyScores.append(dayScore)
+
+            if dayScore > 0 {
+                trackedDays += 1
+                missedStreak = 0
+            } else {
+                missedStreak += 1
+                longestRecentMissedStreak = max(longestRecentMissedStreak, missedStreak)
+            }
+
+            if dayScore >= 70 {
+                completeDays += 1
+            }
         }
-        
+
+        let completeness = dailyScores.isEmpty ? 0 : dailyScores.reduce(0, +) / dailyScores.count
+        let consistency = Int((Double(completeDays) / Double(lookbackDays)) * 100)
+        let plausibility = plausibilityScore(records: records, breaks: breaks, now: now)
+        let timeliness = timelinessResult(records: records)
+
+        let score = clamp(
+            Int(
+                Double(completeness) * 0.35 +
+                Double(timeliness.score) * 0.20 +
+                Double(consistency) * 0.25 +
+                Double(plausibility) * 0.20
+            )
+        )
+
+        let warnings = dataQualityWarnings(
+            records: records,
+            breaks: breaks,
+            completeDays: completeDays,
+            missedStreak: longestRecentMissedStreak,
+            plausibility: plausibility
+        )
+
+        return DataQualityReport(
+            score: score,
+            level: quality(forScore: score),
+            completenessScore: clamp(completeness),
+            consistencyScore: clamp(consistency),
+            plausibilityScore: plausibility,
+            timelinessScore: timeliness.score,
+            averageLoggingDelayMinutes: timeliness.averageDelayMinutes,
+            trackedDays: trackedDays,
+            completeDays: completeDays,
+            consecutiveMissedDays: longestRecentMissedStreak,
+            missingCriticalFields: Array(missingCriticalFields).sorted(),
+            warnings: warnings,
+            confidenceNote: confidenceNote(forScore: score, warnings: warnings)
+        )
+    }
+
+    private func plausibilityScore(
+        records: [SleepRecord],
+        breaks: [SleepRecord],
+        now: Date
+    ) -> Int {
+        guard !records.isEmpty else { return 0 }
+
+        let anomalyCount = records.reduce(0) { count, record in
+            let netMinutes = record.totalMinutes(breaks: breaks)
+            let hasNegativeDuration = record.duration < 0
+            let startsInFuture = record.date > now.addingTimeInterval(5 * 60)
+
+            let durationIsImplausible: Bool
+            switch record.kind {
+            case .dayNap:
+                durationIsImplausible = !record.isOngoing && !(5...240).contains(netMinutes)
+            case .nightSleep:
+                durationIsImplausible = !record.isOngoing && !(120...780).contains(netMinutes)
+            case .break:
+                durationIsImplausible = !(1...180).contains(record.duration)
+            }
+
+            return count + ((hasNegativeDuration || startsInFuture || durationIsImplausible) ? 1 : 0)
+        }
+
+        let penalty = min(70, anomalyCount * 15)
+        return max(0, 100 - penalty)
+    }
+
+    private func timelinessResult(records: [SleepRecord]) -> (score: Int, averageDelayMinutes: Int?) {
+        let sleepRecords = records.filter { $0.kind != .break }
+        guard !sleepRecords.isEmpty else { return (0, nil) }
+
+        let delays = sleepRecords.map { record in
+            max(0, Int(record.createdAt.timeIntervalSince(record.date) / 60))
+        }
+        let averageDelay = delays.reduce(0, +) / delays.count
+
+        let scoredDelays = delays.map { delay -> Int in
+            switch delay {
+            case 0...30:     return 100
+            case 31...180:   return 75
+            case 181...720:  return 50
+            case 721...1440: return 25
+            default:         return 10
+            }
+        }
+
+        return (scoredDelays.reduce(0, +) / scoredDelays.count, averageDelay)
+    }
+
+    private func dataQualityWarnings(
+        records: [SleepRecord],
+        breaks: [SleepRecord],
+        completeDays: Int,
+        missedStreak: Int,
+        plausibility: Int
+    ) -> [String] {
+        var warnings: [String] = []
+
+        if completeDays < 7 {
+            warnings.append("Fewer than 7 complete days in the last 14 days.")
+        }
+        if missedStreak >= 2 {
+            warnings.append("\(missedStreak) consecutive missed day(s) increase prediction variance.")
+        }
+        if plausibility < 80 {
+            warnings.append("Some sleep durations look unusual and should be reviewed.")
+        }
+        let timeliness = timelinessResult(records: records)
+        if timeliness.score < 70, let averageDelay = timeliness.averageDelayMinutes {
+            warnings.append("Average logging delay is \(averageDelay) minutes, which lowers prediction reliability.")
+        }
+        if !records.contains(where: { $0.kind == .nightSleep }) {
+            warnings.append("Night sleep is missing, so bedtime predictions should stay conservative.")
+        }
+        if !records.contains(where: { $0.kind == .dayNap }) {
+            warnings.append("Day naps are missing, so wake-window learning is limited.")
+        }
+
+        return warnings
+    }
+
+    private func quality(forScore score: Int) -> DataQuality {
+        switch score {
+        case 0..<50:  return .poor
+        case 50..<70: return .fair
+        case 70..<90: return .good
+        default:      return .excellent
+        }
+    }
+
+    private func confidenceNote(forScore score: Int, warnings: [String]) -> String {
+        if score >= 90 {
+            return "High reliability: recent sleep data is complete and consistent."
+        }
+        if score >= 70 {
+            return "Good reliability: predictions can be personalized, with a few caveats."
+        }
+        if score >= 50 {
+            return "Medium reliability: use a blend of personal pattern and age baseline."
+        }
+        return "Low reliability: keep guidance general until more complete daily records are logged."
+    }
+
+    private func clamp(_ value: Int) -> Int {
+        min(100, max(0, value))
     }
     // MARK: - LLM
 
@@ -525,4 +734,3 @@ final class SleepCoachOrchestrator: ObservableObject {
         }
     }
         }
-
