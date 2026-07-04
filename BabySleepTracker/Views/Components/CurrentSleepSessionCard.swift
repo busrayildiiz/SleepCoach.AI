@@ -4,8 +4,6 @@ struct CurrentSleepSessionCard: View {
     let ongoingNight: SleepRecord?
     let expectedWakeTime: Date
     let nextSleepTime: Date?
-    let dataQualityReport: DataQualityReport?
-    let trackedDays: Int
 
     @State private var pulse = false
     @State private var starOpacity1: Double = 0.3
@@ -69,14 +67,14 @@ struct CurrentSleepSessionCard: View {
         }
 
         return CardTheme(
-            bg: [Color(red: 0.99, green: 0.98, blue: 1.0), Color(red: 0.92, green: 0.97, blue: 1.0)],
+            bg: [Color(red: 0.99, green: 0.98, blue: 1.0), Color(red: 1.0, green: 0.96, blue: 0.88)],
             border: Color(red: 0.55, green: 0.45, blue: 0.98).opacity(0.18),
             shadow: Color(red: 0.45, green: 0.35, blue: 0.92).opacity(0.10),
             label: Color(red: 0.45, green: 0.35, blue: 0.86),
             title: Color(red: 0.17, green: 0.13, blue: 0.32),
             subtitle: Color(red: 0.42, green: 0.38, blue: 0.58),
             ringTrack: Color(red: 0.55, green: 0.45, blue: 0.98).opacity(0.14),
-            ringArc: [Color(red: 0.55, green: 0.45, blue: 0.98).opacity(0.55), Color(red: 0.45, green: 0.35, blue: 0.92), Color(red: 0.16, green: 0.68, blue: 0.76)],
+            ringArc: [Color(red: 0.55, green: 0.45, blue: 0.98).opacity(0.55), Color(red: 0.45, green: 0.35, blue: 0.92), Color(red: 1.0, green: 0.72, blue: 0.30)],
             ringText: Color(red: 0.17, green: 0.13, blue: 0.32),
             mutedText: Color(red: 0.42, green: 0.38, blue: 0.58),
             accent: Color(red: 0.45, green: 0.35, blue: 0.86),
@@ -93,33 +91,17 @@ struct CurrentSleepSessionCard: View {
         max(0, Int(Date().timeIntervalSince(startTime) / 60))
     }
 
-    private var dataQualityPercent: Int {
-        dataQualityReport?.score ?? 0
-    }
-
-    private var dataQualityProgress: Double {
-        min(1.0, max(0.0, Double(dataQualityPercent) / 100.0))
-    }
-
-    private var learningDays: Int {
-        min(14, max(0, trackedDays))
-    }
-
-    private var learningProgress: Double {
-        min(1.0, Double(learningDays) / 14.0)
-    }
-
-    private var dataQualityLabel: String {
-        switch dataQualityPercent {
-        case 90...100: return "excellent"
-        case 70..<90:  return "good"
-        case 50..<70:  return "building"
-        default:       return "low"
-        }
-    }
-
     private var sleepStateTitle: String {
         ongoingNight?.kind == .nightSleep ? "Sleeping tonight" : "Sleeping..."
+    }
+
+    private var sleepProgress: Double {
+        let total = max(1, Int(expectedWakeTime.timeIntervalSince(startTime) / 60))
+        return min(1.0, max(0.05, Double(elapsedMinutes) / Double(total)))
+    }
+
+    private var ringCenterText: String {
+        TimeFormat.minutes(elapsedMinutes)
     }
 
     var body: some View {
@@ -138,10 +120,6 @@ struct CurrentSleepSessionCard: View {
 
             VStack(spacing: 0) {
                 topRow(t)
-                Divider()
-                    .background(t.divider)
-                    .padding(.horizontal, 16)
-                aiLearningProgress(t)
                 Divider()
                     .background(t.divider)
                     .padding(.horizontal, 16)
@@ -209,88 +187,40 @@ struct CurrentSleepSessionCard: View {
                 }
             }
             Spacer()
-            dataQualityRing(t)
+            sleepProgressRing(t)
         }
         .padding(.horizontal, 18)
         .padding(.top, 18)
         .padding(.bottom, 14)
     }
 
-    private func dataQualityRing(_ t: CardTheme) -> some View {
+    private func sleepProgressRing(_ t: CardTheme) -> some View {
         ZStack {
             Circle()
                 .stroke(t.ringTrack, lineWidth: 5)
                 .frame(width: 72, height: 72)
 
             Circle()
-                .trim(from: 0, to: dataQualityProgress)
+                .trim(from: 0, to: sleepProgress)
                 .stroke(
                     AngularGradient(colors: t.ringArc, center: .center),
                     style: StrokeStyle(lineWidth: 5, lineCap: .round)
                 )
                 .frame(width: 72, height: 72)
                 .rotationEffect(.degrees(-90))
-                .animation(.easeInOut(duration: 1.0), value: dataQualityProgress)
+                .animation(.easeInOut(duration: 1.0), value: sleepProgress)
 
             VStack(spacing: 1) {
-                Text("\(dataQualityPercent)%")
-                    .font(.system(size: 17, weight: .bold, design: .rounded))
+                Text(ringCenterText)
+                    .font(.system(size: ringCenterText.count > 4 ? 12 : 15, weight: .bold, design: .rounded))
                     .foregroundStyle(t.ringText)
                     .monospacedDigit()
-                Text("data")
+                    .minimumScaleFactor(0.7)
+                Text("asleep")
                     .font(.system(size: 8, weight: .semibold))
                     .foregroundStyle(t.label.opacity(0.7))
             }
         }
-    }
-
-    private func aiLearningProgress(_ t: CardTheme) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
-            HStack(spacing: 8) {
-                Image(systemName: "sparkles")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(t.accent)
-
-                Text("Learning your baby's rhythm...")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(t.label)
-                    .tracking(0.4)
-
-                Spacer()
-
-                Text("\(learningDays)/14 days")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(t.title.opacity(0.82))
-                    .monospacedDigit()
-            }
-
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    Capsule()
-                        .fill(t.ringTrack)
-                    Capsule()
-                        .fill(LinearGradient(
-                            colors: [t.accent, t.label.opacity(0.75)],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        ))
-                        .frame(width: max(8, geo.size.width * learningProgress))
-                }
-            }
-            .frame(height: 7)
-
-            HStack {
-                Text("Data quality \(dataQualityLabel)")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(t.mutedText.opacity(0.82))
-                Spacer()
-                Text(learningDays >= 14 ? "Personalized" : "\(14 - learningDays) days left")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(learningDays >= 14 ? t.accent : t.mutedText.opacity(0.82))
-            }
-        }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 12)
     }
 
     private func bottomRow(_ t: CardTheme) -> some View {

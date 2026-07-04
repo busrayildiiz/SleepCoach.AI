@@ -369,9 +369,16 @@ struct SleepListView: View {
             let sortedNaps = todaySleeps
                 .filter { $0.kind == .dayNap }
                 .sorted { $0.date < $1.date }
+            let ongoingSleep = records
+                .filter { $0.kind != .break && $0.isOngoing }
+                .sorted { $0.date > $1.date }
+                .first
 
             // 1. Wake up
             let wakeUp: Date = {
+                if isStillInNightSleep {
+                    return expectedWakeTime(for: ongoingSleep)
+                }
                 if let wt = todayWakeRecord?.wakeTime { return wt }
                 if let first = sortedNaps.first {
                     return Calendar.current.date(
@@ -383,14 +390,28 @@ struct SleepListView: View {
                 return defaultWakeTime
             }()
 
+            if isStillInNightSleep {
+                let started = ongoingSleep?.date
+                let asleepMinutes = started.map { max(0, Int(Date().timeIntervalSince($0) / 60)) } ?? 0
+                items.append(TimelineItem(
+                    icon: "bed.double.fill",
+                    iconColor: Color(red: 0.55, green: 0.45, blue: 0.98),
+                    time: started.map(shortTime) ?? "Now",
+                    title: "Sleeping now",
+                    detail: asleepMinutes > 0 ? TimeFormat.minutes(asleepMinutes) : "In night sleep",
+                    isActive: true,
+                    isFuture: false
+                ))
+            }
+
             items.append(TimelineItem(
                 icon: "sun.max.fill",
-                iconColor: .orange,
+                iconColor: Color(red: 1.0, green: 0.68, blue: 0.20),
                 time: shortTime(wakeUp),
-                title: "Wake up",
-                detail: "",
+                title: isStillInNightSleep ? "Expected wake" : "Wake up",
+                detail: isStillInNightSleep ? "Morning anchor" : "",
                 isActive: false,
-                isFuture: false
+                isFuture: isStillInNightSleep || wakeUp > Date()
             ))
 
             // 2. Gerçek (loglanmış) naplar
@@ -516,7 +537,7 @@ struct SleepListView: View {
             // Güvenlik: 4'ü aşarsa kırp (ör. expectedNapSlotCount 3 ve hepsi loglanmışsa tam 4 olur, sorun yok;
             // ama olası edge-case'lerde son 4'ü göster)
             if items.count > 4 {
-                return Array(items.suffix(4))
+                return Array(items.prefix(4))
             }
 
             return items
@@ -616,6 +637,7 @@ struct SleepListView: View {
                 VStack(spacing: 12) {
                     headerSection
                     nextNapOrBedtimeCard
+                    rhythmLearningStrip
                     if !isStillInNightSleep || Calendar.current.component(.hour, from: Date()) >= 5 {
                         todayWakeUpCard
                     }
@@ -723,6 +745,126 @@ struct SleepListView: View {
                 .frame(width: 64, height: 50)
         }
         .padding(.top, 6)
+    }
+
+    // MARK: - Rhythm Learning Strip
+
+    private var rhythmLearningDays: Int {
+        orchestrator.snapshot.map { max(0, 14 - $0.readiness.daysUntilPersonalized) } ?? 0
+    }
+
+    private var rhythmLearningProgress: Double {
+        min(1.0, max(0.0, Double(rhythmLearningDays) / 14.0))
+    }
+
+    private var rhythmQualityLabel: String {
+        guard let report = orchestrator.snapshot?.dataQualityReport else { return "Collecting data" }
+        switch report.score {
+        case 90...100: return "Excellent data quality"
+        case 70..<90:  return "Good data quality"
+        case 50..<70:  return "Data quality building"
+        default:       return "Needs more logs"
+        }
+    }
+
+    private var rhythmLearningHint: String {
+        guard let report = orchestrator.snapshot?.dataQualityReport else {
+            return "Log wake time and naps today"
+        }
+        if report.timelinessScore < 70 {
+            return "Log closer to sleep times"
+        }
+        if report.completeDays < min(7, max(1, report.trackedDays)) {
+            return "Complete today's wake and nap logs"
+        }
+        if rhythmLearningDays >= 14 {
+            return "Personalized predictions active"
+        }
+        return "\(14 - rhythmLearningDays) days until stronger personalization"
+    }
+
+    private var rhythmLearningStrip: some View {
+        HStack(spacing: 12) {
+            ZStack {
+                Circle()
+                    .stroke(Color(red: 0.55, green: 0.45, blue: 0.98).opacity(0.16), lineWidth: 4)
+                    .frame(width: 44, height: 44)
+                Circle()
+                    .trim(from: 0, to: rhythmLearningProgress)
+                    .stroke(
+                        AngularGradient(
+                            colors: [
+                                Color(red: 0.55, green: 0.45, blue: 0.98),
+                                Color(red: 1.0, green: 0.72, blue: 0.30)
+                            ],
+                            center: .center
+                        ),
+                        style: StrokeStyle(lineWidth: 4, lineCap: .round)
+                    )
+                    .frame(width: 44, height: 44)
+                    .rotationEffect(.degrees(-90))
+                Image(systemName: "sparkles")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(Color(red: 0.45, green: 0.35, blue: 0.86))
+            }
+
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 6) {
+                    Text("Learning your baby's rhythm...")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(Color(.label))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                    Spacer()
+                    Text("\(rhythmLearningDays)/14")
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .foregroundStyle(Color(red: 0.45, green: 0.35, blue: 0.86))
+                        .monospacedDigit()
+                }
+
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule()
+                            .fill(Color(red: 0.55, green: 0.45, blue: 0.98).opacity(0.12))
+                        Capsule()
+                            .fill(LinearGradient(
+                                colors: [
+                                    Color(red: 0.55, green: 0.45, blue: 0.98),
+                                    Color(red: 1.0, green: 0.72, blue: 0.30)
+                                ],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            ))
+                            .frame(width: max(8, geo.size.width * rhythmLearningProgress))
+                    }
+                }
+                .frame(height: 6)
+
+                HStack {
+                    Text(rhythmQualityLabel)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(Color(.secondaryLabel))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                    Spacer()
+                    Text(rhythmLearningHint)
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(Color(.tertiaryLabel))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.78)
+                }
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color(.systemBackground))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color(red: 0.55, green: 0.45, blue: 0.98).opacity(0.12), lineWidth: 1)
+        )
+        .shadow(color: Color(red: 0.45, green: 0.35, blue: 0.92).opacity(0.06), radius: 10, x: 0, y: 4)
     }
 
     // MARK: - Today Summary Card
@@ -958,9 +1100,7 @@ struct SleepListView: View {
         return CurrentSleepSessionCard(
             ongoingNight: ongoingSleep,
             expectedWakeTime: expectedWake,
-            nextSleepTime: nextSleepAfterCurrent,
-            dataQualityReport: orchestrator.snapshot?.dataQualityReport,
-            trackedDays: orchestrator.snapshot.map { max(0, 14 - $0.readiness.daysUntilPersonalized) } ?? 0
+            nextSleepTime: nextSleepAfterCurrent
         )
     }
 
@@ -1165,7 +1305,7 @@ struct SleepListView: View {
                     title:     Color(red:0.17,green:0.13,blue:0.32),
                     subtitle:  Color(red:0.42,green:0.38,blue:0.58),
                     ringTrack: Color(red:0.55,green:0.45,blue:0.98).opacity(0.14),
-                    ringArc:   [Color(red:0.55,green:0.45,blue:0.98).opacity(0.55), Color(red:0.45,green:0.35,blue:0.92), Color(red:0.16,green:0.68,blue:0.76)],
+                    ringArc:   [Color(red:0.55,green:0.45,blue:0.98).opacity(0.55), Color(red:0.45,green:0.35,blue:0.92), Color(red:1.0,green:0.72,blue:0.30)],
                     ringText:  Color(red:0.17,green:0.13,blue:0.32),
                     bottom:    Color(red:0.42,green:0.38,blue:0.58),
                     labelText: "NEXT NAP",
@@ -1830,23 +1970,22 @@ struct SleepListView: View {
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .fill(Color(red: 0.55, green: 0.45, blue: 0.98).opacity(0.07))
                 )
-            } else {
-                // Normal timeline
-                HStack(alignment: .top, spacing: 0) {
-                    ForEach(Array(timelineItems.enumerated()), id: \.element.id) { index, item in
-                        premiumTimelineNode(item)
-                        if index < timelineItems.count - 1 {
-                            premiumTimelineSegment(
-                                awakeMinutes: timelineItems[index + 1].awakeBeforeMinutes,
-                                isDashed:     timelineItems[index + 1].isFuture,
-                                fromColor:    item.iconColor,
-                                toColor:      timelineItems[index + 1].iconColor
-                            )
-                        }
+            }
+
+            HStack(alignment: .top, spacing: 0) {
+                ForEach(Array(timelineItems.enumerated()), id: \.element.id) { index, item in
+                    premiumTimelineNode(item)
+                    if index < timelineItems.count - 1 {
+                        premiumTimelineSegment(
+                            awakeMinutes: timelineItems[index + 1].awakeBeforeMinutes,
+                            isDashed:     timelineItems[index + 1].isFuture,
+                            fromColor:    item.iconColor,
+                            toColor:      timelineItems[index + 1].iconColor
+                        )
                     }
                 }
-                .padding(.top, 4)
             }
+            .padding(.top, 4)
         }
         .padding(18)
         .background(
