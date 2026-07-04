@@ -42,6 +42,7 @@
 		FAD9C3742FDBD14100A7D9B7 /* PatternAgentProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAD9C3732FDBD14100A7D9B7 /* PatternAgentProtocol.swift */; };
 		FAEF10442F4E207F00E76FD4 /* BabySleepTrackerApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAEF10432F4E207F00E76FD4 /* BabySleepTrackerApp.swift */; };
 		FAEF10462F4E207F00E76FD4 /* SleepListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAEF10452F4E207F00E76FD4 /* SleepListView.swift */; };
+		FAE100022FF9000100ABCDEF /* CurrentSleepSessionCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAE100012FF9000100ABCDEF /* CurrentSleepSessionCard.swift */; };
 		FAEF10482F4E208000E76FD4 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = FAEF10472F4E208000E76FD4 /* Assets.xcassets */; };
 		FAEF104B2F4E208000E76FD4 /* Preview Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = FAEF104A2F4E208000E76FD4 /* Preview Assets.xcassets */; };
 		FAEF104D2F4E208000E76FD4 /* SleepStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAEF104C2F4E208000E76FD4 /* SleepStore.swift */; };
@@ -108,6 +109,7 @@
 		FAEF10402F4E207F00E76FD4 /* BabySleepTracker.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = BabySleepTracker.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		FAEF10432F4E207F00E76FD4 /* BabySleepTrackerApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BabySleepTrackerApp.swift; sourceTree = "<group>"; };
 		FAEF10452F4E207F00E76FD4 /* SleepListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepListView.swift; sourceTree = "<group>"; };
+		FAE100012FF9000100ABCDEF /* CurrentSleepSessionCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components/CurrentSleepSessionCard.swift; sourceTree = "<group>"; };
 		FAEF10472F4E208000E76FD4 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		FAEF104A2F4E208000E76FD4 /* Preview Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Preview Assets.xcassets"; sourceTree = "<group>"; };
 		FAEF104C2F4E208000E76FD4 /* SleepStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepStore.swift; sourceTree = "<group>"; };
@@ -280,6 +282,7 @@
 				FAEF106D2F53066D00E76FD4 /* AddBreakView.swift */,
 				FAEF10562F4E20BC00E76FD4 /* DayDetailView.swift */,
 				FAEF10582F4E20D600E76FD4 /* AddRecordView.swift */,
+				FAE100012FF9000100ABCDEF /* CurrentSleepSessionCard.swift */,
 				FAEF10452F4E207F00E76FD4 /* SleepListView.swift */,
 			);
 			path = Views;
@@ -465,6 +468,7 @@
 				FA7232E32FDCCC6500647487 /* Date+Extensions.swift in Sources */,
 				FAEF10682F4E5A7200E76FD4 /* AddRecordViewModel.swift in Sources */,
 				FAEF10462F4E207F00E76FD4 /* SleepListView.swift in Sources */,
+				FAE100022FF9000100ABCDEF /* CurrentSleepSessionCard.swift in Sources */,
 				FA9DB0992FD37964000B9211 /* ContentView.swift in Sources */,
 				FA7232DD2FDCC80200647487 /* NapTransitionAgent.swift in Sources */,
 				FAEF10642F4E284100E76FD4 /* SleepKind.swift in Sources */,

@@ -294,6 +294,18 @@ struct SleepListView: View {
         return "\(shortTime(start)) – \(shortTime(end))"
     }
 
+    private var nextNapWindowStart: Date {
+        orchestrator.snapshot?.daytime.windowStart
+            ?? Calendar.current.date(byAdding: .minute, value: -15, to: nextNapTime)
+            ?? nextNapTime
+    }
+
+    private var nextNapWindowEnd: Date {
+        orchestrator.snapshot?.daytime.windowEnd
+            ?? Calendar.current.date(byAdding: .minute, value: 10, to: nextNapTime)
+            ?? nextNapTime
+    }
+
     // FIX: Settings'te kaydedilen varsayılan wake time kullanıldı mı?
     private var usingDefaultWakeTime: Bool {
         orchestrator.snapshot?.daytime.usedDefaultWakeTime ?? false
@@ -705,9 +717,6 @@ struct SleepListView: View {
                 Text("Good day, \(displayedParentName) 👋")
                     .font(.system(size: 13))
                     .foregroundStyle(.secondary)
-                Text("Today's Sleep")
-                    .font(.system(size: 22, weight: .medium, design: .rounded))
-                    .foregroundStyle(.primary)
             }
             Spacer()
             MoonHeaderArt()
@@ -715,7 +724,7 @@ struct SleepListView: View {
         }
         .padding(.top, 6)
     }
-    
+
     // MARK: - Today Summary Card
 
     private var todaySummaryCard: some View {
@@ -893,10 +902,11 @@ struct SleepListView: View {
         return Color(.secondaryLabel)
     }
     
-    // Henüz typical wake time gelmediyse ve bugün hiç kayıt yoksa, bebek hâlâ gece uykusunda kabul edilir
+    // Henüz typical wake time gelmediyse ve bugün hiç kayıt yoksa, bebek hâlâ gece uykusunda kabul edilir.
+    // Ayrıca herhangi bir devam eden uyku kaydı varsa kart canlı uyku durumuna geçer.
     private var isStillInNightSleep: Bool {
-        // Case 1: Herhangi bir ongoing night sleep kaydı var (dünden de olabilir)
-        if records.contains(where: { $0.kind == .nightSleep && $0.isOngoing }) {
+        // Case 1: Herhangi bir ongoing sleep kaydı var (dünden de olabilir)
+        if records.contains(where: { $0.kind != .break && $0.isOngoing }) {
             return true
         }
         // Case 2: Hiç kayıt yok ve typicalWakeHour henüz gelmedi
@@ -932,19 +942,80 @@ struct SleepListView: View {
             return decoded
         }()
         
-        // 2. Bu kayıtlar içinden aktif olan gece uykusunu filtrele
-        let ongoingNight = rawRecords.first(where: { $0.isOngoing && $0.kind == .nightSleep })
+        // 2. Bu kayıtlar içinden aktif olan uykuyu filtrele
+        let ongoingSleep = rawRecords
+            .filter { $0.isOngoing && $0.kind != .break }
+            .sorted { $0.date > $1.date }
+            .first
         
         // Tahmini uyanma saati
-        let expectedWake = orchestrator.snapshot?.daytime.nextNapTime
-            ?? Calendar.current.date(bySettingHour: 7, minute: 0, second: 0, of: Date())
-            ?? Date()
+        let expectedWake = expectedWakeTime(for: ongoingSleep)
+        let nextSleepAfterCurrent = nextSleepTimeAfterCurrentSleep(
+            ongoingSleep: ongoingSleep,
+            expectedWake: expectedWake
+        )
 
-        return NightWatchCard(
-            ongoingNight: ongoingNight,
+        return CurrentSleepSessionCard(
+            ongoingNight: ongoingSleep,
             expectedWakeTime: expectedWake,
+            nextSleepTime: nextSleepAfterCurrent,
             dataQualityReport: orchestrator.snapshot?.dataQualityReport,
             trackedDays: orchestrator.snapshot.map { max(0, 14 - $0.readiness.daysUntilPersonalized) } ?? 0
+        )
+    }
+
+    private func expectedWakeTime(for ongoingSleep: SleepRecord?) -> Date {
+        guard let ongoingSleep else {
+            let wakeHour = UserDefaults.standard.object(forKey: "typicalWakeHour") as? Double ?? 7.0
+            let wakeMinute = UserDefaults.standard.object(forKey: "typicalWakeMinute") as? Double ?? 0.0
+            return Calendar.current.date(
+                bySettingHour: Int(wakeHour),
+                minute: Int(wakeMinute),
+                second: 0,
+                of: Date()
+            ) ?? defaultWakeTime
+        }
+
+        if ongoingSleep.kind == .dayNap {
+            let expectedNapMinutes = ongoingSleep.duration > 0
+                ? ongoingSleep.duration
+                : (orchestrator.snapshot?.pattern?.averageNapDurationMinutes ?? 75)
+            return Calendar.current.date(
+                byAdding: .minute,
+                value: expectedNapMinutes,
+                to: ongoingSleep.date
+            ) ?? Date()
+        }
+
+        let wakeHour = UserDefaults.standard.object(forKey: "typicalWakeHour") as? Double ?? 7.0
+        let wakeMinute = UserDefaults.standard.object(forKey: "typicalWakeMinute") as? Double ?? 0.0
+        let candidate = Calendar.current.date(
+            bySettingHour: Int(wakeHour),
+            minute: Int(wakeMinute),
+            second: 0,
+            of: Date()
+        ) ?? defaultWakeTime
+
+        if candidate > ongoingSleep.date {
+            return candidate
+        }
+
+        return Calendar.current.date(byAdding: .day, value: 1, to: candidate) ?? candidate
+    }
+
+    private func nextSleepTimeAfterCurrentSleep(ongoingSleep: SleepRecord?, expectedWake: Date) -> Date? {
+        guard let ongoingSleep else {
+            return orchestrator.snapshot?.daytime.nextNapTime
+        }
+
+        if ongoingSleep.kind == .nightSleep {
+            return orchestrator.snapshot?.daytime.nextNapTime
+        }
+
+        return Calendar.current.date(
+            byAdding: .minute,
+            value: recommendedWakeWindowMinutes,
+            to: expectedWake
         )
     }
     
@@ -1025,6 +1096,8 @@ struct SleepListView: View {
                 isOverdue:         isOverdue,
                 displayTime:       displayTime,
                 windowText:        recommendationWindow,
+                windowStart:       nextNapWindowStart,
+                windowEnd:         nextNapWindowEnd,
                 confidencePercent: confidencePercent,
                 bedtimeWindowEnd:  orchestrator.snapshot?.night.optimalBedtimeEnd,
                 overtiredRiskTime: orchestrator.snapshot?.night.overtiredRiskTime
@@ -1040,6 +1113,8 @@ struct SleepListView: View {
         let isOverdue:         Bool
         let displayTime:       Date
         let windowText:        String
+        let windowStart:       Date
+        let windowEnd:         Date
         let confidencePercent: Int
         let bedtimeWindowEnd:  Date?
         let overtiredRiskTime: Date?
@@ -1083,16 +1158,16 @@ struct SleepListView: View {
             switch stateKind {
             case .nextNap:
                 return CardTheme(
-                    bg:        [Color(red:0.28,green:0.18,blue:0.65), Color(red:0.20,green:0.12,blue:0.50)],
-                    border:    Color(red:0.55,green:0.45,blue:0.98).opacity(0.35),
-                    shadow:    Color(red:0.20,green:0.12,blue:0.50).opacity(0.55),
-                    label:     Color(red:0.80,green:0.74,blue:1.0),
-                    title:     .white,
-                    subtitle:  Color(red:0.80,green:0.74,blue:1.0).opacity(0.85),
-                    ringTrack: Color.white.opacity(0.10),
-                    ringArc:   [Color(red:0.72,green:0.65,blue:0.98).opacity(0.6), Color(red:0.72,green:0.65,blue:0.98), .white],
-                    ringText:  .white,
-                    bottom:    Color(red:0.72,green:0.65,blue:0.98).opacity(0.8),
+                    bg:        [Color(red:0.98,green:0.97,blue:1.0), Color(red:0.92,green:0.96,blue:1.0)],
+                    border:    Color(red:0.55,green:0.45,blue:0.98).opacity(0.18),
+                    shadow:    Color(red:0.45,green:0.35,blue:0.92).opacity(0.10),
+                    label:     Color(red:0.45,green:0.35,blue:0.86),
+                    title:     Color(red:0.17,green:0.13,blue:0.32),
+                    subtitle:  Color(red:0.42,green:0.38,blue:0.58),
+                    ringTrack: Color(red:0.55,green:0.45,blue:0.98).opacity(0.14),
+                    ringArc:   [Color(red:0.55,green:0.45,blue:0.98).opacity(0.55), Color(red:0.45,green:0.35,blue:0.92), Color(red:0.16,green:0.68,blue:0.76)],
+                    ringText:  Color(red:0.17,green:0.13,blue:0.32),
+                    bottom:    Color(red:0.42,green:0.38,blue:0.58),
                     labelText: "NEXT NAP",
                     showStars: false,
                     showPulse: true
@@ -1115,18 +1190,18 @@ struct SleepListView: View {
                 )
             case .bedtimeApproaching:
                 return CardTheme(
-                    bg:        [Color(red:0.22,green:0.14,blue:0.52), Color(red:0.15,green:0.09,blue:0.38)],
-                    border:    Color(red:0.45,green:0.35,blue:0.88).opacity(0.35),
-                    shadow:    Color(red:0.15,green:0.09,blue:0.38).opacity(0.55),
-                    label:     Color(red:0.72,green:0.65,blue:0.98),
-                    title:     .white,
-                    subtitle:  Color(red:0.72,green:0.65,blue:0.98).opacity(0.85),
-                    ringTrack: Color.white.opacity(0.10),
-                    ringArc:   [Color(red:0.72,green:0.65,blue:0.98).opacity(0.6), Color(red:0.72,green:0.65,blue:0.98), .white],
-                    ringText:  .white,
-                    bottom:    Color(red:0.72,green:0.65,blue:0.98).opacity(0.8),
+                    bg:        [Color(red:0.98,green:0.96,blue:1.0), Color(red:0.95,green:0.94,blue:0.99)],
+                    border:    Color(red:0.55,green:0.45,blue:0.98).opacity(0.20),
+                    shadow:    Color(red:0.45,green:0.35,blue:0.92).opacity(0.11),
+                    label:     Color(red:0.45,green:0.35,blue:0.86),
+                    title:     Color(red:0.17,green:0.13,blue:0.32),
+                    subtitle:  Color(red:0.42,green:0.38,blue:0.58),
+                    ringTrack: Color(red:0.55,green:0.45,blue:0.98).opacity(0.14),
+                    ringArc:   [Color(red:0.55,green:0.45,blue:0.98).opacity(0.55), Color(red:0.45,green:0.35,blue:0.92), Color(red:1.0,green:0.72,blue:0.3)],
+                    ringText:  Color(red:0.17,green:0.13,blue:0.32),
+                    bottom:    Color(red:0.42,green:0.38,blue:0.58),
                     labelText: "BEDTIME",
-                    showStars: true,
+                    showStars: false,
                     showPulse: false
                 )
             case .nightMode:
@@ -1176,7 +1251,11 @@ struct SleepListView: View {
 
                 VStack(spacing: 0) {
                     topRow(t)
-                    Divider().background(Color.white.opacity(0.08)).padding(.horizontal, 16)
+                    if stateKind == .nextNap {
+                        Divider().background(t.ringTrack).padding(.horizontal, 16)
+                        recommendedWindowBand(t)
+                    }
+                    Divider().background(t.ringTrack).padding(.horizontal, 16)
                     bottomRow(t)
                 }
             }
@@ -1236,14 +1315,16 @@ struct SleepListView: View {
             switch stateKind {
             case .overdueNap:  return "Add nap now"
             case .overtired:   return "Sleep now!"
-            default:           return ampm(displayTime)
+            case .nextNap:     return "Nap at \(ampm(displayTime))"
+            case .bedtimeApproaching, .nightMode:
+                return "Bedtime at \(ampm(displayTime))"
             }
         }
 
         private var subLabelText: String {
             switch stateKind {
             case .nextNap:
-                return "Window: \(windowText)"
+                return "Best start window: \(windowText)"
             case .overdueNap:
                 return "Expected \(ampm(displayTime)) — may be overtired"
             case .bedtimeApproaching:
@@ -1260,6 +1341,44 @@ struct SleepListView: View {
         private var minutesUntilBedtime: Int {
             guard isBedtime, stateKind == .bedtimeApproaching else { return 0 }
             return max(0, Int(displayTime.timeIntervalSince(Date()) / 60))
+        }
+
+        private func recommendedWindowBand(_ t: CardTheme) -> some View {
+            HStack(spacing: 10) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(t.label.opacity(0.12))
+                        .frame(width: 30, height: 30)
+                    Image(systemName: "timer")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(t.label)
+                }
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Recommended window")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(t.label)
+                        .tracking(0.3)
+                    Text("\(ampm(windowStart)) – \(ampm(windowEnd))")
+                        .font(.system(size: 13, weight: .bold, design: .rounded))
+                        .foregroundStyle(t.title)
+                        .monospacedDigit()
+                }
+
+                Spacer()
+
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text("Overtired risk")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(t.bottom.opacity(0.82))
+                    Text("after \(ampm(windowEnd))")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(t.label)
+                        .monospacedDigit()
+                }
+            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 11)
         }
 
         // MARK: - Circular Right
@@ -1361,21 +1480,21 @@ struct SleepListView: View {
 
         private var bottomLeftText: String {
             switch stateKind {
-            case .nextNap:            return "Nap coming up"
+            case .nextNap:            return "Tap when sleep starts"
             case .overdueNap:         return "Tap to log nap now"
             case .bedtimeApproaching:
                 if let end = bedtimeWindowEnd { return "Earliest \(ampm(displayTime)) · Latest \(ampm(end))" }
                 return "Bedtime window"
             case .nightMode:
                 if let end = bedtimeWindowEnd { return "Window \(ampm(displayTime)) – \(ampm(end))" }
-                return "Sleep time"
+                return "Start bedtime log"
             case .overtired:          return "Overtired — act now"
             }
         }
 
         private var bottomRightText: String {
             switch stateKind {
-            case .nextNap:            return windowText
+            case .nextNap:            return "\(confidencePercent)% confidence"
             case .overdueNap:         return "Log now →"
             case .bedtimeApproaching:
                 if let risk = overtiredRiskTime { return "Overtired after \(ampm(risk))" }
@@ -1387,7 +1506,7 @@ struct SleepListView: View {
             }
         }
 
-        // MARK: - Stars (NightWatchCard ile birebir aynı)
+        // MARK: - Stars
 
         private var starsLayer: some View {
             GeometryReader { geo in
@@ -1418,275 +1537,6 @@ struct SleepListView: View {
             return f.string(from: date)
         }
     }
-    // MARK: - NightWatchCard Component
-
-    struct NightWatchCard: View {
-        let ongoingNight: SleepRecord?
-        let expectedWakeTime: Date
-        let dataQualityReport: DataQualityReport?
-        let trackedDays: Int
-
-        @State private var pulse = false
-        @State private var starOpacity1: Double = 0.3
-        @State private var starOpacity2: Double = 0.6
-        @State private var starOpacity3: Double = 0.2
-
-        private let deepPurple = Color(red: 0.18, green: 0.12, blue: 0.45)
-        private let midPurple  = Color(red: 0.32, green: 0.22, blue: 0.72)
-        private let lilac      = Color(red: 0.72, green: 0.65, blue: 0.98)
-        private let gold       = Color(red: 1.0,  green: 0.80, blue: 0.30)
-
-        private var startTime: Date {
-            ongoingNight?.date ?? Calendar.current.date(byAdding: .hour, value: -9, to: expectedWakeTime) ?? Date()
-        }
-
-        private var elapsedMinutes: Int {
-            max(0, Int(Date().timeIntervalSince(startTime) / 60))
-        }
-
-        private var expectedMinutes: Int {
-            max(1, Int(expectedWakeTime.timeIntervalSince(startTime) / 60))
-        }
-
-        private var progress: Double {
-            min(1.0, Double(elapsedMinutes) / Double(expectedMinutes))
-        }
-
-        private var progressPercent: Int {
-            Int(progress * 100)
-        }
-
-        private var dataQualityPercent: Int {
-            dataQualityReport?.score ?? 0
-        }
-
-        private var dataQualityProgress: Double {
-            min(1.0, max(0.0, Double(dataQualityPercent) / 100.0))
-        }
-
-        private var learningDays: Int {
-            min(14, max(0, trackedDays))
-        }
-
-        private var learningProgress: Double {
-            min(1.0, Double(learningDays) / 14.0)
-        }
-
-        private var dataQualityLabel: String {
-            switch dataQualityPercent {
-            case 90...100: return "excellent"
-            case 70..<90:  return "good"
-            case 50..<70:  return "building"
-            default:       return "low"
-            }
-        }
-
-        var body: some View {
-            ZStack {
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .fill(LinearGradient(
-                        colors: [Color(red: 0.12, green: 0.08, blue: 0.35), Color(red: 0.08, green: 0.05, blue: 0.25)],
-                        startPoint: .topLeading, endPoint: .bottomTrailing
-                    ))
-
-                starsLayer
-
-                VStack(spacing: 0) {
-                    topRow
-                    Divider()
-                        .background(Color.white.opacity(0.08))
-                        .padding(.horizontal, 16)
-                    aiLearningProgress
-                    Divider()
-                        .background(Color.white.opacity(0.08))
-                        .padding(.horizontal, 16)
-                    bottomRow
-                }
-            }
-            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .stroke(midPurple.opacity(0.4), lineWidth: 1)
-            )
-            .shadow(color: deepPurple.opacity(0.6), radius: 16, x: 0, y: 8)
-            .onAppear {
-                pulse = true
-                withAnimation(.easeInOut(duration: 2.1).repeatForever(autoreverses: true)) { starOpacity1 = 0.9 }
-                withAnimation(.easeInOut(duration: 1.6).repeatForever(autoreverses: true).delay(0.4)) { starOpacity2 = 0.2 }
-                withAnimation(.easeInOut(duration: 2.5).repeatForever(autoreverses: true).delay(0.9)) { starOpacity3 = 0.8 }
-            }
-        }
-
-        private var topRow: some View {
-            HStack(alignment: .center, spacing: 16) {
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 5) {
-                        Circle()
-                            .fill(lilac)
-                            .frame(width: 6, height: 6)
-                            .scaleEffect(pulse ? 1.4 : 0.8)
-                            .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: pulse)
-                        Text("CURRENT SLEEP SESSION")
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundStyle(lilac)
-                            .tracking(0.5)
-                    }
-
-                    TimelineView(.periodic(from: .now, by: 60)) { _ in
-                        Text("Started \(ampm(startTime))")
-                            .font(.system(size: 22, weight: .bold, design: .rounded))
-                            .foregroundStyle(Color.white)
-                            .monospacedDigit()
-                    }
-
-                    HStack(spacing: 4) {
-                        Image(systemName: "sunrise.fill")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(gold)
-                        Text("Expected wake around \(ampm(expectedWakeTime))")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(gold)
-                    }
-                }
-                Spacer()
-                dataQualityRing
-            }
-            .padding(.horizontal, 18)
-            .padding(.top, 18)
-            .padding(.bottom, 14)
-        }
-
-        private var dataQualityRing: some View {
-            ZStack {
-                Circle()
-                    .stroke(Color.white.opacity(0.10), lineWidth: 5)
-                    .frame(width: 72, height: 72)
-
-                Circle()
-                    .trim(from: 0, to: dataQualityProgress)
-                    .stroke(
-                        AngularGradient(colors: [gold.opacity(0.7), lilac, Color.white], center: .center),
-                        style: StrokeStyle(lineWidth: 5, lineCap: .round)
-                    )
-                    .frame(width: 72, height: 72)
-                    .rotationEffect(.degrees(-90))
-                    .animation(.easeInOut(duration: 1.0), value: dataQualityProgress)
-
-                VStack(spacing: 1) {
-                    Text("\(dataQualityPercent)%")
-                        .font(.system(size: 17, weight: .bold, design: .rounded))
-                        .foregroundStyle(Color.white)
-                        .monospacedDigit()
-                    Text("data")
-                        .font(.system(size: 8, weight: .semibold))
-                        .foregroundStyle(lilac.opacity(0.7))
-                }
-            }
-        }
-
-        private var aiLearningProgress: some View {
-            VStack(alignment: .leading, spacing: 7) {
-                HStack(spacing: 8) {
-                    Image(systemName: "sparkles")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(gold)
-
-                    Text("AI learning")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(lilac)
-                        .tracking(0.4)
-
-                    Spacer()
-
-                    Text("\(learningDays)/14 days")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(Color.white.opacity(0.82))
-                        .monospacedDigit()
-                }
-
-                GeometryReader { geo in
-                    ZStack(alignment: .leading) {
-                        Capsule()
-                            .fill(Color.white.opacity(0.10))
-                        Capsule()
-                            .fill(LinearGradient(
-                                colors: [gold, lilac],
-                                startPoint: .leading,
-                                endPoint: .trailing
-                            ))
-                            .frame(width: max(8, geo.size.width * learningProgress))
-                    }
-                }
-                .frame(height: 7)
-
-                HStack {
-                    Text("Data quality \(dataQualityLabel)")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(lilac.opacity(0.75))
-                    Spacer()
-                    Text(learningDays >= 14 ? "Personalized" : "\(14 - learningDays) days left")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(learningDays >= 14 ? gold : lilac.opacity(0.75))
-                }
-            }
-            .padding(.horizontal, 18)
-            .padding(.vertical, 12)
-        }
-
-        private var bottomRow: some View {
-            HStack(spacing: 8) {
-                HStack(spacing: 6) {
-                    Image(systemName: "waveform.path")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(lilac.opacity(0.7))
-
-                    TimelineView(.periodic(from: .now, by: 60)) { _ in
-                        Text("Sleeping… \(TimeFormat.minutes(elapsedMinutes))")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(lilac.opacity(0.85))
-                    }
-                }
-                Spacer()
-                TimelineView(.periodic(from: .now, by: 60)) { _ in
-                    let remaining = max(0, expectedMinutes - elapsedMinutes)
-                    Text(remaining > 0 ? "~\(TimeFormat.minutes(remaining)) left" : "Wake time soon")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(remaining > 0 ? lilac.opacity(0.6) : gold)
-                }
-            }
-            .padding(.horizontal, 18)
-            .padding(.vertical, 12)
-        }
-
-        private var starsLayer: some View {
-            GeometryReader { geo in
-                let w = geo.size.width
-                let h = geo.size.height
-                ZStack {
-                    Circle().fill(Color.white).frame(width: 2.5, height: 2.5).position(x: w * 0.15, y: h * 0.22).opacity(starOpacity1)
-                    Circle().fill(Color.white).frame(width: 1.5, height: 1.5).position(x: w * 0.75, y: h * 0.15).opacity(starOpacity2)
-                    Circle().fill(Color.white).frame(width: 2, height: 2).position(x: w * 0.88, y: h * 0.40).opacity(starOpacity3)
-                    Circle().fill(Color.white).frame(width: 1.5, height: 1.5).position(x: w * 0.25, y: h * 0.70).opacity(starOpacity2)
-                    Circle().fill(Color.white).frame(width: 1, height: 1).position(x: w * 0.60, y: h * 0.25).opacity(starOpacity1)
-                    Image(systemName: "moon.stars.fill")
-                        .font(.system(size: 56, weight: .thin))
-                        .foregroundStyle(LinearGradient(
-                            colors: [Color.white.opacity(0.06), Color.white.opacity(0.03)],
-                            startPoint: .topLeading, endPoint: .bottomTrailing
-                        ))
-                        .position(x: w * 0.82, y: h * 0.38)
-                }
-            }
-        }
-
-        private func ampm(_ date: Date) -> String {
-            let f = DateFormatter()
-            f.locale = Locale(identifier: "en_US_POSIX")
-            f.dateFormat = "h:mm a"
-            return f.string(from: date)
-        }
-    }
-
     // MARK: Default Wake Time Warning Banner
 
     private var defaultWakeTimeWarningBanner: some View {
