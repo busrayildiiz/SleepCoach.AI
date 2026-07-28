@@ -189,6 +189,11 @@ struct SleepListView: View {
         wakeRecords.first { Calendar.current.isDateInToday($0.day) }
     }
 
+    private var shouldShowTodayWakeUpPrompt: Bool {
+        todayWakeRecord == nil &&
+        (!isStillInNightSleep || Calendar.current.component(.hour, from: Date()) >= 5)
+    }
+
     private var defaultWakeTime: Date {
         Calendar.current.date(bySettingHour: 7, minute: 0, second: 0, of: Date()) ?? Date()
     }
@@ -584,9 +589,7 @@ struct SleepListView: View {
                     headerSection
                     nextNapOrBedtimeCard
                     rhythmLearningStrip
-                    if !isStillInNightSleep || Calendar.current.component(.hour, from: Date()) >= 5 {
-                        todayWakeUpCard
-                    }
+                    todayWakeSection
                        todayTimelineCard
                        coachInsightCard
                         todaySummaryCard
@@ -1106,61 +1109,64 @@ struct SleepListView: View {
     // MARK: - Today Wake Up Card
 
     @ViewBuilder
+    private var todayWakeSection: some View {
+        if let wakeTime = todayWakeRecord?.wakeTime {
+            WakeUpCard(time: wakeTime)
+        } else if shouldShowTodayWakeUpPrompt {
+            todayWakeUpCard
+        }
+    }
+
     private var todayWakeUpCard: some View {
-        if todayWakeRecord == nil {
-            Button { activeSheet = .wakeTime } label: {
-                HStack(spacing: 14) {
-                    // İkon
-                    ZStack {
-                        Circle()
-                            .fill(Color.orange.opacity(0.2))
-                            .frame(width: 48, height: 48)
-                        Image(systemName: "sun.max.fill")
-                            .font(.system(size: 22, weight: .semibold))
-                            .foregroundStyle(Color.orange)
-                    }
-
-                    // Metin
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Wake-up time needed")
-                            .font(.system(size: 14, weight: .bold))
-                            .foregroundStyle(Color.orange)
-                        Text("Add \(babyName)'s actual wake-up time\nfor more accurate predictions.")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(Color(.secondaryLabel))
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-
-                    Spacer()
-
-                    // Sağ buton
-                    HStack(spacing: 4) {
-                        Text("Add wake time")
-                            .font(.system(size: 12, weight: .semibold))
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 11, weight: .semibold))
-                    }
-                    .foregroundStyle(Color.orange)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(Color(.systemBackground))
-                    )
+        Button { activeSheet = .wakeTime } label: {
+            HStack(spacing: 14) {
+                ZStack {
+                    Circle()
+                        .fill(Color.orange.opacity(0.2))
+                        .frame(width: 48, height: 48)
+                    Image(systemName: "sun.max.fill")
+                        .font(.system(size: 22, weight: .semibold))
+                        .foregroundStyle(Color.orange)
                 }
-                .padding(16)
-                .contentShape(Rectangle())
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Wake-up time needed")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(Color.orange)
+                    Text("Add \(babyName)'s actual wake-up time\nfor more accurate predictions.")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Color(.secondaryLabel))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer()
+
+                HStack(spacing: 4) {
+                    Text("Add wake time")
+                        .font(.system(size: 12, weight: .semibold))
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 11, weight: .semibold))
+                }
+                .foregroundStyle(Color.orange)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
                 .background(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .fill(Color.orange.opacity(0.10))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .stroke(Color.orange.opacity(0.2), lineWidth: 1)
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color(.systemBackground))
                 )
             }
-            .buttonStyle(CardPressButtonStyle())
+            .padding(16)
+            .contentShape(Rectangle())
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(Color.orange.opacity(0.10))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(Color.orange.opacity(0.2), lineWidth: 1)
+            )
         }
+        .buttonStyle(CardPressButtonStyle())
     }
     // MARK: - Regular Next Nap / Bedtime Card
 
