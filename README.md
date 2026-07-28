@@ -1,4 +1,4 @@
-# BabySleepTracker
+# SleepCoach.AI
 
 BabySleepTracker is a premium SwiftUI baby sleep tracking app that helps parents log naps, night sleep, wake-up times, and wake periods while receiving AI-assisted sleep predictions and coaching insights.
 
@@ -8,7 +8,7 @@ The app combines a calm daily tracking experience with an agent-based prediction
 
 ## Overview
 
-BabySleepTracker is designed for parents who want a simple but intelligent way to understand their baby's sleep patterns.
+SleepCoach.AI is designed for parents who want a simple but intelligent way to understand their baby's sleep patterns.
 
 The app supports day naps, night sleep, ongoing sleep sessions, wake-up logging, wake periods, daily summaries, bedtime guidance, and an AI Coach experience that explains what to do next and why.
 
@@ -18,7 +18,7 @@ The product goal is to make baby sleep tracking feel clear, calm, and decision-o
 
 ## Screenshots
 
-Add app screenshots under a `screenshots/` folder and replace the paths below.
+
 
 | Home Dashboard | AI Coach | History |
 |---|---|---|
