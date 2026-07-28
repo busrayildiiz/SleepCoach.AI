@@ -51,11 +51,37 @@ Recommended screenshots:
 
 ---
 
+
+## Core Features
+
+- Sleep session logging  
+  Track day naps and night sleep with start time, duration, and ongoing state.
+
+- Wake-up tracking  
+  Log the baby's actual morning wake-up time to improve daily nap predictions.
+
+- Wake periods  
+  Add awake intervals inside naps or night sleep and subtract them from net sleep.
+
+- Smart home dashboard  
+  See the next nap, bedtime window, daily rhythm, wake-up status, and sleep summary in one premium dashboard.
+
+- Ongoing sleep support  
+  Keep night sleep or naps active until the user ends them or a valid wake-up time closes the session.
+
+- AI Coach  
+  Get nap timing, bedtime guidance, pattern insights, confidence levels, and explanation logic.
+
+- History and day detail  
+  Review previous days, inspect records, and understand sleep distribution over time.
+
+---
+
 ## Architecture Diagram
 
 ```mermaid
 flowchart TD
-    App[BabySleepTracker App] --> UI[SwiftUI Views]
+    App[SleepCoach.AI App] --> UI[SwiftUI Views]
 
     UI --> Home[Home Dashboard]
     UI --> Coach[AI Coach]
@@ -99,30 +125,6 @@ flowchart TD
 
 ---
 
-## Core Features
-
-- Sleep session logging  
-  Track day naps and night sleep with start time, duration, and ongoing state.
-
-- Wake-up tracking  
-  Log the baby's actual morning wake-up time to improve daily nap predictions.
-
-- Wake periods  
-  Add awake intervals inside naps or night sleep and subtract them from net sleep.
-
-- Smart home dashboard  
-  See the next nap, bedtime window, daily rhythm, wake-up status, and sleep summary in one premium dashboard.
-
-- Ongoing sleep support  
-  Keep night sleep or naps active until the user ends them or a valid wake-up time closes the session.
-
-- AI Coach  
-  Get nap timing, bedtime guidance, pattern insights, confidence levels, and explanation logic.
-
-- History and day detail  
-  Review previous days, inspect records, and understand sleep distribution over time.
-
----
 
 ## AI Pipeline
 
@@ -157,7 +159,17 @@ The AI system is intentionally layered:
 - The LLM layer adds natural-language coaching, pattern interpretation, and parent-friendly explanations.
 - The UI separates immediate guidance from model logic so the user can understand both what to do and why.
 
+
+Why not pure AI?
+
+- Sleep prediction affects real-world parenting decisions.
+
+- For that reason, deterministic rule-based prediction is treated as the primary decision engine.
+
+- LLMs are intentionally used only for interpretation and natural-language coaching rather than core prediction logic.
+
 ---
+
 
 ## Wake-Up / Night Sleep State Machine
 
@@ -251,7 +263,7 @@ flowchart LR
 ## Project Structure
 
 ```txt
-BabySleepTracker/
+SleepCoach.AI/
 ├── Models/
 │   ├── SleepRecord.swift
 │   ├── SleepKind.swift
@@ -333,7 +345,7 @@ Key engineering challenges in this project:
 
 ```mermaid
 timeline
-    title BabySleepTracker Roadmap
+    title SleepCoach.AI Roadmap
 
     Phase 1 : Core sleep logging
             : Day naps
