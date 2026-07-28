@@ -36,32 +36,44 @@ struct SleepListView: View {
     }
 
     private struct TimelineItem: Identifiable {
+        enum VisualState {
+            case completed
+            case active
+            case upcoming
+        }
+
         let id = UUID()
         let icon: String
         let iconColor: Color
         let time: String
         let title: String
         let detail: String
+        let visualState: VisualState
         let isActive: Bool
         let isFuture: Bool
         var awakeBeforeMinutes: Int
-        var isOverdue: Bool
         
-        init(icon: String, iconColor: Color, time: String,
-                title: String, detail: String,
-                isActive: Bool, isFuture: Bool,
-                awakeBeforeMinutes: Int = 0,
-                isOverdue: Bool = false) {
-               self.icon                = icon
-               self.iconColor           = iconColor
-               self.time                = time
-               self.title               = title
-               self.detail              = detail
-               self.isActive            = isActive
-               self.isFuture            = isFuture
-               self.awakeBeforeMinutes  = awakeBeforeMinutes
-               self.isOverdue           = isOverdue
-           }
+        init(
+            icon: String,
+            iconColor: Color,
+            time: String,
+            title: String,
+            detail: String,
+            visualState: VisualState,
+            isActive: Bool,
+            isFuture: Bool,
+            awakeBeforeMinutes: Int = 0
+        ) {
+            self.icon               = icon
+            self.iconColor          = iconColor
+            self.time               = time
+            self.title              = title
+            self.detail             = detail
+            self.visualState        = visualState
+            self.isActive           = isActive
+            self.isFuture           = isFuture
+            self.awakeBeforeMinutes = awakeBeforeMinutes
+        }
     }
 
     // MARK: - State
@@ -85,13 +97,6 @@ struct SleepListView: View {
         }
         saveRecords()
     }
-    
-    // MARK: Wakeup Card
-        private var shouldShowWakeUpCard: Bool {
-            let hour = Calendar.current.component(.hour, from: Date())
-            return hour >= 5
-   }
-
     private func saveRecords() {
         if let encoded = try? JSONEncoder().encode(records) {
             UserDefaults.standard.set(encoded, forKey: "sleepRecords")
@@ -131,28 +136,28 @@ struct SleepListView: View {
             UserDefaults.standard.set(encoded, forKey: "dailyWakeRecords_v1")
             NotificationCenter.default.post(name: .dailyWakeRecordsDidChange, object: nil)
         }
-        
-        if let ongoing = records.first(where: { $0.kind == .nightSleep && $0.isOngoing }) {
-                let wakeComponents = Calendar.current.dateComponents([.hour, .minute], from: selectedTime)
-                let today = Calendar.current.startOfDay(for: Date())
-                guard let wakeTime = Calendar.current.date(
-                    bySettingHour: wakeComponents.hour ?? 7,
-                    minute: wakeComponents.minute ?? 0,
-                    second: 0, of: today
-                ) else { return }
-                
-                let duration = max(0, Int(wakeTime.timeIntervalSince(ongoing.date) / 60))
-                let closed = SleepRecord(
-                    id: ongoing.id,
-                    date: ongoing.date,
-                    duration: min(duration, 12 * 60),
-                    kind: ongoing.kind,
-                    parentNapID: ongoing.parentNapID,
-                    isOngoing: false,
-                    createdAt: ongoing.createdAt
-                )
-                upsert(closed)
-            }
+
+        closeOngoingNightSleepIfWakeTimeEndsIt(wakeTime)
+    }
+
+    private func closeOngoingNightSleepIfWakeTimeEndsIt(_ wakeTime: Date) {
+        guard let ongoing = records
+            .filter({ $0.kind == .nightSleep && $0.isOngoing && wakeTime > $0.date })
+            .sorted(by: { $0.date > $1.date })
+            .first
+        else { return }
+
+        let duration = max(1, Int(wakeTime.timeIntervalSince(ongoing.date) / 60))
+        let closed = SleepRecord(
+            id: ongoing.id,
+            date: ongoing.date,
+            duration: min(duration, 12 * 60),
+            kind: ongoing.kind,
+            parentNapID: ongoing.parentNapID,
+            isOngoing: false,
+            createdAt: ongoing.createdAt
+        )
+        upsert(closed)
     }
 
     // MARK: - Derived Data
@@ -317,11 +322,6 @@ struct SleepListView: View {
         guard let napTime = orchestrator.snapshot?.daytime.nextNapTime else { return false }
         return napTime < Date()
     }
-    // Nap atlandıysa, bir sonraki tahmini napı hesapla
-    private var nextNapAfterMissed: Date {
-        let wakeWindow = orchestrator.snapshot?.daytime.wakeWindowUsed ?? 150
-        return nextNapTime.addingMinutes(wakeWindow)
-    }
     private var wakeWindowBeforeLatest: Int {
         guard let firstNap = todaySleeps
             .filter({ $0.kind == .dayNap })
@@ -364,237 +364,183 @@ struct SleepListView: View {
         }
 
         private var timelineItems: [TimelineItem] {
-            var items: [TimelineItem] = []
-
+            let now = Date()
             let sortedNaps = todaySleeps
                 .filter { $0.kind == .dayNap }
                 .sorted { $0.date < $1.date }
-            let ongoingSleep = records
-                .filter { $0.kind != .break && $0.isOngoing }
-                .sorted { $0.date > $1.date }
-                .first
+            let wakeUp = timelineWakeAnchor(sortedNaps: sortedNaps)
+            let expectedDuration = timelineExpectedNapDuration
+            var items: [TimelineItem] = [
+                TimelineItem(
+                    icon: "sun.max.fill",
+                    iconColor: Color(red: 1.0, green: 0.68, blue: 0.20),
+                    time: shortTime(wakeUp),
+                    title: "Wake up",
+                    detail: timelineWakeDetail,
+                    visualState: wakeUp <= now ? .completed : .upcoming,
+                    isActive: false,
+                    isFuture: wakeUp > now
+                )
+            ]
 
-            // 1. Wake up
-            let wakeUp: Date = {
-                if isStillInNightSleep {
-                    return expectedWakeTime(for: ongoingSleep)
-                }
-                if let wt = todayWakeRecord?.wakeTime { return wt }
-                if let first = sortedNaps.first {
-                    return Calendar.current.date(
-                        byAdding: .minute,
-                        value: -wakeWindowBeforeLatest,
-                        to: first.date
-                    ) ?? first.date
-                }
-                return defaultWakeTime
-            }()
-
-            if isStillInNightSleep {
-                let started = ongoingSleep?.date
-                let asleepMinutes = started.map { max(0, Int(Date().timeIntervalSince($0) / 60)) } ?? 0
-                items.append(TimelineItem(
-                    icon: "bed.double.fill",
-                    iconColor: Color(red: 0.55, green: 0.45, blue: 0.98),
-                    time: started.map(shortTime) ?? "Now",
-                    title: "Sleeping now",
-                    detail: asleepMinutes > 0 ? TimeFormat.minutes(asleepMinutes) : "In night sleep",
-                    isActive: true,
-                    isFuture: false
-                ))
-            }
-
-            items.append(TimelineItem(
-                icon: "sun.max.fill",
-                iconColor: Color(red: 1.0, green: 0.68, blue: 0.20),
-                time: shortTime(wakeUp),
-                title: isStillInNightSleep ? "Expected wake" : "Wake up",
-                detail: isStillInNightSleep ? "Morning anchor" : "",
-                isActive: false,
-                isFuture: isStillInNightSleep || wakeUp > Date()
-            ))
-
-            // 2. Gerçek (loglanmış) naplar
-            var lastEnd = wakeUp
+            var anchorEnd = wakeUp
             for (index, nap) in sortedNaps.enumerated() {
-                let napEnd = Calendar.current.date(
-                    byAdding: .minute, value: nap.duration, to: nap.date
-                ) ?? nap.date
-
-                let awakeBeforeNap = max(0, Int(nap.date.timeIntervalSince(lastEnd) / 60))
+                guard items.count < 4 else { return items }
+                let napEnd = Calendar.current.date(byAdding: .minute, value: nap.duration, to: nap.date) ?? nap.date
+                let awakeBeforeNap = max(0, Int(nap.date.timeIntervalSince(anchorEnd) / 60))
+                let isActiveNap = nap.isOngoing || (nap.date <= now && napEnd > now)
+                let state: TimelineItem.VisualState = isActiveNap ? .active : (napEnd <= now ? .completed : .upcoming)
 
                 items.append(TimelineItem(
                     icon: "moon.fill",
-                    iconColor: .sleepPurple,
+                    iconColor: timelineNapColor(state: state),
                     time: shortTime(nap.date),
                     title: "Nap \(index + 1)",
-                    detail: TimeFormat.minutes(nap.totalMinutes(breaks: breaks)),
-                    isActive: index == sortedNaps.count - 1,
-                    isFuture: false,
+                    detail: nap.isOngoing ? "Sleeping now" : TimeFormat.minutes(nap.totalMinutes(breaks: breaks)),
+                    visualState: state,
+                    isActive: isActiveNap,
+                    isFuture: nap.date > now,
+                    awakeBeforeMinutes: awakeBeforeNap
+                ))
+                anchorEnd = napEnd
+            }
+
+            var predictedIndex = sortedNaps.count + 1
+            while items.count < 4 && predictedIndex <= expectedNapSlotCount {
+                let predictedStart = timelinePredictedNapStart(
+                    napIndex: predictedIndex,
+                    anchorEnd: anchorEnd
+                )
+                let awakeBeforeNap = max(0, Int(predictedStart.timeIntervalSince(anchorEnd) / 60))
+
+                items.append(TimelineItem(
+                    icon: "moon.fill",
+                    iconColor: timelineNapColor(state: .upcoming),
+                    time: shortTime(predictedStart),
+                    title: "Nap \(predictedIndex)",
+                    detail: "~\(TimeFormat.minutes(expectedDuration))",
+                    visualState: .upcoming,
+                    isActive: false,
+                    isFuture: true,
                     awakeBeforeMinutes: awakeBeforeNap
                 ))
 
-                lastEnd = napEnd
+                anchorEnd = predictedStart.addingMinutes(expectedDuration)
+                predictedIndex += 1
             }
 
-            // 3. Kalan tahmini nap slotları — günün toplam beklenen nap sayısına ulaşana kadar
-            let totalSlots = expectedNapSlotCount
-            let remainingSlots = max(0, totalSlots - sortedNaps.count)
-            var predictedAnchor = lastEnd
-            let wakeWindow = orchestrator.snapshot?.daytime.wakeWindowUsed ?? 180
-            let expectedDuration = orchestrator.snapshot?.daytime.expectedDurationMinutes ?? 90
-
-            if !isNextNapOverdue {
-                for slot in 0..<remainingSlots {
-                    let predictedStart: Date
-                    if slot == 0 {
-                        predictedStart = nextNapTime
-                    } else {
-                        predictedStart = predictedAnchor.addingMinutes(wakeWindow)
-                    }
-
-                    let awakeBefore = max(0, Int(predictedStart.timeIntervalSince(predictedAnchor) / 60))
-
-                    items.append(TimelineItem(
-                        icon: "moon.fill",
-                        iconColor: .sleepPurple.opacity(0.45),
-                        time: shortTime(predictedStart),
-                        title: "Nap \(sortedNaps.count + slot + 1)",
-                        detail: "~\(TimeFormat.minutes(expectedDuration)) expected",
-                        isActive: false,
-                        isFuture: true,
-                        awakeBeforeMinutes: awakeBefore
-                    ))
-
-                    predictedAnchor = predictedStart.addingMinutes(expectedDuration)
-                }
-            }
-            
-            // 3. Bedtime veya next nap
-            let lastNapEnd: Date? = sortedNaps.last.map {
-                Calendar.current.date(byAdding: .minute, value: $0.duration, to: $0.date) ?? $0.date
-            }
-
-            if isNextNapOverdue {
-                let awakeBeforeMissed = lastNapEnd.map {
-                    max(0, Int(nextNapTime.timeIntervalSince($0) / 60))
-                } ?? max(0, Int(nextNapTime.timeIntervalSince(wakeUp) / 60))
-
-                items.append(TimelineItem(
-                    icon: "exclamationmark.triangle.fill",
-                    iconColor: .orange,
-                    time: shortTime(nextNapTime),
-                    title: "Nap missed",
-                    detail: "Not logged",
-                    isActive: false,
-                    isFuture: false,
-                    awakeBeforeMinutes: awakeBeforeMissed,
-                    isOverdue: true
-                ))
-
-               
-                predictedAnchor = nextNapTime.addingMinutes(expectedDuration)
-
-                let awakeBeforeNext = max(0, Int(nextNapAfterMissed.timeIntervalSince(nextNapTime) / 60))
-                items.append(TimelineItem(
-                    icon: "moon.fill",
-                    iconColor: .sleepPurple.opacity(0.45),
-                    time: "Next nap",
-                    title: shortTime(nextNapAfterMissed),
-                    detail: "~\(TimeFormat.minutes(orchestrator.snapshot?.daytime.expectedDurationMinutes ?? 90)) expected",
-                    isActive: false,
-                    isFuture: true,
-                    awakeBeforeMinutes: awakeBeforeNext
-                ))
-            } else {
-                let referenceTime = resolveReferenceTime()
-                let awakeBeforeBed = lastNapEnd.map {
-                    max(0, Int(referenceTime.timeIntervalSince($0) / 60))
-                } ?? max(0, Int(referenceTime.timeIntervalSince(wakeUp) / 60))
-
-                items.append(nightOrNapTimelineItem(awakeBeforeMinutes: awakeBeforeBed))
-            }
-
-            // 4. Bedtime — sadece toplam item sayısı 4'ü aşmıyorsa ekle
             if items.count < 4 {
-                let bedtime = orchestrator.snapshot?.night.optimalBedtimeStart
-                    ?? predictedAnchor.addingMinutes(wakeWindow)
-                let awakeBeforeBed = max(0, Int(bedtime.timeIntervalSince(predictedAnchor) / 60))
-
+                let bedtime = timelineBedtime(after: anchorEnd)
+                let awakeBeforeBed = max(0, Int(bedtime.timeIntervalSince(anchorEnd) / 60))
                 items.append(TimelineItem(
                     icon: "moon.stars.fill",
-                    iconColor: .sleepPurpleDeep.opacity(0.6),
-                    time: "Bedtime",
-                    title: shortTime(bedtime),
+                    iconColor: Color.sleepPurpleDeep,
+                    time: shortTime(bedtime),
+                    title: "Bedtime",
                     detail: "Night sleep",
+                    visualState: bedtime <= now ? .completed : .upcoming,
                     isActive: false,
-                    isFuture: true,
+                    isFuture: bedtime > now,
                     awakeBeforeMinutes: awakeBeforeBed
                 ))
-            }
-            
-
-            // Güvenlik: 4'ü aşarsa kırp (ör. expectedNapSlotCount 3 ve hepsi loglanmışsa tam 4 olur, sorun yok;
-            // ama olası edge-case'lerde son 4'ü göster)
-            if items.count > 4 {
-                return Array(items.prefix(4))
             }
 
             return items
         }
     
-    // 10 aylık bebek için expectedNapCount.upperBound = 2 gibi
-    private var expectedNapCountUpperBound: Int {
-        guard let ageMonths = orchestrator.snapshot?.ageMonths else { return 2 }
-        let profile = DefaultAgeBasedSleepProfileProvider().profile(forAgeMonths: ageMonths)
-        return profile.expectedNapCount.upperBound
-    }
-
     private var completedNapCountToday: Int {
         todaySleeps.filter { $0.kind == .dayNap }.count
     }
 
-    // Tahmin edilen "kayıp/sıradaki" nap, günün son napı mı?
-    private var isThisTheLastExpectedNap: Bool {
-        completedNapCountToday + 1 >= expectedNapCountUpperBound
+    private var timelineTrackedDays: Int {
+        orchestrator.snapshot.map { max(0, 14 - $0.readiness.daysUntilPersonalized) } ?? 0
     }
-    
-    private func resolveReferenceTime() -> Date {
-        if orchestrator.snapshot?.nextSleepKind == .bedtime {
-            return orchestrator.snapshot?.night.optimalBedtimeStart ?? nextNapTime
+
+    private var shouldUsePersonalizedTimeline: Bool {
+        timelineTrackedDays >= 14
+    }
+
+    private var timelineProfile: AgeBasedSleepProfile {
+        let ageMonths = orchestrator.snapshot?.ageMonths ?? 10
+        return DefaultAgeBasedSleepProfileProvider().profile(forAgeMonths: ageMonths)
+    }
+
+    private var timelineExpectedNapDuration: Int {
+        if shouldUsePersonalizedTimeline, let minutes = orchestrator.snapshot?.daytime.expectedDurationMinutes {
+            return minutes
         }
-        return nextNapTime
+        let profile = timelineProfile
+        let target = profile.daytimeSleepRange.lowerBound / max(profile.expectedNapCount.upperBound, 1)
+        return min(profile.maxSingleNapMinutes, max(45, target))
     }
 
-    private func nightOrNapTimelineItem(awakeBeforeMinutes: Int) -> TimelineItem {
-        let isBedtime = orchestrator.snapshot?.nextSleepKind == .bedtime
+    private var timelineWakeDetail: String {
+        if todayWakeRecord != nil { return "Logged" }
+        return "Default wake"
+    }
 
-        if isBedtime {
-            let bedtime = orchestrator.snapshot?.night.optimalBedtimeStart ?? nextNapTime
-            return TimelineItem(
-                icon: "moon.stars.fill",
-                iconColor: .sleepPurpleDeep.opacity(0.6),
-                time: "Bedtime",
-                title: shortTime(bedtime),
-                detail: "Night sleep",
-                isActive: false,
-                isFuture: true,
-                awakeBeforeMinutes: awakeBeforeMinutes
-            )
+    private func timelineWakeAnchor(sortedNaps: [SleepRecord]) -> Date {
+        if let wake = todayWakeRecord?.wakeTime { return wake }
+        if let firstNap = sortedNaps.first {
+            let wakeWindow = timelineWakeWindow(forNapIndex: 1)
+            return Calendar.current.date(byAdding: .minute, value: -wakeWindow, to: firstNap.date) ?? firstNap.date
+        }
+        return defaultWakeTime
+    }
+
+    private func timelineWakeWindow(forNapIndex index: Int) -> Int {
+        if shouldUsePersonalizedTimeline, let minutes = orchestrator.snapshot?.daytime.wakeWindowUsed {
+            return minutes
         }
 
-        return TimelineItem(
-            icon: "moon.fill",
-            iconColor: .sleepPurple.opacity(0.45),
-            time: "Next nap",
-            title: shortTime(nextNapTime),
-            detail: "~\(TimeFormat.minutes(orchestrator.snapshot?.daytime.expectedDurationMinutes ?? 90)) expected",
-            isActive: false,
-            isFuture: true,
-            awakeBeforeMinutes: awakeBeforeMinutes
-        )
+        let profile = timelineProfile
+        if index <= 1 {
+            return (profile.morningWakeWindow.lowerBound + profile.morningWakeWindow.upperBound) / 2
+        }
+        if index >= profile.expectedNapCount.upperBound + 1 {
+            return (profile.eveningWakeWindow.lowerBound + profile.eveningWakeWindow.upperBound) / 2
+        }
+        return (profile.wakeWindowRange.lowerBound + profile.wakeWindowRange.upperBound) / 2
     }
 
+    private func timelinePredictedNapStart(napIndex: Int, anchorEnd: Date) -> Date {
+        if shouldUsePersonalizedTimeline,
+           napIndex == completedNapCountToday + 1,
+           let nextNap = orchestrator.snapshot?.daytime.nextNapTime {
+            return nextNap
+        }
+        return anchorEnd.addingMinutes(timelineWakeWindow(forNapIndex: napIndex))
+    }
+
+    private func timelineBedtime(after anchorEnd: Date) -> Date {
+        if shouldUsePersonalizedTimeline, let bedtime = orchestrator.snapshot?.night.optimalBedtimeStart {
+            return bedtime
+        }
+
+        let profile = timelineProfile
+        let proposed = anchorEnd.addingMinutes(timelineWakeWindow(forNapIndex: expectedNapSlotCount + 1))
+        let hour = Calendar.current.component(.hour, from: proposed)
+        guard hour < profile.bedtimeHourRange.lowerBound || hour > profile.bedtimeHourRange.upperBound else {
+            return proposed
+        }
+        return Calendar.current.date(
+            bySettingHour: min(max(hour, profile.bedtimeHourRange.lowerBound), profile.bedtimeHourRange.upperBound),
+            minute: Calendar.current.component(.minute, from: proposed),
+            second: 0,
+            of: proposed
+        ) ?? proposed
+    }
+
+    private func timelineNapColor(state: TimelineItem.VisualState) -> Color {
+        switch state {
+        case .completed:
+            return Color(red: 0.55, green: 0.45, blue: 0.98).opacity(0.42)
+        case .active:
+            return Color.sleepPurpleDeep
+        case .upcoming:
+            return Color(red: 0.55, green: 0.45, blue: 0.98).opacity(0.58)
+        }
+    }
     // MARK: - Helpers
 
     private func totalMinutes(for items: [SleepRecord]) -> Int {
@@ -640,9 +586,6 @@ struct SleepListView: View {
                     rhythmLearningStrip
                     if !isStillInNightSleep || Calendar.current.component(.hour, from: Date()) >= 5 {
                         todayWakeUpCard
-                    }
-                    if orchestrator.snapshot?.nextSleepKind == .nap && !isStillInNightSleep {
-                        bedtimeWindowCard
                     }
                        todayTimelineCard
                        coachInsightCard
@@ -1279,7 +1222,7 @@ struct SleepListView: View {
         // MARK: - Theme
 
         struct CardTheme {
-            let bg:         [Color]
+            let bg:         Color
             let border:     Color
             let shadow:     Color
             let label:      Color
@@ -1298,7 +1241,7 @@ struct SleepListView: View {
             switch stateKind {
             case .nextNap:
                 return CardTheme(
-                    bg:        [Color(red:0.98,green:0.97,blue:1.0), Color(red:0.92,green:0.96,blue:1.0)],
+                    bg:        Color(red:0.98,green:0.97,blue:1.0),
                     border:    Color(red:0.55,green:0.45,blue:0.98).opacity(0.18),
                     shadow:    Color(red:0.45,green:0.35,blue:0.92).opacity(0.10),
                     label:     Color(red:0.45,green:0.35,blue:0.86),
@@ -1314,7 +1257,7 @@ struct SleepListView: View {
                 )
             case .overdueNap:
                 return CardTheme(
-                    bg:        [Color(red:0.52,green:0.25,blue:0.04), Color(red:0.38,green:0.16,blue:0.02)],
+                    bg:        Color(red:0.52,green:0.25,blue:0.04),
                     border:    Color.orange.opacity(0.4),
                     shadow:    Color(red:0.38,green:0.16,blue:0.02).opacity(0.55),
                     label:     Color(red:1.0,green:0.72,blue:0.3),
@@ -1330,7 +1273,7 @@ struct SleepListView: View {
                 )
             case .bedtimeApproaching:
                 return CardTheme(
-                    bg:        [Color(red:0.98,green:0.96,blue:1.0), Color(red:0.95,green:0.94,blue:0.99)],
+                    bg:        Color(red:0.98,green:0.96,blue:1.0),
                     border:    Color(red:0.55,green:0.45,blue:0.98).opacity(0.20),
                     shadow:    Color(red:0.45,green:0.35,blue:0.92).opacity(0.11),
                     label:     Color(red:0.45,green:0.35,blue:0.86),
@@ -1346,7 +1289,7 @@ struct SleepListView: View {
                 )
             case .nightMode:
                 return CardTheme(
-                    bg:        [Color(red:0.12,green:0.08,blue:0.35), Color(red:0.08,green:0.05,blue:0.25)],
+                    bg:        Color(red:0.12,green:0.08,blue:0.35),
                     border:    Color(red:0.32,green:0.22,blue:0.72).opacity(0.4),
                     shadow:    Color(red:0.08,green:0.05,blue:0.25).opacity(0.6),
                     label:     Color(red:0.72,green:0.65,blue:0.98),
@@ -1362,7 +1305,7 @@ struct SleepListView: View {
                 )
             case .overtired:
                 return CardTheme(
-                    bg:        [Color(red:0.50,green:0.06,blue:0.06), Color(red:0.35,green:0.04,blue:0.04)],
+                    bg:        Color(red:0.50,green:0.06,blue:0.06),
                     border:    Color.red.opacity(0.4),
                     shadow:    Color(red:0.35,green:0.04,blue:0.04).opacity(0.55),
                     label:     Color(red:1.0,green:0.72,blue:0.3),
@@ -1385,7 +1328,7 @@ struct SleepListView: View {
             let t = theme
             ZStack {
                 RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .fill(LinearGradient(colors: t.bg, startPoint: .topLeading, endPoint: .bottomTrailing))
+                    .fill(t.bg)
 
                 if t.showStars { starsLayer }
 
@@ -1718,59 +1661,6 @@ struct SleepListView: View {
         .buttonStyle(CardPressButtonStyle())
     }
 
-     // MARK: Bedtime Window Card
-    
-    @ViewBuilder
-    private var bedtimeWindowCard: some View {
-        if let night = orchestrator.snapshot?.night {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("BEDTIME WINDOW")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                    Text("\(shortTime(night.optimalBedtimeStart)) – \(shortTime(night.optimalBedtimeEnd))")
-                        .font(.system(size: 18, weight: .medium, design: .rounded))
-                        .foregroundStyle(.primary)
-                    Text("Overtired risk after \(shortTime(night.overtiredRiskTime))")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.orange)
-                }
-                Spacer()
-                Image(systemName: "moon.stars")
-                    .font(.system(size: 24))
-                    .foregroundStyle(.secondary)
-            }
-            .padding(16)
-            .background(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(Color(.secondarySystemGroupedBackground))
-            )
-        }
-    }
-    
-    
-
-
-    private func statCard(title: String, value: String, subtitle: String, subtitleColor: Color) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.secondary)
-            Text(value)
-                .font(.system(size: 19, weight: .medium, design: .rounded))
-                .foregroundStyle(.primary)
-            Text(subtitle)
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(subtitleColor)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color(.secondarySystemGroupedBackground))
-        )
-    }
-
     // MARK: - Coach Insight Card
 
     private var coachInsightCard: some View {
@@ -2015,80 +1905,58 @@ struct SleepListView: View {
     // MARK: - Premium Timeline Node
 
     private func premiumTimelineNode(_ item: TimelineItem) -> some View {
-        VStack(spacing: 6) {
+        let isActive = item.visualState == .active
+        let isCompleted = item.visualState == .completed
+        let fillOpacity = isActive ? 0.18 : (isCompleted ? 0.08 : 0.10)
+        let iconOpacity = isActive ? 1.0 : (isCompleted ? 0.48 : 0.62)
+        let textOpacity = isActive ? 1.0 : (isCompleted ? 0.52 : 0.72)
+
+        return VStack(spacing: 6) {
             ZStack {
-                if !item.isFuture && !item.isOverdue {
+                if isActive {
                     Circle()
-                        .fill(item.iconColor.opacity(0.15))
-                        .frame(width: 44, height: 44)
-                        .blur(radius: 6)
+                        .fill(item.iconColor.opacity(0.16))
+                        .frame(width: 46, height: 46)
+                        .blur(radius: 7)
                 }
 
                 Circle()
-                    .fill(
-                        item.isOverdue
-                            ? Color.orange.opacity(0.15)
-                            : item.isFuture
-                                ? item.iconColor.opacity(0.06)
-                                : item.iconColor.opacity(0.14)
-                    )
+                    .fill(item.iconColor.opacity(fillOpacity))
                     .frame(width: 34, height: 34)
 
-                if item.isFuture && !item.isOverdue {
+                if item.visualState == .upcoming {
                     Circle()
                         .strokeBorder(
-                            item.iconColor.opacity(0.35),
+                            item.iconColor.opacity(0.34),
                             style: StrokeStyle(lineWidth: 1.5, dash: [3, 3])
                         )
                         .frame(width: 34, height: 34)
-                } else if item.isOverdue {
-                    Circle()
-                        .strokeBorder(Color.orange.opacity(0.6), lineWidth: 1.5)
-                        .frame(width: 34, height: 34)
                 } else {
                     Circle()
-                        .strokeBorder(item.iconColor.opacity(0.3), lineWidth: 1)
+                        .strokeBorder(item.iconColor.opacity(isActive ? 0.65 : 0.24), lineWidth: isActive ? 1.8 : 1)
                         .frame(width: 34, height: 34)
                 }
 
                 Image(systemName: item.icon)
                     .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(
-                        item.isOverdue
-                            ? Color.orange
-                            : item.isFuture
-                                ? item.iconColor.opacity(0.5)
-                                : item.iconColor
-                    )
+                    .foregroundStyle(item.iconColor.opacity(iconOpacity))
             }
 
             VStack(spacing: 2) {
                 Text(item.time)
                     .font(.system(size: 9, weight: .medium))
-                    .foregroundStyle(Color(.tertiaryLabel))
+                    .foregroundStyle(Color(.tertiaryLabel).opacity(textOpacity))
                     .monospacedDigit()
 
                 Text(item.title)
                     .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(
-                        item.isOverdue
-                            ? Color.orange
-                            : item.isFuture
-                                ? Color(.secondaryLabel)
-                                : Color(.label)
-                    )
+                    .foregroundStyle((isActive ? Color(.label) : Color(.secondaryLabel)).opacity(textOpacity))
                     .multilineTextAlignment(.center)
 
                 if !item.detail.isEmpty {
                     Text(item.detail)
                         .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(
-                            item.isOverdue
-                                ? Color.orange.opacity(0.8)
-                                : item.isFuture
-                                    ? item.iconColor.opacity(0.5)
-                                    : item.iconColor
-                        )
+                        .foregroundStyle(item.iconColor.opacity(isActive ? 0.9 : iconOpacity))
                         .multilineTextAlignment(.center)
                 }
             }
@@ -2138,57 +2006,6 @@ struct SleepListView: View {
         .frame(maxWidth: .infinity)
         .padding(.top, 16)
     }
-    
-    
-    private func timelineColumn(_ item: TimelineItem) -> some View {
-        ZStack(alignment: .top) {
-
-            // Uyanıklık süresi — çizginin üstünde ortalanmış
-            if item.awakeBeforeMinutes > 0 {
-                Text(TimeFormat.minutes(item.awakeBeforeMinutes))
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(Color.sleepMuted)
-                    .offset(x: -22, y: 68)   // çizgi hizası
-            }
-
-            VStack(spacing: 9) {
-                Image(systemName: item.icon)
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(item.iconColor)
-                    .frame(width: 44, height: 44)
-                    .background(
-                        Circle().fill(item.iconColor.opacity(item.isFuture ? 0.08 : 0.12))
-                    )
-                Circle()
-                    .fill(item.isActive ? Color.sleepPurpleDeep : Color.sleepStroke)
-                    .frame(
-                        width:  item.isActive ? 12 : 10,
-                        height: item.isActive ? 12 : 10
-                    )
-                    .overlay(Circle().stroke(Color.white, lineWidth: 3))
-                VStack(spacing: 5) {
-                    Text(item.time)
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(Color.sleepMuted)
-                        .lineLimit(1).minimumScaleFactor(0.68)
-                    Text(item.title)
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(Color.sleepInk)
-                        .lineLimit(2).minimumScaleFactor(0.72)
-                        .multilineTextAlignment(.center)
-                    Text(item.detail)
-                        .font(.system(size: 13,
-                                      weight: item.isActive ? .bold : .medium))
-                        .foregroundStyle(
-                            item.isActive ? Color.sleepPurpleDeep : Color.sleepMuted
-                        )
-                        .lineLimit(2).minimumScaleFactor(0.68)
-                        .multilineTextAlignment(.center)
-                }
-            }
-        }
-    }
-
     // MARK: - Recent Days
 
     private var recentDaysSection: some View {
