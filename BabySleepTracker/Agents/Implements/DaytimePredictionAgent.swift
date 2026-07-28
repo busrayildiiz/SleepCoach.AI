@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - Daytime Prediction
 
-struct DaytimePrediction {
+struct DaytimePredictionAgent {
     let nextNapTime:             Date
     let windowStart:             Date
     let windowEnd:               Date
@@ -11,9 +11,8 @@ struct DaytimePrediction {
     let confidence:              Int      // 0–94
     let mode:                    PredictionMode
     let reasoning:               [String]
-    let usedDefaultWakeTime:     Bool     // FIX: UI uyarısı için
+    let usedDefaultWakeTime:     Bool     
 }
-
 enum PredictionMode {
     case ageBaseline      // 0–6 gün
     case blended          // 7–13 gün
@@ -30,7 +29,7 @@ protocol DaytimePredictionAgentProtocol {
         ageMonths:    Int,
         trackedDays:  Int,
         now:          Date
-    ) -> DaytimePrediction
+    ) -> DaytimePredictionAgent
 }
 
 // MARK: - DefaultDaytimePredictionAgent
@@ -57,7 +56,7 @@ final class DefaultDaytimePredictionAgent: DaytimePredictionAgentProtocol {
         ageMonths:    Int,
         trackedDays:  Int,
         now:          Date
-    ) -> DaytimePrediction {
+    ) -> DaytimePredictionAgent {
 
         let profile  = profileProvider.profile(forAgeMonths: ageMonths)
         let breaks   = todayRecords.filter { $0.kind == .break }
@@ -120,7 +119,7 @@ final class DefaultDaytimePredictionAgent: DaytimePredictionAgentProtocol {
             hasOngoingNap: ongoingNap != nil
         )
 
-        return DaytimePrediction(
+        return DaytimePredictionAgent (
             nextNapTime:             nextNapTime,
             windowStart:             windowStart,
             windowEnd:               windowEnd,

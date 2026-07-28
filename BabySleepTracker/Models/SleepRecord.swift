@@ -12,6 +12,7 @@ struct SleepRecord: Identifiable, Codable {
     let kind: SleepKind
     let parentNapID: UUID?
     let isOngoing: Bool
+    let createdAt: Date
 
     init(
         id: UUID = UUID(),
@@ -19,7 +20,8 @@ struct SleepRecord: Identifiable, Codable {
         duration: Int,
         kind: SleepKind = .dayNap,
         parentNapID: UUID? = nil,
-        isOngoing: Bool = false
+        isOngoing: Bool = false,
+        createdAt: Date = Date()
     ) {
         self.id = id
         self.date = date
@@ -27,11 +29,12 @@ struct SleepRecord: Identifiable, Codable {
         self.kind = kind
         self.parentNapID = parentNapID
         self.isOngoing = isOngoing
+        self.createdAt = createdAt
     }
 
-    // Eski kayıtlarda isOngoing alanı yok — geriye dönük uyumluluk için
+    // Eski kayıtlarda isOngoing/createdAt alanı yok — geriye dönük uyumluluk için
     enum CodingKeys: String, CodingKey {
-        case id, date, duration, kind, parentNapID, isOngoing
+        case id, date, duration, kind, parentNapID, isOngoing, createdAt
     }
 
     init(from decoder: Decoder) throws {
@@ -42,6 +45,7 @@ struct SleepRecord: Identifiable, Codable {
         kind        = try c.decode(SleepKind.self, forKey: .kind)
         parentNapID = try c.decodeIfPresent(UUID.self, forKey: .parentNapID)
         isOngoing   = try c.decodeIfPresent(Bool.self, forKey: .isOngoing) ?? false
+        createdAt   = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? date
     }
 
     /// Devam eden uyku için canlı süre, bitmiş uyku için kayıtlı süre

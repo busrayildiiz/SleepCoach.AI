@@ -491,7 +491,8 @@ struct AddRecordView: View {
             duration: isOngoing ? 0 : durationMinutes,
             kind: vm.kind,
             parentNapID: editingRecord?.parentNapID,
-            isOngoing: isOngoing
+            isOngoing: isOngoing,
+            createdAt: editingRecord?.createdAt ?? Date()
         )
         onSave(record)
         dismiss()

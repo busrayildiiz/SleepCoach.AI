@@ -15,12 +15,7 @@ enum Trend {
     case insufficient
 }
 
-enum DataQuality {
-    case poor
-    case fair
-    case good
-    case excellent
-}
+
 
 // MARK: - BabyPattern
 
@@ -40,7 +35,7 @@ struct BabyPattern {
 }
 // MARK: - DefaultPatternAgent
 
-final class DefaultPatternAgent: PatternAgentProtocol {
+final class PatternAgent: PatternAgentProtocol {
 
     private let calendar = Calendar.current
 
@@ -56,7 +51,6 @@ final class DefaultPatternAgent: PatternAgentProtocol {
         let nights  = records.filter { $0.kind == .nightSleep }.sorted { $0.date < $1.date }
 
         let sampleSize  = trackedDayCount(records: records, wakeRecords: wakeRecords)
-        let dataQuality = quality(for: sampleSize)
 
         let wakeWindows    = extractWakeWindows(dayNaps: dayNaps, wakeRecords: wakeRecords)
         let avgWakeWindow  = median(wakeWindows)
@@ -86,6 +80,7 @@ final class DefaultPatternAgent: PatternAgentProtocol {
         let napTrend = trend(for: recentVsOlder(values: napDurations))
 
         let wow = weekOverWeekChange(dayNaps: dayNaps, breaks: breaks, now: now)
+        let quality = dataQuality(sampleSize: sampleSize)
 
         return BabyPattern(
             averageWakeWindowMinutes:       avgWakeWindow,
@@ -98,9 +93,20 @@ final class DefaultPatternAgent: PatternAgentProtocol {
             wakingWindowTrend:              wwTrend,
             napDurationTrend:               napTrend,
             sampleSize:                     sampleSize,
-            dataQuality:                    dataQuality,
+            dataQuality:                    quality,
             weekOverWeekNapChange:          wow
         )
+    }
+
+    // MARK: - Data Quality
+
+    private func dataQuality(sampleSize: Int) -> DataQuality {
+        switch sampleSize {
+        case 0...3:  return .poor
+        case 4...7:  return .fair
+        case 8...13: return .good
+        default:      return .excellent
+        }
     }
 
     // MARK: - Wake Windows
@@ -263,16 +269,7 @@ final class DefaultPatternAgent: PatternAgentProtocol {
         return .stable
     }
 
-    // MARK: - Data Quality
-
-    private func quality(for days: Int) -> DataQuality {
-        switch days {
-        case 0...3:  return .poor
-        case 4...7:  return .fair
-        case 8...13: return .good
-        default:     return .excellent
-        }
-    }
+ 
 
     // MARK: - Tracked Day Count
 

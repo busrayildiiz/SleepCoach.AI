@@ -145,6 +145,9 @@ final class DefaultSleepCoachLLMAgent: SleepCoachLLMAgentProtocol {
         - Daily sleep status: \(snapshot.sleepStatus.label)
         - Nap transition: \(transitionNote)
 
+        DATA QUALITY REPORT:
+        \(buildDataQualitySection(snapshot.dataQualityReport))
+
         PATTERN ANALYSIS:
         \(buildPatternSection(snapshot.pattern, babyName: snapshot.babyName))
 
@@ -158,9 +161,145 @@ final class DefaultSleepCoachLLMAgent: SleepCoachLLMAgentProtocol {
           "pattern_insight": "1-2 sentences about the baby's sleep pattern trend",
           "coach_message": "2-3 warm, supportive sentences for the parent with a specific actionable tip",
           "alert": null or "1 sentence if there is something urgent",
-          "confidence_note": "1 sentence about prediction reliability"
+          "confidence_note": "1 sentence about prediction reliability, based on the summarized data quality and without mentioning raw scores"
         }
         """
+    }
+
+    // MARK: - Data Quality Section
+
+    private func buildDataQualitySection(_ report: DataQualityReport) -> String {
+        var lines = [
+            "- Quality level: \(describeQuality(report.level))",
+            "- Prediction reliability: \(predictionReliability(for: report))",
+            "- Personalization readiness: \(personalizationReadiness(for: report))",
+            "- Data continuity: \(dataContinuitySummary(for: report))",
+            "- Logging freshness: \(loggingFreshnessSummary(for: report))",
+            "- Plausibility status: \(plausibilitySummary(for: report))",
+            "- Context richness: \(contextRichnessSummary(for: report))",
+            "- Recommended LLM behavior: \(recommendedLLMBehavior(for: report))"
+        ]
+
+        if !report.missingCriticalFields.isEmpty {
+            lines.append("- Missing critical fields: \(report.missingCriticalFields.joined(separator: ", "))")
+        }
+        if !report.contextSignals.isEmpty {
+            lines.append("- Available context signals: \(report.contextSignals.joined(separator: ", "))")
+        }
+        if !report.missingContextSignals.isEmpty {
+            lines.append("- Missing context signals: \(report.missingContextSignals.joined(separator: ", "))")
+        }
+        let lowConfidenceReasons = lowConfidenceReasons(for: report)
+        if !lowConfidenceReasons.isEmpty {
+            lines.append("- Low confidence reasons: \(lowConfidenceReasons.joined(separator: " | "))")
+        }
+        if !report.warnings.isEmpty {
+            lines.append("- Warnings: \(report.warnings.joined(separator: " | "))")
+        }
+        if !report.plausibilityWarnings.isEmpty {
+            lines.append("- Plausibility warnings: \(report.plausibilityWarnings.joined(separator: " | "))")
+        }
+
+        return lines.joined(separator: "\n")
+    }
+
+    private func predictionReliability(for report: DataQualityReport) -> String {
+        switch report.level {
+        case .excellent: return "high"
+        case .good:      return "medium-high"
+        case .fair:      return "medium"
+        case .poor:      return "low"
+        }
+    }
+
+    private func personalizationReadiness(for report: DataQualityReport) -> String {
+        if report.completeDays >= 14 { return "personalized" }
+        if report.completeDays >= 7 { return "learning with usable personal pattern" }
+        if report.trackedDays > 0 { return "early learning, blend personal signals with age baseline" }
+        return "baseline only"
+    }
+
+    private func dataContinuitySummary(for report: DataQualityReport) -> String {
+        if report.consecutiveMissedDays >= 2 {
+            return "interrupted by recent missed days"
+        }
+        if report.completeDays >= 7 {
+            return "enough recent complete days for trend learning"
+        }
+        if report.trackedDays > 0 {
+            return "some records exist, but complete daily coverage is still thin"
+        }
+        return "no recent tracking continuity"
+    }
+
+    private func loggingFreshnessSummary(for report: DataQualityReport) -> String {
+        guard let delay = report.averageLoggingDelayMinutes else {
+            return "unknown"
+        }
+        switch delay {
+        case 0...30:     return "events are usually logged close to real time"
+        case 31...180:   return "events are logged with a modest delay"
+        case 181...720:  return "events are often reconstructed later"
+        default:         return "events are usually logged much later, so recall error may be higher"
+        }
+    }
+
+    private func plausibilitySummary(for report: DataQualityReport) -> String {
+        if report.plausibilityAnomalyCount == 0 {
+            return "no obvious logical anomalies detected"
+        }
+        if report.plausibilityAnomalyCount <= 2 {
+            return "minor anomalies detected; be slightly cautious"
+        }
+        return "multiple anomalies detected; avoid strong certainty"
+    }
+
+    private func contextRichnessSummary(for report: DataQualityReport) -> String {
+        if report.missingContextSignals.isEmpty {
+            return "rich context available"
+        }
+        if report.contextSignals.count >= 3 {
+            return "partial context available"
+        }
+        return "thin context; recommendations should remain general"
+    }
+
+    private func recommendedLLMBehavior(for report: DataQualityReport) -> String {
+        switch report.level {
+        case .excellent:
+            return "Give personalized guidance with normal confidence, while still avoiding medical certainty."
+        case .good:
+            return "Give personalized guidance, mention the main caveat if relevant."
+        case .fair:
+            return "Blend personal signals with age baseline and use cautious wording."
+        case .poor:
+            return "Keep guidance general, ask for missing critical logs, and avoid precise predictions."
+        }
+    }
+
+    private func lowConfidenceReasons(for report: DataQualityReport) -> [String] {
+        var reasons: [String] = []
+
+        if report.completeDays < 7 {
+            reasons.append("fewer than 7 complete days are available")
+        }
+        if report.consecutiveMissedDays >= 2 {
+            reasons.append("recent tracking has consecutive missed days")
+        }
+        if report.timelinessScore < 70 {
+            reasons.append("some events appear to be logged late")
+        }
+        if report.rhythmStabilityScore < 70 {
+            reasons.append("sleep timing varies significantly")
+        }
+        if report.plausibilityAnomalyCount > 0 {
+            reasons.append("some records have plausibility warnings")
+        }
+        if report.contextRichnessScore < 60 {
+            reasons.append("context signals are thin")
+        }
+
+        return reasons
     }
 
     // MARK: - Pattern Section

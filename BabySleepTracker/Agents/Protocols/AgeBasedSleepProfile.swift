@@ -45,22 +45,42 @@ protocol AgeBasedSleepProfileProviding {
 final class DefaultAgeBasedSleepProfileProvider: AgeBasedSleepProfileProviding {
 
     // MARK: - Profile Lookup
+        
+        func profile(forAgeMonths age: Int) -> AgeBasedSleepProfile {
 
-    func profile(forAgeMonths age: Int) -> AgeBasedSleepProfile {
-        // En yakın profili bul
-        let match = Self.profiles.first { $0.ageRange.contains(age) }
-        return match ?? Self.profiles.last!
-    }
+            let birthDate: Date?
+            if let saved = UserDefaults.standard.object(forKey: "babyBirthDate") as? Date {
+                birthDate = saved
+            } else if let seconds = UserDefaults.standard.object(forKey: "babyBirthDate") as? Double {
+                birthDate = Date(timeIntervalSince1970: seconds)
+            } else {
+                birthDate = nil
+            }
+            
+            // Eğer doğum tarihi yoksa dışarıdan gelen fallback parametreyi kullan veya en son profili dön
+            guard let babyBirthDate = birthDate else {
+                let match = Self.profiles.first { $0.ageRange.contains(age) }
+                return match ?? Self.profiles.last!
+            }
+            
+            let calendar = Calendar.current
+            let components = calendar.dateComponents([.month], from: babyBirthDate, to: Date())
+            let calculatedAgeMonths = components.month ?? 0
+            
+            let match = Self.profiles.first { $0.ageRange.contains(calculatedAgeMonths) }
+            return match ?? Self.profiles.last!
+        }
+        
+        func wakeWindowCenter(forAgeMonths age: Int) -> Int {
 
-    func wakeWindowCenter(forAgeMonths age: Int) -> Int {
-        let p = profile(forAgeMonths: age)
-        return (p.wakeWindowRange.lowerBound + p.wakeWindowRange.upperBound) / 2
-    }
-
-    func eveningWakeWindowCenter(forAgeMonths age: Int) -> Int {
-        let p = profile(forAgeMonths: age)
-        return (p.eveningWakeWindow.lowerBound + p.eveningWakeWindow.upperBound) / 2
-    }
+            let p = profile(forAgeMonths: age)
+            return (p.wakeWindowRange.lowerBound + p.wakeWindowRange.upperBound) / 2
+        }
+        
+        func eveningWakeWindowCenter(forAgeMonths age: Int) -> Int {
+            let p = profile(forAgeMonths: age)
+            return (p.eveningWakeWindow.lowerBound + p.eveningWakeWindow.upperBound) / 2
+        }
 
     // MARK: - Data Table
     // Kaynaklar:

@@ -13,7 +13,7 @@ struct ProfileEditSheet: View {
     @AppStorage("parentName")        private var parentName:        String = ""
     @AppStorage("babyName")          private var babyName:          String = ""
     @AppStorage("babyGender")        private var babyGender:        String = "Prefer not to say"
-    @AppStorage("typicalWakeHour")   private var typicalWakeHour:   Double = 7.0   // 07:00
+    @AppStorage("typicalWakeHour")   private var typicalWakeHour:   Double = 07.0
     @AppStorage("typicalWakeMinute") private var typicalWakeMinute: Double = 0.0
     @AppStorage("typicalBedHour")    private var typicalBedHour:    Double = 19.0  // 19:00
     @AppStorage("typicalBedMinute")  private var typicalBedMinute:  Double = 30.0
