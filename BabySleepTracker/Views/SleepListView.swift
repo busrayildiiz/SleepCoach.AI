@@ -592,9 +592,7 @@ struct SleepListView: View {
                     todayWakeSection
                        todayTimelineCard
                        coachInsightCard
-                        todaySummaryCard
-
-                    if !records.isEmpty { recentDaysSection }
+                        sleepOverviewCard
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 12)
@@ -813,33 +811,48 @@ struct SleepListView: View {
         .shadow(color: Color(red: 0.45, green: 0.35, blue: 0.92).opacity(0.06), radius: 10, x: 0, y: 4)
     }
 
-    // MARK: - Today Summary Card
+    // MARK: - Sleep Overview Card
 
-    private var todaySummaryCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
+    private var sleepOverviewCard: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .center) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("SLEEP OVERVIEW")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(Color(red: 0.45, green: 0.35, blue: 0.92))
+                        .tracking(0.5)
+                    Text("Today and recent days")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Color(.secondaryLabel))
+                }
 
-            // Başlık
-            Text("TODAY'S SUMMARY")
-                .font(.system(size: 11, weight: .bold))
-                .foregroundStyle(Color(red: 0.45, green: 0.35, blue: 0.92))
-                .tracking(0.5)
+                Spacer()
 
-            // 3 kutu yan yana
+                Button {
+                    activeSheet = .dayDetail(SelectedDay(day: Date()))
+                } label: {
+                    Image(systemName: "calendar.badge.clock")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(Color(red: 0.45, green: 0.35, blue: 0.92))
+                        .frame(width: 34, height: 34)
+                        .background(
+                            Circle()
+                                .fill(Color(red: 0.55, green: 0.45, blue: 0.98).opacity(0.10))
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+
             HStack(spacing: 10) {
-
-                // 1. Total Sleep
                 summaryCell(
                     icon: "moon.fill",
                     iconColor: Color(red: 0.45, green: 0.35, blue: 0.92),
-                    title: "Total sleep",
-                    value: todayTotal > 0
-                        ? "\(todayTotal / 60)h \(todayTotal % 60)m"
-                        : "0m",
+                    title: "Sleep",
+                    value: todayTotal > 0 ? "\(todayTotal / 60)h \(todayTotal % 60)m" : "0m",
                     badge: goalBadgeText,
                     badgeColor: goalBadgeColor
                 )
 
-                // 2. Naps
                 summaryCell(
                     icon: "moon.zzz.fill",
                     iconColor: Color(red: 0.45, green: 0.35, blue: 0.92),
@@ -849,25 +862,39 @@ struct SleepListView: View {
                     badgeColor: napBadgeColor
                 )
 
-                // 3. Wake Window
                 summaryCell(
                     icon: "waveform.path",
                     iconColor: Color(red: 0.45, green: 0.35, blue: 0.92),
-                    title: "Wake windows",
-                    value: TimeFormat.minutes(
-                        orchestrator.snapshot?.pattern?.averageWakeWindowMinutes ?? wakeWindowBeforeLatest
-                    ),
+                    title: "Rhythm",
+                    value: TimeFormat.minutes(orchestrator.snapshot?.pattern?.averageWakeWindowMinutes ?? wakeWindowBeforeLatest),
                     badge: wakeWindowBadgeText,
                     badgeColor: wakeWindowBadgeColor
                 )
             }
 
-            // Progress bar
-            VStack(spacing: 4) {
-                ProgressView(value: min(Double(todayTotal), 840), total: 840)
-                    .tint(Color(red: 0.55, green: 0.45, blue: 0.98))
+            VStack(spacing: 5) {
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule()
+                            .fill(Color(red: 0.55, green: 0.45, blue: 0.98).opacity(0.12))
+                        Capsule()
+                            .fill(
+                                LinearGradient(
+                                    colors: [
+                                        Color(red: 0.55, green: 0.45, blue: 0.98),
+                                        Color(red: 1.0, green: 0.72, blue: 0.30)
+                                    ],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                            )
+                            .frame(width: max(8, geo.size.width * todayGoalProgress))
+                    }
+                }
+                .frame(height: 7)
+
                 HStack {
-                    Text("\(Int(min(Double(todayTotal) / 840.0 * 100, 100)))% of daily goal")
+                    Text("\(Int(todayGoalProgress * 100))% of daily goal")
                         .font(.system(size: 10, weight: .medium))
                         .foregroundStyle(Color(.secondaryLabel))
                     Spacer()
@@ -876,17 +903,63 @@ struct SleepListView: View {
                         .foregroundStyle(Color(.tertiaryLabel))
                 }
             }
+
+            if !groupedByDay.isEmpty {
+                Divider().overlay(Color(red: 0.55, green: 0.45, blue: 0.98).opacity(0.12))
+
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        Text("RECENT DAYS")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(Color(.secondaryLabel))
+                            .tracking(0.4)
+                        Spacer()
+                        Text("\(groupedByDay.count) tracked")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(Color(.tertiaryLabel))
+                    }
+
+                    VStack(spacing: 8) {
+                        ForEach(Array(groupedByDay.prefix(3).enumerated()), id: \.element.day) { index, group in
+                            Button {
+                                activeSheet = .dayDetail(SelectedDay(day: group.day))
+                            } label: {
+                                premiumDayRow(group: group, rank: index)
+                            }
+                            .buttonStyle(CardPressButtonStyle())
+                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                Button(role: .destructive) { deleteDay(group.day) } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
         .padding(16)
         .background(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(Color(.systemBackground))
+            ZStack {
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .fill(Color(.systemBackground))
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color(red: 0.55, green: 0.45, blue: 0.98).opacity(0.045),
+                                Color.clear
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .center
+                        )
+                    )
+            }
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
                 .stroke(Color(red: 0.55, green: 0.45, blue: 0.98).opacity(0.12), lineWidth: 1)
         )
-        .shadow(color: Color(red: 0.45, green: 0.35, blue: 0.92).opacity(0.07), radius: 12, x: 0, y: 4)
+        .shadow(color: Color(red: 0.45, green: 0.35, blue: 0.92).opacity(0.08), radius: 16, x: 0, y: 6)
     }
 
     // MARK: - Summary Cell
@@ -943,6 +1016,10 @@ struct SleepListView: View {
 
     private var todayNapCount: Int {
         todaySleeps.filter { $0.kind == .dayNap }.count
+    }
+
+    private var todayGoalProgress: Double {
+        min(Double(todayTotal) / 840.0, 1.0)
     }
 
     private var goalBadgeText: String {
@@ -2014,39 +2091,6 @@ struct SleepListView: View {
     }
     // MARK: - Recent Days
 
-    private var recentDaysSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Recent Sleep")
-                .font(.system(size: 20, weight: .bold, design: .rounded))
-                .foregroundStyle(Color.sleepInk).padding(.horizontal, 4)
-            VStack(spacing: 0) {
-                ForEach(
-                    Array(groupedByDay.prefix(3).enumerated()),
-                    id: \.element.day
-                ) { index, group in
-                    Button {
-                        activeSheet = .dayDetail(SelectedDay(day: group.day))
-                    } label: {
-                        dayRow(group: group)
-                    }
-                    .buttonStyle(CardPressButtonStyle())
-                    if index < min(groupedByDay.count, 3) - 1 {
-                        Divider().padding(.leading, 68)
-                    }
-                }
-            }
-            .background(
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .fill(Color(.systemBackground))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .stroke(Color.sleepStroke, lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-        }
-    }
-
     private var groupedByDay: [(day: Date, items: [SleepRecord])] {
         let cal    = Calendar.current
         let groups = Dictionary(grouping: records) { cal.startOfDay(for: $0.date) }
@@ -2055,41 +2099,111 @@ struct SleepListView: View {
             .sorted { $0.day > $1.day }
     }
 
-    private func dayRow(group: (day: Date, items: [SleepRecord])) -> some View {
-        HStack(spacing: 14) {
+    private func premiumDayRow(group: (day: Date, items: [SleepRecord]), rank: Int) -> some View {
+        let total = totalMinutes(for: group.items)
+        let sessions = group.items.filter { $0.kind != .break }.count
+        let progress = min(Double(total) / 840.0, 1.0)
+
+        return HStack(spacing: 14) {
             ZStack {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color.sleepPurple.opacity(0.10))
+                    .fill(dayAccent(for: rank).opacity(0.11))
                     .frame(width: 44, height: 44)
-                Image(systemName: "calendar")
+                Image(systemName: dayIcon(for: group.items))
                     .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(Color.sleepPurpleDeep)
+                    .foregroundStyle(dayAccent(for: rank))
             }
-            VStack(alignment: .leading, spacing: 3) {
-                Text(dayTitle(group.day))
-                    .font(.system(size: 16, weight: .bold))
-                    .foregroundStyle(Color.sleepInk)
-                Text("\(group.items.filter { $0.kind != .break }.count) sessions")
-                    .font(.system(size: 13, weight: .medium))
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text(dayTitle(group.day))
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(Color.sleepInk)
+
+                    if Calendar.current.isDateInToday(group.day) {
+                        Text("LIVE")
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundStyle(Color(red: 0.16, green: 0.68, blue: 0.46))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 3)
+                            .background(
+                                Capsule()
+                                    .fill(Color(red: 0.16, green: 0.68, blue: 0.46).opacity(0.10))
+                            )
+                    }
+                }
+
+                Text("\(sessions) sessions")
+                    .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(Color.sleepMuted)
+
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule()
+                            .fill(dayAccent(for: rank).opacity(0.10))
+                        Capsule()
+                            .fill(dayAccent(for: rank).opacity(0.70))
+                            .frame(width: max(6, geo.size.width * progress))
+                    }
+                }
+                .frame(height: 5)
             }
-            Spacer()
-            HStack(spacing: 7) {
-                Text(TimeFormat.minutes(totalMinutes(for: group.items)))
-                    .font(.system(size: 16, weight: .bold, design: .rounded))
+
+            Spacer(minLength: 8)
+
+            VStack(alignment: .trailing, spacing: 3) {
+                Text(TimeFormat.minutes(total))
+                    .font(.system(size: 15, weight: .bold, design: .rounded))
                     .foregroundStyle(Color.sleepInk)
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+
+                Text(dayQualityLabel(total))
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(dayQualityColor(total))
+                    .lineLimit(1)
+
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(Color.sleepPurpleDeep)
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(Color.sleepPurpleDeep.opacity(0.65))
             }
         }
-        .padding(.horizontal, 16).padding(.vertical, 14)
+        .padding(12)
         .contentShape(Rectangle())
-        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-            Button(role: .destructive) { deleteDay(group.day) } label: {
-                Label("Delete", systemImage: "trash")
-            }
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color(.secondarySystemGroupedBackground).opacity(0.82))
+        )
+    }
+
+    private func dayAccent(for rank: Int) -> Color {
+        switch rank {
+        case 0: return Color(red: 0.45, green: 0.35, blue: 0.92)
+        case 1: return Color(red: 0.16, green: 0.68, blue: 0.46)
+        default: return Color(red: 1.0, green: 0.68, blue: 0.12)
         }
+    }
+
+    private func dayIcon(for items: [SleepRecord]) -> String {
+        if items.contains(where: { $0.kind == .nightSleep }) {
+            return "moon.stars.fill"
+        }
+        return "calendar"
+    }
+
+    private func dayQualityLabel(_ minutes: Int) -> String {
+        if minutes >= 840 { return "Goal" }
+        if minutes >= 600 { return "Steady" }
+        if minutes > 0 { return "Light" }
+        return "Empty"
+    }
+
+    private func dayQualityColor(_ minutes: Int) -> Color {
+        if minutes >= 840 { return Color(red: 0.16, green: 0.68, blue: 0.46) }
+        if minutes >= 600 { return Color(red: 0.45, green: 0.35, blue: 0.92) }
+        if minutes > 0 { return Color(red: 1.0, green: 0.68, blue: 0.12) }
+        return Color(.secondaryLabel)
     }
 }
 
