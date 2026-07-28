@@ -356,9 +356,9 @@ struct InsightsView: View {
             sectionHeader("TONIGHT WINDOW", icon: "moon.stars.fill")
 
             HStack(spacing: 10) {
-                metricBox("Start", bedtimeStartText, CoachColor.green)
-                metricBox("End", bedtimeEndText, CoachColor.purpleDeep)
-                metricBox("Risk", overtiredRiskText, CoachColor.sun)
+                metricBox("Recommended Start Bedtime", bedtimeStartText, CoachColor.green)
+                metricBox("Recommended Latest Bedtime", bedtimeEndText, CoachColor.purpleDeep)
+                metricBox("Overtired Risk Hour", overtiredRiskText, CoachColor.sun)
             }
 
             if let night = orchestrator.snapshot?.night {
