@@ -14,6 +14,7 @@ The app supports day naps, night sleep, ongoing sleep sessions, wake-up logging,
 
 The product goal is to make baby sleep tracking feel clear, calm, and decision-oriented instead of data-heavy.
 
+SleepCoach.AI uses an agent-based prediction architecture where independent components analyze sleep phases, patterns, prediction confidence, and AI coaching before producing a unified recommendation.
 
 ---
 
@@ -33,6 +34,20 @@ Recommended screenshots:
 - AI Coach Today tab
 - AI Coach Logic tab
 - History daily detail screen
+
+---
+
+
+## Technology Stack
+
+- Swift
+- SwiftUI
+- MVVM-inspired architecture
+- Agent-based prediction architecture
+- UserDefaults persistence
+- NotificationCenter-based refresh flow
+- XCTest
+- Google Generative AI Swift SDK
 
 ---
 
@@ -266,19 +281,6 @@ BabySleepTracker/
     ├── Date+Extensions.swift
     └── TimeFormat.swift
 ```
-
----
-
-## Technology Stack
-
-- Swift
-- SwiftUI
-- MVVM-inspired architecture
-- Agent-based prediction architecture
-- UserDefaults persistence
-- NotificationCenter-based refresh flow
-- XCTest
-- Google Generative AI Swift SDK
 
 ---
 
