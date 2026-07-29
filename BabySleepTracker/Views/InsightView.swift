@@ -3,19 +3,28 @@ import SwiftUI
 struct InsightsView: View {
 
     private enum CoachTab: String, CaseIterable {
-        case overview = "Today"
-        case predictions = "Logic"
+        case overview = "Coach"
+        case predictions = "Reasoning"
 
         var icon: String {
             switch self {
             case .overview: return "sparkles"
-            case .predictions: return "chart.line.uptrend.xyaxis"
+            case .predictions: return "bubble.left.and.exclamationmark.bubble.right.fill"
+            }
+        }
+
+        var subtitle: String {
+            switch self {
+            case .overview: return "What to do next"
+            case .predictions: return "Why this plan"
             }
         }
     }
 
     @State private var selectedTab: CoachTab = .overview
+    @State private var manualActionOverrides: [String: Bool] = [:]
     @StateObject private var orchestrator = SleepCoachOrchestrator.shared
+    
     @AppStorage("babyName") private var babyName: String = "Baby"
 
     var body: some View {
@@ -23,15 +32,17 @@ struct InsightsView: View {
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 12) {
                     headerSection
-                    coachHeroCard
                     tabPicker
 
                     if selectedTab == .overview {
+                        coachHeroCard
+                        takeActionCard
                         todayDecisionStack
                     } else {
                         predictionLogicStack
                     }
                 }
+                
                 .padding(.horizontal, 16)
                 .padding(.top, 18)
                 .padding(.bottom, 112)
@@ -49,112 +60,177 @@ struct InsightsView: View {
     }
 
     // MARK: - Header
-
+    
     private var headerSection: some View {
-        HStack(alignment: .center, spacing: 10) {
-            VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .center, spacing: 8) {
+                HStack(spacing: 1) {
+                    Image(systemName: "sparkle")
+                        .font(.system(size: 11, weight: .bold))
+                    Image(systemName: "sparkle")
+                        .font(.system(size: 14, weight: .bold))
+                }
+                .foregroundStyle(CoachColor.purpleDeep)
+
                 Text("AI Coach")
-                    .font(.system(size: 28, weight: .bold, design: .rounded))
+                    .font(.system(size: 21, weight: .bold, design: .rounded))
                     .foregroundStyle(CoachColor.ink)
-                Text("\(displayedBabyName)'s sleep guidance")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(CoachColor.muted)
+
+                Spacer()
+
+                CoachMoonArtwork()
+                    .frame(width: 52, height: 40)
             }
 
-            Spacer()
-
-            CoachMoonArtwork()
-                .frame(width: 66, height: 52)
+            Text(headerSubtitle)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(CoachColor.muted)
         }
     }
 
+    private var headerSubtitle: String {
+        orchestrator.snapshot?.nextSleepKind == .bedtime
+            ? "Personalized guidance for tonight"
+            : "Personalized guidance for today"
+    }
+
     private var tabPicker: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 8) {
             ForEach(CoachTab.allCases, id: \.self) { tab in
                 Button {
                     withAnimation(.easeInOut(duration: 0.18)) { selectedTab = tab }
                 } label: {
-                    Label(tab.rawValue, systemImage: tab.icon)
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(selectedTab == tab ? .white : CoachColor.muted)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
-                        .background(
-                            RoundedRectangle(cornerRadius: 11, style: .continuous)
-                                .fill(selectedTab == tab ? CoachColor.purpleDeep : Color.clear)
-                        )
+                    VStack(spacing: 2) {
+                        HStack(spacing: 5) {
+                            Image(systemName: tab.icon)
+                                .font(.system(size: 11, weight: .bold))
+                            Text(tab.rawValue)
+                                .font(.system(size: 13, weight: .bold))
+                        }
+                        Text(tab.subtitle)
+                            .font(.system(size: 9.5, weight: .semibold))
+                            .opacity(0.75)
+                    }
+                    .foregroundStyle(selectedTab == tab ? .white : CoachColor.muted)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 13, style: .continuous)
+                            .fill(selectedTab == tab ? CoachColor.purpleDeep : Color.clear)
+                    )
                 }
                 .buttonStyle(.plain)
             }
         }
         .padding(4)
         .background(
-            RoundedRectangle(cornerRadius: 15, style: .continuous)
+            RoundedRectangle(cornerRadius: 17, style: .continuous)
                 .fill(Color(.systemBackground))
         )
-        .overlay(cardStroke(15))
+        .overlay(cardStroke(17))
     }
-
     // MARK: - Overview
 
     private var coachHeroCard: some View {
-        let nextKind = orchestrator.snapshot?.nextSleepKind ?? .nap
-        let isBedtime = nextKind == .bedtime
+        let isBedtime = orchestrator.snapshot?.nextSleepKind == .bedtime
         let targetTime = isBedtime
             ? (orchestrator.snapshot?.night.optimalBedtimeStart ?? Date())
             : (orchestrator.snapshot?.daytime.nextNapTime ?? Date())
+        let confidence = max(0, min(orchestrator.snapshot?.daytime.confidence ?? 0, 100))
+        let windowText = isBedtime ? bedtimeWindowText : napWindowText
 
-        return VStack(alignment: .leading, spacing: 16) {
-            HStack(alignment: .top, spacing: 14) {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 7) {
-                        Circle()
-                            .fill(CoachColor.purpleDeep)
-                            .frame(width: 7, height: 7)
-                        Text(isBedtime ? "BEDTIME GUIDANCE" : "NEXT NAP GUIDANCE")
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundStyle(CoachColor.purpleDeep)
-                            .tracking(0.5)
-                    }
+        return VStack(alignment: .leading, spacing: 0) {
+            Text(isBedtime ? "TONIGHT'S PLAN" : "TODAY'S PLAN")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(CoachColor.purpleDeep)
+                .tracking(0.4)
+                .padding(.horizontal, 16)
+                .padding(.top, 14)
+                .padding(.bottom, 10)
 
-                    Text(isBedtime ? "Start bedtime at \(time(targetTime))" : "Aim for \(time(targetTime))")
+            HStack(alignment: .center, spacing: 12) {
+                ZStack {
+                    Circle()
+                        .fill(CoachColor.purpleDeep.opacity(0.85))
+                        .frame(width: 46, height: 46)
+                    Image(systemName: isBedtime ? "moon.fill" : "moon.zzz.fill")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(.white)
+                }
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(isBedtime ? "Bedtime" : "Next nap")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(CoachColor.muted)
+                    Text(time(targetTime))
                         .font(.system(size: 24, weight: .bold, design: .rounded))
                         .foregroundStyle(CoachColor.ink)
                         .monospacedDigit()
-                        .lineLimit(2)
-                        .minimumScaleFactor(0.78)
-
-                    Text(primaryCoachLine)
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(CoachColor.muted)
-                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 Spacer(minLength: 8)
 
-                confidenceRing
+                VStack(spacing: 3) {
+                    Text("Confidence")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(CoachColor.muted)
+                    ZStack {
+                        Circle()
+                            .stroke(CoachColor.purple.opacity(0.15), lineWidth: 5)
+                        Circle()
+                            .trim(from: 0, to: CGFloat(confidence) / 100)
+                            .stroke(CoachColor.purpleDeep, style: StrokeStyle(lineWidth: 5, lineCap: .round))
+                            .rotationEffect(.degrees(-90))
+                        Text("\(confidence)%")
+                            .font(.system(size: 12, weight: .bold, design: .rounded))
+                            .foregroundStyle(CoachColor.ink)
+                    }
+                    .frame(width: 40, height: 40)
+                }
             }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 14)
 
-            HStack(spacing: 9) {
-                metricPill(
-                    title: "Window",
-                    value: isBedtime ? bedtimeWindowText : napWindowText,
-                    icon: "timer",
-                    color: CoachColor.purpleDeep
-                )
-                metricPill(
-                    title: "Mode",
-                    value: modeLabel,
-                    icon: "brain.head.profile",
-                    color: modeColor
-                )
+            Divider().overlay(CoachColor.stroke)
+
+            HStack(spacing: 5) {
+                Text("Optimal window")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(CoachColor.muted)
+                Text(windowText)
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(CoachColor.ink)
+
+                Spacer()
+
+                Image(systemName: "clock")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(CoachColor.purpleDeep.opacity(0.7))
+                Text(lastUpdatedText)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(CoachColor.muted)
+
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(CoachColor.muted)
             }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
         }
-        .padding(18)
-        .background(premiumCardBackground(cornerRadius: 22))
-        .overlay(cardStroke(22))
+        .background(premiumCardBackground(cornerRadius: 20))
+        .overlay(cardStroke(20))
     }
-
+    
+    
+    private var lastUpdatedText: String {
+        guard let generatedAt = orchestrator.snapshot?.generatedAt else { return "Updated just now" }
+        let minutes = max(0, Int(Date().timeIntervalSince(generatedAt) / 60))
+        if minutes < 1 { return "Updated just now" }
+        if minutes == 1 { return "Updated 1 min ago" }
+        if minutes < 60 { return "Updated \(minutes) min ago" }
+        return "Updated \(minutes / 60)h ago"
+    }
+    
     private var todayDecisionStack: some View {
         VStack(spacing: 12) {
             guidanceTimelineCard
@@ -205,7 +281,138 @@ struct InsightsView: View {
         .background(premiumCardBackground())
         .overlay(cardStroke(18))
     }
+    
+    private var takeActionCard: some View {
+        let accent = Color(red: 0.85, green: 0.45, blue: 0.10)
 
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                HStack(spacing: 5) {
+                    Image(systemName: "sun.max.fill")
+                        .font(.system(size: 10, weight: .bold))
+                    Text(actionCardTitle)
+                        .font(.system(size: 10, weight: .bold))
+                        .tracking(0.3)
+                }
+                .foregroundStyle(accent)
+
+                Spacer()
+
+                Text(minutesToGoText)
+                    .font(.system(size: 9.5, weight: .bold))
+                    .foregroundStyle(accent)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(
+                        Capsule().fill(Color(red: 1.0, green: 0.6, blue: 0.2).opacity(0.16))
+                    )
+            }
+            .padding(.horizontal, 14)
+            .padding(.top, 11)
+            .padding(.bottom, 8)
+
+            VStack(spacing: 0) {
+                ForEach(Array(actionItems.enumerated()), id: \.element.id) { index, item in
+                    actionRow(item)
+                    if index < actionItems.count - 1 {
+                        Divider()
+                            .overlay(Color(red: 1.0, green: 0.6, blue: 0.2).opacity(0.14))
+                            .padding(.leading, 44)
+                    }
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.bottom, 9)
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 17, style: .continuous)
+                .fill(Color(red: 1.0, green: 0.965, blue: 0.90))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 17, style: .continuous)
+                .stroke(Color(red: 1.0, green: 0.78, blue: 0.45).opacity(0.30), lineWidth: 1)
+        )
+    }
+    private func actionRow(_ item: PreSleepActionItem) -> some View {
+        let status = actionStatus(item)
+        let done = status == .completed
+        return Button {
+            withAnimation(.easeInOut(duration: 0.15)) {
+                toggleAction(item)
+            }
+        } label: {
+            HStack(spacing: 10) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(item.iconBackground)
+                        .frame(width: 30, height: 30)
+                    Image(systemName: item.icon)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(item.iconColor)
+                }
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(item.title)
+                        .font(.system(size: 11.5, weight: .bold))
+                        .foregroundStyle(CoachColor.ink)
+                    Text(item.subtitle)
+                        .font(.system(size: 9.5, weight: .medium))
+                        .foregroundStyle(CoachColor.muted)
+                }
+
+                Spacer()
+                
+                ZStack {
+                    Circle()
+                        .fill(done ? CoachColor.purpleDeep : Color.clear)
+                        .frame(width: 19, height: 19)
+                    Circle()
+                        .stroke(done ? Color.clear : CoachColor.muted.opacity(0.32), lineWidth: 1.3)
+                        .frame(width: 19, height: 19)
+                    if done {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundStyle(.white)
+                    }
+                }
+            }
+            .padding(.vertical, 6.5)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+    private func actionStatus(
+        _ item: PreSleepActionItem,
+        now: Date = .now
+    ) -> ActionStatus {
+
+        if manualActionOverrides[item.id] == true {
+            return .completed
+        }
+
+        let target = actionTargetTime.addingMinutes(-item.offsetMinutesBeforeTarget)
+
+        if now >= target {
+            return .readyNow
+        }
+
+        return .upcoming
+    }
+    
+    private var minutesToGoText: String {
+        let minutes = Int(actionTargetTime.timeIntervalSince(Date()) / 60)
+        guard minutes > 0 else { return "Time's up" }
+        return "~\(minutes) min to go"
+    }
+    
+
+    private func toggleAction(_ item: PreSleepActionItem) {
+
+        let currentlyDone = actionStatus(item) == .completed
+
+        manualActionOverrides[item.id] = !currentlyDone
+    }
+    
     private var coachMessageCard: some View {
         VStack(alignment: .leading, spacing: 13) {
             HStack(spacing: 9) {
@@ -268,7 +475,118 @@ struct InsightsView: View {
         .background(premiumCardBackground())
         .overlay(cardStroke(18))
     }
+    // MARK: - Action Item Model
 
+    private struct PreSleepActionItem: Identifiable {
+        let id : String
+        let icon: String
+        let iconColor: Color
+        let iconBackground: Color
+        let title: String
+        let subtitle: String
+        let offsetMinutesBeforeTarget: Int
+    }
+
+    private var actionTargetTime: Date {
+        let isBedtime = orchestrator.snapshot?.nextSleepKind == .bedtime
+        return isBedtime
+            ? (orchestrator.snapshot?.night.optimalBedtimeStart ?? Date())
+            : (orchestrator.snapshot?.daytime.nextNapTime ?? Date())
+    }
+
+    private var isBedtimeAction: Bool {
+        orchestrator.snapshot?.nextSleepKind == .bedtime
+    }
+
+    private var actionCardTitle: String {
+        isBedtimeAction ? "TAKE ACTION NOW" : "NAP PREP"
+    }
+
+    private var actionItems: [PreSleepActionItem] {
+        isBedtimeAction ? bedtimeActionItems : napActionItems
+    }
+
+    private var bedtimeActionItems: [PreSleepActionItem] {
+        [
+            PreSleepActionItem(
+                id: "dim_lights",
+                icon: "lamp.desk.fill", iconColor: .orange, iconBackground: Color.orange.opacity(0.15),
+                title: "Start dimming lights",
+                subtitle: "Begin by \(time(actionTargetTime.addingMinutes(-45)))",
+                offsetMinutesBeforeTarget: 45
+            ),
+            PreSleepActionItem(
+                id: "quiet_play",
+                icon: "gamecontroller.fill", iconColor: CoachColor.green, iconBackground: CoachColor.green.opacity(0.15),
+                title: "Quiet play only",
+                subtitle: "Avoid stimulating activities",
+                offsetMinutesBeforeTarget: 30
+            ),
+            PreSleepActionItem(
+                id: "feed",
+                icon: "cup.and.saucer.fill", iconColor: CoachColor.purpleDeep, iconBackground: CoachColor.purple.opacity(0.15),
+                title: "Feed before bedtime",
+                subtitle: "Finish feeding by \(time(actionTargetTime.addingMinutes(-15)))",
+                offsetMinutesBeforeTarget: 15
+            ),
+            PreSleepActionItem(
+                id: "prepare_env",
+                icon: "moon.zzz.fill", iconColor: CoachColor.purpleDeep, iconBackground: CoachColor.purple.opacity(0.10),
+                title: "Prepare sleep environment",
+                subtitle: "Dark, cool, and calm",
+                offsetMinutesBeforeTarget: 10
+            ),
+            PreSleepActionItem(
+                id: "routine",
+                icon: "book.fill", iconColor: .orange, iconBackground: Color.orange.opacity(0.15),
+                title: "Begin bedtime routine",
+                subtitle: "Bath, book, and cuddles",
+                offsetMinutesBeforeTarget: 0
+            )
+        ]
+    }
+
+    private var napActionItems: [PreSleepActionItem] {
+        [
+            PreSleepActionItem(
+                id: "sleepy_cues",
+                icon: "eye.fill", iconColor: CoachColor.purpleDeep, iconBackground: CoachColor.purple.opacity(0.12),
+                title: "Watch for sleepy cues",
+                subtitle: "Yawning, eye rubbing, fussiness",
+                offsetMinutesBeforeTarget: 20
+            ),
+            PreSleepActionItem(
+                id: "quiet_play",
+                icon: "gamecontroller.fill", iconColor: CoachColor.green, iconBackground: CoachColor.green.opacity(0.15),
+                title: "Quiet play only",
+                subtitle: "Avoid stimulating activities",
+                offsetMinutesBeforeTarget: 15
+            ),
+            PreSleepActionItem(
+                id: "dim_room",
+                icon: "lamp.desk.fill", iconColor: .orange, iconBackground: Color.orange.opacity(0.15),
+                title: "Dim the room",
+                subtitle: "Begin by \(time(actionTargetTime.addingMinutes(-10)))",
+                offsetMinutesBeforeTarget: 10
+            ),
+            PreSleepActionItem(
+                id: "prepare_space",
+                icon: "moon.zzz.fill", iconColor: CoachColor.purpleDeep, iconBackground: CoachColor.purple.opacity(0.10),
+                title: "Prepare sleep space",
+                subtitle: "Dark, cool, and calm",
+                offsetMinutesBeforeTarget: 5
+            ),
+            PreSleepActionItem(
+                id: "nap_routine",
+                icon: "book.fill", iconColor: .orange, iconBackground: Color.orange.opacity(0.15),
+                title: "Begin nap routine",
+                subtitle: "Swaddle, sound, cuddles",
+                offsetMinutesBeforeTarget: 0
+            )
+        ]
+    }
+
+ 
     private var signalsCard: some View {
         VStack(alignment: .leading, spacing: 13) {
             sectionHeader("\(displayedBabyName.uppercased())'S SIGNALS", icon: "waveform.path.ecg")
@@ -392,7 +710,13 @@ struct InsightsView: View {
         case active
         case upcoming
     }
-
+    
+    private enum ActionStatus {
+        case upcoming
+        case readyNow
+        case completed
+    }
+    
     private var confidenceRing: some View {
         let confidence = max(0, min(orchestrator.snapshot?.daytime.confidence ?? 0, 100))
         return ZStack {
