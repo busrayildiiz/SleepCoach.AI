@@ -37,7 +37,9 @@ struct InsightsView: View {
                     if selectedTab == .overview {
                         coachHeroCard
                         takeActionCard
-                        todayDecisionStack
+                        watchForSignsCard
+                        aiCoachNoteCard
+                        learningProgressOverviewCard
                     } else {
                         predictionLogicStack
                     }
@@ -95,39 +97,41 @@ struct InsightsView: View {
     }
 
     private var tabPicker: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             ForEach(CoachTab.allCases, id: \.self) { tab in
                 Button {
                     withAnimation(.easeInOut(duration: 0.18)) { selectedTab = tab }
                 } label: {
-                    VStack(spacing: 2) {
-                        HStack(spacing: 5) {
-                            Image(systemName: tab.icon)
-                                .font(.system(size: 11, weight: .bold))
-                            Text(tab.rawValue)
-                                .font(.system(size: 13, weight: .bold))
-                        }
-                        Text(tab.subtitle)
-                            .font(.system(size: 9.5, weight: .semibold))
-                            .opacity(0.75)
+                    HStack(spacing: 6) {
+                        Image(systemName: tab.icon)
+                            .font(.system(size: 10.5, weight: .bold))
+                        Text(tab.rawValue)
+                            .font(.system(size: 12, weight: .bold, design: .rounded))
                     }
-                    .foregroundStyle(selectedTab == tab ? .white : CoachColor.muted)
+                    .foregroundStyle(selectedTab == tab ? CoachColor.purpleDeep : CoachColor.muted)
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
+                    .padding(.vertical, 8)
                     .background(
-                        RoundedRectangle(cornerRadius: 13, style: .continuous)
-                            .fill(selectedTab == tab ? CoachColor.purpleDeep : Color.clear)
+                        Capsule()
+                            .fill(selectedTab == tab ? CoachColor.purple.opacity(0.12) : Color.clear)
+                    )
+                    .overlay(
+                        Capsule()
+                            .stroke(selectedTab == tab ? CoachColor.purple.opacity(0.18) : Color.clear, lineWidth: 1)
                     )
                 }
                 .buttonStyle(.plain)
             }
         }
-        .padding(4)
+        .padding(3)
         .background(
-            RoundedRectangle(cornerRadius: 17, style: .continuous)
+            Capsule()
                 .fill(Color(.systemBackground))
         )
-        .overlay(cardStroke(17))
+        .overlay(
+            Capsule()
+                .stroke(CoachColor.purple.opacity(0.12), lineWidth: 1)
+        )
     }
     // MARK: - Overview
 
@@ -231,57 +235,6 @@ struct InsightsView: View {
         return "Updated \(minutes / 60)h ago"
     }
     
-    private var todayDecisionStack: some View {
-        VStack(spacing: 12) {
-            guidanceTimelineCard
-            coachMessageCard
-            signalsCard
-        }
-    }
-
-    private var guidanceTimelineCard: some View {
-        VStack(alignment: .leading, spacing: 15) {
-            sectionHeader("TODAY'S COACH PLAN", icon: "calendar.badge.clock")
-
-            HStack(alignment: .top, spacing: 0) {
-                timelineNode(
-                    icon: "sun.max.fill",
-                    title: "Wake",
-                    timeText: wakeAnchorText,
-                    detail: wakeDetail,
-                    color: CoachColor.sun,
-                    state: .done
-                )
-                timelineSegment(label: firstWakeWindowText, dashed: false)
-                timelineNode(
-                    icon: "moon.fill",
-                    title: "Nap",
-                    timeText: daytimeTimeText,
-                    detail: "Predicted",
-                    color: CoachColor.purpleDeep,
-                    state: .active
-                )
-                timelineSegment(label: eveningWindowText, dashed: true)
-                timelineNode(
-                    icon: "moon.stars.fill",
-                    title: "Bed",
-                    timeText: bedtimeStartText,
-                    detail: "Optimal",
-                    color: CoachColor.purple,
-                    state: .upcoming
-                )
-            }
-
-            infoStrip(
-                icon: "arrow.triangle.2.circlepath",
-                text: "Plan updates after every sleep, wake-up, or wake period entry."
-            )
-        }
-        .padding(16)
-        .background(premiumCardBackground())
-        .overlay(cardStroke(18))
-    }
-    
     private var takeActionCard: some View {
         let accent = Color(red: 0.85, green: 0.45, blue: 0.10)
 
@@ -333,6 +286,251 @@ struct InsightsView: View {
                 .stroke(Color(red: 1.0, green: 0.78, blue: 0.45).opacity(0.30), lineWidth: 1)
         )
     }
+
+    private var watchForSignsCard: some View {
+        VStack(alignment: .leading, spacing: 11) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Image(systemName: "eye.fill")
+                        .font(.system(size: 10.5, weight: .bold))
+                    Text("WATCH FOR THESE SIGNS")
+                        .font(.system(size: 10.5, weight: .bold, design: .rounded))
+                        .tracking(0.3)
+                }
+                .foregroundStyle(CoachColor.purpleDeep)
+
+                Text("Take your baby to bed when you see 2 or more signs.")
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(CoachColor.muted)
+            }
+
+            VStack(spacing: 8) {
+                signBand(
+                    statusIcon: "checkmark",
+                    statusIconContainer: "circle.fill",
+                    title: "Ready for\nsleep",
+                    titleColor: CoachColor.green,
+                    backgroundColor: CoachColor.green.opacity(0.075),
+                    accentColor: CoachColor.green,
+                    items: [
+                        SignItem(icon: "face.smiling", label: "Rubbing\neyes"),
+                        SignItem(icon: "face.dashed", label: "Yawning"),
+                        SignItem(icon: "figure.play", label: "Quiet play"),
+                        SignItem(icon: "tortoise.fill", label: "Slower\nmovements")
+                    ]
+                )
+
+                signBand(
+                    statusIcon: "exclamationmark",
+                    statusIconContainer: "triangle",
+                    title: "Getting\novertired",
+                    titleColor: CoachColor.red,
+                    backgroundColor: CoachColor.red.opacity(0.075),
+                    accentColor: CoachColor.red,
+                    items: [
+                        SignItem(icon: "figure.walk.motion", label: "Arching\nback"),
+                        SignItem(icon: "face.dashed.fill", label: "Fussiness\nincreasing"),
+                        SignItem(icon: "sparkles", label: "Hyperactive\nbursts"),
+                        SignItem(icon: "heart.slash.fill", label: "Harder to\nsettle")
+                    ]
+                )
+            }
+        }
+        .padding(14)
+        .background(premiumCardBackground(cornerRadius: 18))
+        .overlay(cardStroke(18))
+    }
+
+    private func signBand(
+        statusIcon: String,
+        statusIconContainer: String,
+        title: String,
+        titleColor: Color,
+        backgroundColor: Color,
+        accentColor: Color,
+        items: [SignItem]
+    ) -> some View {
+        HStack(spacing: 7) {
+            statusMark(icon: statusIcon, container: statusIconContainer, color: accentColor)
+
+            Text(title)
+                .font(.system(size: 10.5, weight: .bold, design: .rounded))
+                .foregroundStyle(titleColor)
+                .lineLimit(2)
+                .frame(width: 56, alignment: .leading)
+
+            Image(systemName: "arrow.right")
+                .font(.system(size: 10.5, weight: .bold))
+                .foregroundStyle(accentColor.opacity(0.32))
+
+            HStack(spacing: 6) {
+                ForEach(items) { item in
+                    signItemView(item, color: accentColor)
+                }
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 13, style: .continuous)
+                .fill(backgroundColor)
+        )
+    }
+
+    private func statusMark(icon: String, container: String, color: Color) -> some View {
+        ZStack {
+            if container == "circle.fill" {
+                Circle()
+                    .fill(color.opacity(0.72))
+                    .frame(width: 28, height: 28)
+            } else {
+                Image(systemName: container)
+                    .font(.system(size: 27, weight: .medium))
+                    .foregroundStyle(color.opacity(0.88))
+            }
+
+            Image(systemName: icon)
+                .font(.system(size: 12, weight: .black))
+                .foregroundStyle(container == "circle.fill" ? .white : color)
+        }
+        .frame(width: 30, height: 30)
+    }
+
+    private func signItemView(_ item: SignItem, color: Color) -> some View {
+        VStack(spacing: 5) {
+            ZStack {
+                Circle()
+                    .fill(color.opacity(0.10))
+                    .frame(width: 32, height: 32)
+                Circle()
+                    .stroke(color.opacity(0.23), lineWidth: 1)
+                    .frame(width: 32, height: 32)
+                Image(systemName: item.icon)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(color.opacity(0.78))
+            }
+
+            Text(item.label)
+                .font(.system(size: 8.7, weight: .semibold))
+                .foregroundStyle(CoachColor.ink)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .minimumScaleFactor(0.78)
+                .frame(maxWidth: .infinity, minHeight: 22, alignment: .top)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var aiCoachNoteCard: some View {
+        HStack(alignment: .center, spacing: 13) {
+            CoachBotArtwork()
+                .frame(width: 82, height: 88)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("AI COACH NOTE")
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .tracking(0.35)
+                    .foregroundStyle(CoachColor.purpleDeep)
+
+                Text(coachTipText)
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .lineSpacing(2)
+                    .foregroundStyle(CoachColor.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 0)
+
+            Button {
+                orchestrator.refreshLLM()
+            } label: {
+                Image(systemName: orchestrator.isLLMLoading ? "sparkles" : "heart")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(CoachColor.purpleDeep)
+                    .frame(width: 34, height: 34)
+                    .background(Circle().fill(CoachColor.purple.opacity(0.10)))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(16)
+        .background(premiumCardBackground(cornerRadius: 18))
+        .overlay(cardStroke(18))
+    }
+
+    private var learningProgressOverviewCard: some View {
+        let tracked = min(trackedDays, 14)
+        let remaining = max(0, 14 - tracked)
+
+        return HStack(alignment: .center, spacing: 16) {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("LEARNING PROGRESS")
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .tracking(0.35)
+                    .foregroundStyle(CoachColor.green)
+
+                HStack(spacing: 15) {
+                    learningProgressRing(tracked: tracked)
+
+                    VStack(alignment: .leading, spacing: 7) {
+                        Text(learningProgressTitle)
+                            .font(.system(size: 12.5, weight: .bold))
+                            .foregroundStyle(CoachColor.ink)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        Text(learningProgressDetail(remaining: remaining))
+                            .font(.system(size: 11.5, weight: .semibold))
+                            .lineSpacing(2)
+                            .foregroundStyle(CoachColor.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+
+            Spacer(minLength: 0)
+
+            learningBars(tracked: tracked)
+                .frame(width: 78, height: 62)
+        }
+        .padding(16)
+        .background(premiumCardBackground(cornerRadius: 18))
+        .overlay(cardStroke(18))
+    }
+
+    private func learningProgressRing(tracked: Int) -> some View {
+        ZStack {
+            Circle()
+                .trim(from: 0.10, to: 0.90)
+                .stroke(CoachColor.green.opacity(0.26), style: StrokeStyle(lineWidth: 6, lineCap: .round))
+                .rotationEffect(.degrees(90))
+            Circle()
+                .trim(from: 0.10, to: 0.10 + (0.80 * CGFloat(tracked) / 14))
+                .stroke(CoachColor.green, style: StrokeStyle(lineWidth: 6, lineCap: .round))
+                .rotationEffect(.degrees(90))
+            VStack(spacing: 0) {
+                Text("\(tracked)")
+                    .font(.system(size: 22, weight: .bold, design: .rounded))
+                    .foregroundStyle(CoachColor.ink)
+                Text("/14")
+                    .font(.system(size: 10.5, weight: .bold, design: .rounded))
+                    .foregroundStyle(CoachColor.muted)
+            }
+        }
+        .frame(width: 60, height: 60)
+    }
+
+    private func learningBars(tracked: Int) -> some View {
+        HStack(alignment: .bottom, spacing: 9) {
+            ForEach(0..<4, id: \.self) { index in
+                let threshold = (index + 1) * 3
+                let fillOpacity = tracked >= threshold ? 0.82 : 0.22
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .fill(CoachColor.green.opacity(fillOpacity))
+                    .frame(width: 14, height: CGFloat(18 + index * 10))
+            }
+        }
+    }
+
     private func actionRow(_ item: PreSleepActionItem) -> some View {
         let status = actionStatus(item)
         let done = status == .completed
@@ -413,68 +611,6 @@ struct InsightsView: View {
         manualActionOverrides[item.id] = !currentlyDone
     }
     
-    private var coachMessageCard: some View {
-        VStack(alignment: .leading, spacing: 13) {
-            HStack(spacing: 9) {
-                iconTile("sparkles", color: CoachColor.purpleDeep, size: 40)
-                VStack(alignment: .leading, spacing: 2) {
-                    sectionHeader("AI COACH NOTE", icon: nil)
-                    Text(tipTitle)
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(CoachColor.ink)
-                }
-                Spacer()
-                Button {
-                    orchestrator.refreshLLM()
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 13, weight: .bold))
-                        .foregroundStyle(CoachColor.purpleDeep)
-                        .frame(width: 32, height: 32)
-                        .background(Circle().fill(CoachColor.purple.opacity(0.10)))
-                }
-                .buttonStyle(.plain)
-            }
-
-            if orchestrator.isLLMLoading {
-                HStack(spacing: 8) {
-                    ProgressView()
-                        .scaleEffect(0.75)
-                        .tint(CoachColor.purpleDeep)
-                    Text("Analyzing \(displayedBabyName)'s rhythm...")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(CoachColor.muted)
-                }
-            } else {
-                Text(coachTipText)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(CoachColor.muted)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            if let insight = orchestrator.llmResponse?.patternInsight, !insight.isEmpty {
-                Divider().overlay(CoachColor.stroke)
-                insightMiniRow(
-                    icon: "chart.line.uptrend.xyaxis",
-                    title: "Pattern signal",
-                    text: insight,
-                    color: CoachColor.green
-                )
-            }
-
-            if let alert = orchestrator.llmResponse?.alert, !alert.isEmpty {
-                insightMiniRow(
-                    icon: "exclamationmark.triangle.fill",
-                    title: "Watch point",
-                    text: alert,
-                    color: CoachColor.sun
-                )
-            }
-        }
-        .padding(16)
-        .background(premiumCardBackground())
-        .overlay(cardStroke(18))
-    }
     // MARK: - Action Item Model
 
     private struct PreSleepActionItem: Identifiable {
@@ -485,6 +621,12 @@ struct InsightsView: View {
         let title: String
         let subtitle: String
         let offsetMinutesBeforeTarget: Int
+    }
+
+    private struct SignItem: Identifiable {
+        let id = UUID()
+        let icon: String
+        let label: String
     }
 
     private var actionTargetTime: Date {
@@ -586,32 +728,11 @@ struct InsightsView: View {
         ]
     }
 
- 
-    private var signalsCard: some View {
-        VStack(alignment: .leading, spacing: 13) {
-            sectionHeader("\(displayedBabyName.uppercased())'S SIGNALS", icon: "waveform.path.ecg")
-
-            let alerts = orchestrator.snapshot?.insights.alerts ?? []
-            if alerts.isEmpty {
-                emptyStateRow
-            } else {
-                ForEach(Array(alerts.prefix(3).enumerated()), id: \.offset) { index, alert in
-                    alertRow(alert)
-                    if index < min(alerts.count, 3) - 1 {
-                        Divider().overlay(CoachColor.stroke).padding(.leading, 48)
-                    }
-                }
-            }
-        }
-        .padding(16)
-        .background(premiumCardBackground())
-        .overlay(cardStroke(18))
-    }
-
     // MARK: - Logic
 
     private var predictionLogicStack: some View {
         VStack(spacing: 12) {
+            medicalEvidenceCard
             learningStatusCard
             reasoningCard
             nightWindowCard
@@ -619,6 +740,114 @@ struct InsightsView: View {
         }
     }
 
+    private var medicalEvidenceCard: some View {
+        let ageMonths = orchestrator.snapshot?.ageMonths ?? 6
+        let profile = DefaultAgeBasedSleepProfileProvider().profile(forAgeMonths: ageMonths)
+
+        return VStack(alignment: .leading, spacing: 13) {
+            HStack(spacing: 7) {
+                ZStack {
+                    Circle()
+                        .fill(CoachColor.purpleDeep.opacity(0.12))
+                        .frame(width: 19, height: 19)
+                    Text("1")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(CoachColor.purpleDeep)
+                }
+                sectionHeader("MEDICAL EVIDENCE", icon: nil)
+            }
+
+            VStack(alignment: .leading, spacing: 9) {
+                Text("For \(ageMonths)-month-old babies")
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .foregroundStyle(CoachColor.ink)
+
+                VStack(alignment: .leading, spacing: 7) {
+                    evidenceRow(napCountText(profile.expectedNapCount))
+                    evidenceRow("Wake window: \(hoursMinutesRangeText(profile.wakeWindowRange))")
+                    evidenceRow("Total sleep: \(hoursMinutesRangeText(profile.totalSleep24hRange))")
+                    evidenceRow("Recommended bedtime: \(bedtimeRangeText(profile.bedtimeHourRange))")
+                }
+            }
+
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "text.badge.checkmark")
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(CoachColor.purpleDeep.opacity(0.85))
+                    .padding(.top, 1)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("These guidelines provide the clinical baseline for safe and healthy sleep.")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(CoachColor.ink.opacity(0.72))
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    Text("Source: American Academy of Pediatrics · healthychildren.org")
+                        .font(.system(size: 9.5, weight: .semibold))
+                        .foregroundStyle(CoachColor.purpleDeep.opacity(0.75))
+                }
+            }
+            .padding(11)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .fill(CoachColor.purple.opacity(0.07))
+            )
+        }
+        .padding(15)
+        .background(premiumCardBackground())
+        .overlay(cardStroke(18))
+    }
+    private func evidenceRow(_ text: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            ZStack {
+                Circle()
+                    .fill(CoachColor.purpleDeep.opacity(0.10))
+                    .frame(width: 16, height: 16)
+                Image(systemName: "checkmark")
+                    .font(.system(size: 8.5, weight: .bold))
+                    .foregroundStyle(CoachColor.purpleDeep)
+            }
+            Text(text)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(CoachColor.ink.opacity(0.82))
+        }
+    }
+    private func napCountText(_ range: ClosedRange<Int>) -> String {
+        if range.lowerBound == range.upperBound {
+            let n = range.lowerBound
+            return "\(n) nap\(n == 1 ? "" : "s") per day"
+        }
+        return "\(range.lowerBound) – \(range.upperBound) naps per day"
+    }
+    
+    private func hoursMinutesRangeText(_ range: ClosedRange<Int>) -> String {
+        "\(hoursMinutesText(range.lowerBound)) – \(hoursMinutesText(range.upperBound))"
+    }
+
+    private func hoursMinutesText(_ minutes: Int) -> String {
+        let h = minutes / 60
+        let m = minutes % 60
+        return m == 0 ? "\(h)h" : "\(h)h\(String(format: "%02d", m))"
+    }
+
+    private func hoursRangeText(_ range: ClosedRange<Int>) -> String {
+        "\(range.lowerBound / 60) – \(range.upperBound / 60) hours"
+    }
+
+    private func bedtimeRangeText(_ range: ClosedRange<Int>) -> String {
+        func hour12(_ hour24: Int) -> (Int, String) {
+            let suffix = hour24 >= 12 ? "PM" : "AM"
+            let h = hour24 > 12 ? hour24 - 12 : (hour24 == 0 ? 12 : hour24)
+            return (h, suffix)
+        }
+        let (lowHour, lowSuffix) = hour12(range.lowerBound)
+        let (highHour, highSuffix) = hour12(range.upperBound)
+        return lowSuffix == highSuffix
+            ? "\(lowHour) – \(highHour) \(lowSuffix)"
+            : "\(lowHour) \(lowSuffix) – \(highHour) \(highSuffix)"
+    }
+    
     private var learningStatusCard: some View {
         let tracked = trackedDays
         return VStack(alignment: .leading, spacing: 13) {
@@ -705,12 +934,6 @@ struct InsightsView: View {
 
     // MARK: - Components
 
-    private enum TimelineState {
-        case done
-        case active
-        case upcoming
-    }
-    
     private enum ActionStatus {
         case upcoming
         case readyNow
@@ -742,84 +965,6 @@ struct InsightsView: View {
             }
         }
         .frame(width: 78, height: 78)
-    }
-
-    private func timelineNode(
-        icon: String,
-        title: String,
-        timeText: String,
-        detail: String,
-        color: Color,
-        state: TimelineState
-    ) -> some View {
-        let isActive = state == .active
-        let opacity = state == .done ? 0.58 : 1.0
-
-        return VStack(spacing: 6) {
-            ZStack {
-                if isActive {
-                    Circle()
-                        .fill(color.opacity(0.16))
-                        .frame(width: 46, height: 46)
-                        .blur(radius: 7)
-                }
-                Circle()
-                    .fill(color.opacity(isActive ? 0.18 : 0.10))
-                    .frame(width: 34, height: 34)
-                Circle()
-                    .strokeBorder(
-                        color.opacity(state == .upcoming ? 0.35 : 0.58),
-                        style: state == .upcoming
-                            ? StrokeStyle(lineWidth: 1.4, dash: [3, 3])
-                            : StrokeStyle(lineWidth: isActive ? 1.8 : 1.0)
-                    )
-                    .frame(width: 34, height: 34)
-                Image(systemName: icon)
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(color.opacity(opacity))
-            }
-
-            Text(timeText)
-                .font(.system(size: 9, weight: .medium))
-                .foregroundStyle(Color(.tertiaryLabel).opacity(opacity))
-                .monospacedDigit()
-                .lineLimit(1)
-                .minimumScaleFactor(0.75)
-            Text(title)
-                .font(.system(size: 10, weight: .bold))
-                .foregroundStyle((isActive ? CoachColor.ink : CoachColor.muted).opacity(opacity))
-                .lineLimit(1)
-            Text(detail)
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(color.opacity(isActive ? 0.9 : opacity))
-                .lineLimit(1)
-        }
-        .frame(width: 58)
-    }
-
-    private func timelineSegment(label: String, dashed: Bool) -> some View {
-        VStack(spacing: 3) {
-            Rectangle()
-                .fill(Color.clear)
-                .frame(height: 1.5)
-                .overlay(
-                    Rectangle()
-                        .strokeBorder(
-                            CoachColor.purple.opacity(dashed ? 0.24 : 0.34),
-                            style: StrokeStyle(lineWidth: 1.5, dash: dashed ? [4, 3] : [])
-                        )
-                )
-
-            if !label.isEmpty {
-                Text(label)
-                    .font(.system(size: 8, weight: .bold))
-                    .foregroundStyle(Color(.tertiaryLabel))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.6)
-            }
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.top, 16)
     }
 
     private func metricPill(title: String, value: String, icon: String, color: Color) -> some View {
@@ -892,47 +1037,6 @@ struct InsightsView: View {
         }
     }
 
-    private func alertRow(_ alert: SleepAlert) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            iconTile(alertIcon(alert.severity), color: alertColor(alert.severity), size: 38)
-            VStack(alignment: .leading, spacing: 3) {
-                HStack {
-                    Text(alertTitle(alert.severity))
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(CoachColor.ink)
-                    Spacer()
-                    if let action = alert.actionTitle {
-                        Text(action)
-                            .font(.system(size: 9, weight: .bold))
-                            .foregroundStyle(CoachColor.purpleDeep)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 5)
-                            .background(Capsule().fill(CoachColor.purple.opacity(0.10)))
-                    }
-                }
-                Text(alert.message)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(CoachColor.muted)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .padding(.vertical, 2)
-    }
-
-    private var emptyStateRow: some View {
-        HStack(spacing: 10) {
-            iconTile("checkmark.seal.fill", color: CoachColor.green, size: 38)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("No urgent signals")
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(CoachColor.ink)
-                Text("Keep logging sleep to make coaching more personalized.")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(CoachColor.muted)
-            }
-        }
-    }
-
     private func numberedReason(index: Int, text: String) -> some View {
         HStack(alignment: .top, spacing: 10) {
             Text("\(index)")
@@ -945,24 +1049,6 @@ struct InsightsView: View {
                 .foregroundStyle(CoachColor.muted)
                 .fixedSize(horizontal: false, vertical: true)
         }
-    }
-
-    private func infoStrip(icon: String, text: String) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: icon)
-                .font(.system(size: 12, weight: .bold))
-                .foregroundStyle(CoachColor.purpleDeep)
-            Text(text)
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(CoachColor.muted)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(CoachColor.purple.opacity(0.055))
-        )
     }
 
     private func statusBadge(_ text: String, color: Color) -> some View {
@@ -1048,20 +1134,27 @@ struct InsightsView: View {
         }
     }
 
+    private var learningProgressTitle: String {
+        orchestrator.snapshot?.phase == .personalized
+            ? "Your baby's rhythm is personalized"
+            : "Learning your baby's unique rhythm"
+    }
+
+    private func learningProgressDetail(remaining: Int) -> String {
+        if orchestrator.snapshot?.phase == .personalized {
+            return "Predictions now prioritize recent wake windows, naps, and bedtime patterns."
+        }
+        if remaining == 1 {
+            return "1 more day until predictions become fully personalized and even more accurate."
+        }
+        return "\(remaining) more days until predictions become fully personalized and even more accurate."
+    }
+
     private var primaryCoachLine: String {
         if let next = orchestrator.snapshot?.nextSleepKind, next == .bedtime {
             return "Tonight's window is \(bedtimeWindowText), with risk rising after \(overtiredRiskText)."
         }
         return "Best nap window: \(napWindowText). Confidence improves as logs become more complete."
-    }
-
-    private var tipTitle: String {
-        guard let readiness = orchestrator.snapshot?.readiness else {
-            return "Start with today's wake-up time"
-        }
-        return readiness.missingSignals.contains(.wakeTime)
-            ? "Start with today's wake-up time"
-            : "Follow the window, then follow the baby"
     }
 
     private var coachTipText: String {
@@ -1135,32 +1228,6 @@ struct InsightsView: View {
         return "AAP-endorsed guidance checks total 24h sleep. Nap timing uses \(displayedBabyName)'s own data when enough logs exist."
     }
 
-    // MARK: - Helpers
-
-    private func alertIcon(_ severity: AlertSeverity) -> String {
-        switch severity {
-        case .info: return "info.circle.fill"
-        case .warning: return "exclamationmark.triangle.fill"
-        case .critical: return "exclamationmark.circle.fill"
-        }
-    }
-
-    private func alertColor(_ severity: AlertSeverity) -> Color {
-        switch severity {
-        case .info: return CoachColor.purple
-        case .warning: return CoachColor.sun
-        case .critical: return .red
-        }
-    }
-
-    private func alertTitle(_ severity: AlertSeverity) -> String {
-        switch severity {
-        case .info: return "Info"
-        case .warning: return "Heads up"
-        case .critical: return "Action needed"
-        }
-    }
-
     private func time(_ date: Date) -> String {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
@@ -1170,6 +1237,60 @@ struct InsightsView: View {
 
     private func refresh() {
         orchestrator.generate()
+    }
+}
+
+private struct CoachBotArtwork: View {
+    var body: some View {
+        GeometryReader { geo in
+            let w = geo.size.width
+            let h = geo.size.height
+
+            ZStack {
+                Circle()
+                    .fill(CoachColor.purple.opacity(0.10))
+                    .frame(width: w * 0.90, height: w * 0.90)
+                    .position(x: w * 0.48, y: h * 0.45)
+
+                Capsule()
+                    .fill(CoachColor.purple.opacity(0.20))
+                    .frame(width: w * 0.92, height: h * 0.42)
+                    .rotationEffect(.degrees(-8))
+                    .position(x: w * 0.45, y: h * 0.78)
+
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(.white)
+                    .frame(width: w * 0.68, height: h * 0.55)
+                    .shadow(color: CoachColor.purpleDeep.opacity(0.11), radius: 10, x: 0, y: 5)
+                    .position(x: w * 0.50, y: h * 0.44)
+
+                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                    .fill(CoachColor.purpleDeep)
+                    .frame(width: w * 0.50, height: h * 0.29)
+                    .position(x: w * 0.50, y: h * 0.44)
+
+                HStack(spacing: w * 0.13) {
+                    Circle().fill(.white).frame(width: 5, height: 5)
+                    Circle().fill(.white).frame(width: 5, height: 5)
+                }
+                .position(x: w * 0.50, y: h * 0.43)
+
+                Capsule()
+                    .fill(.white.opacity(0.9))
+                    .frame(width: w * 0.18, height: 3)
+                    .position(x: w * 0.50, y: h * 0.52)
+
+                Capsule()
+                    .fill(CoachColor.purple.opacity(0.24))
+                    .frame(width: 5, height: h * 0.15)
+                    .position(x: w * 0.50, y: h * 0.12)
+
+                Circle()
+                    .fill(CoachColor.purple.opacity(0.35))
+                    .frame(width: 7, height: 7)
+                    .position(x: w * 0.50, y: h * 0.04)
+            }
+        }
     }
 }
 
@@ -1210,5 +1331,6 @@ private enum CoachColor {
     static let purpleDeep = Color(red: 0.45, green: 0.35, blue: 0.92)
     static let sun = Color(red: 1.0, green: 0.68, blue: 0.12)
     static let green = Color(red: 0.16, green: 0.68, blue: 0.46)
+    static let red = Color(red: 0.95, green: 0.22, blue: 0.32)
     static let stroke = Color(.separator)
 }
