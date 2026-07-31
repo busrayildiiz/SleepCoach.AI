@@ -18,10 +18,13 @@ SleepCoach.AI uses an agent-based prediction architecture where independent comp
 
 ---
 
+
 ## Screenshots
 
-![Home](../screenshots/home.png)
-
+<p align="center">
+  <img src="Screenshots/home.png" width="260">
+  <img src="Screenshots/aicoach.png" width="260">
+</p>
 
 ---
 
