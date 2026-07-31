@@ -3,19 +3,28 @@ import SwiftUI
 struct InsightsView: View {
 
     private enum CoachTab: String, CaseIterable {
-        case overview = "Today"
-        case predictions = "Logic"
+        case overview = "Coach"
+        case predictions = "Reasoning"
 
         var icon: String {
             switch self {
             case .overview: return "sparkles"
-            case .predictions: return "chart.line.uptrend.xyaxis"
+            case .predictions: return "bubble.left.and.exclamationmark.bubble.right.fill"
+            }
+        }
+
+        var subtitle: String {
+            switch self {
+            case .overview: return "What to do next"
+            case .predictions: return "Why this plan"
             }
         }
     }
 
     @State private var selectedTab: CoachTab = .overview
+    @State private var manualActionOverrides: [String: Bool] = [:]
     @StateObject private var orchestrator = SleepCoachOrchestrator.shared
+    
     @AppStorage("babyName") private var babyName: String = "Baby"
 
     var body: some View {
@@ -23,15 +32,19 @@ struct InsightsView: View {
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 12) {
                     headerSection
-                    coachHeroCard
                     tabPicker
 
                     if selectedTab == .overview {
-                        todayDecisionStack
+                        coachHeroCard
+                        takeActionCard
+                        watchForSignsCard
+                        aiCoachNoteCard
+                        learningProgressOverviewCard
                     } else {
                         predictionLogicStack
                     }
                 }
+                
                 .padding(.horizontal, 16)
                 .padding(.top, 18)
                 .padding(.bottom, 112)
@@ -49,251 +62,1034 @@ struct InsightsView: View {
     }
 
     // MARK: - Header
-
+    
     private var headerSection: some View {
-        HStack(alignment: .center, spacing: 10) {
-            VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .center, spacing: 8) {
+                HStack(spacing: 1) {
+                    Image(systemName: "sparkle")
+                        .font(.system(size: 11, weight: .bold))
+                    Image(systemName: "sparkle")
+                        .font(.system(size: 14, weight: .bold))
+                }
+                .foregroundStyle(CoachColor.purpleDeep)
+
                 Text("AI Coach")
-                    .font(.system(size: 28, weight: .bold, design: .rounded))
+                    .font(.system(size: 21, weight: .bold, design: .rounded))
                     .foregroundStyle(CoachColor.ink)
-                Text("\(displayedBabyName)'s sleep guidance")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(CoachColor.muted)
+
+                Spacer()
+
+                CoachMoonArtwork()
+                    .frame(width: 52, height: 40)
             }
 
-            Spacer()
-
-            CoachMoonArtwork()
-                .frame(width: 66, height: 52)
+            Text(headerSubtitle)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(CoachColor.muted)
         }
     }
 
+    private var headerSubtitle: String {
+        orchestrator.snapshot?.nextSleepKind == .bedtime
+            ? "Personalized guidance for tonight"
+            : "Personalized guidance for today"
+    }
+
     private var tabPicker: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 6) {
             ForEach(CoachTab.allCases, id: \.self) { tab in
                 Button {
                     withAnimation(.easeInOut(duration: 0.18)) { selectedTab = tab }
                 } label: {
-                    Label(tab.rawValue, systemImage: tab.icon)
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(selectedTab == tab ? .white : CoachColor.muted)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
-                        .background(
-                            RoundedRectangle(cornerRadius: 11, style: .continuous)
-                                .fill(selectedTab == tab ? CoachColor.purpleDeep : Color.clear)
-                        )
+                    HStack(spacing: 6) {
+                        Image(systemName: tab.icon)
+                            .font(.system(size: 10.5, weight: .bold))
+                        Text(tab.rawValue)
+                            .font(.system(size: 12, weight: .bold, design: .rounded))
+                    }
+                    .foregroundStyle(selectedTab == tab ? CoachColor.purpleDeep : CoachColor.muted)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                    .background(
+                        Capsule()
+                            .fill(selectedTab == tab ? CoachColor.purple.opacity(0.12) : Color.clear)
+                    )
+                    .overlay(
+                        Capsule()
+                            .stroke(selectedTab == tab ? CoachColor.purple.opacity(0.18) : Color.clear, lineWidth: 1)
+                    )
                 }
                 .buttonStyle(.plain)
             }
         }
-        .padding(4)
+        .padding(3)
         .background(
-            RoundedRectangle(cornerRadius: 15, style: .continuous)
+            Capsule()
                 .fill(Color(.systemBackground))
         )
-        .overlay(cardStroke(15))
+        .overlay(
+            Capsule()
+                .stroke(CoachColor.purple.opacity(0.12), lineWidth: 1)
+        )
     }
-
     // MARK: - Overview
 
     private var coachHeroCard: some View {
-        let nextKind = orchestrator.snapshot?.nextSleepKind ?? .nap
-        let isBedtime = nextKind == .bedtime
+        let isBedtime = orchestrator.snapshot?.nextSleepKind == .bedtime
         let targetTime = isBedtime
             ? (orchestrator.snapshot?.night.optimalBedtimeStart ?? Date())
             : (orchestrator.snapshot?.daytime.nextNapTime ?? Date())
+        let confidence = max(0, min(orchestrator.snapshot?.daytime.confidence ?? 0, 100))
+        let windowText = isBedtime ? bedtimeWindowText : napWindowText
 
-        return VStack(alignment: .leading, spacing: 16) {
-            HStack(alignment: .top, spacing: 14) {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 7) {
-                        Circle()
-                            .fill(CoachColor.purpleDeep)
-                            .frame(width: 7, height: 7)
-                        Text(isBedtime ? "BEDTIME GUIDANCE" : "NEXT NAP GUIDANCE")
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundStyle(CoachColor.purpleDeep)
-                            .tracking(0.5)
-                    }
+        return VStack(alignment: .leading, spacing: 0) {
+            Text(isBedtime ? "TONIGHT'S PLAN" : "TODAY'S PLAN")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(CoachColor.purpleDeep)
+                .tracking(0.4)
+                .padding(.horizontal, 16)
+                .padding(.top, 14)
+                .padding(.bottom, 10)
 
-                    Text(isBedtime ? "Start bedtime at \(time(targetTime))" : "Aim for \(time(targetTime))")
+            HStack(alignment: .center, spacing: 12) {
+                ZStack {
+                    Circle()
+                        .fill(CoachColor.purpleDeep.opacity(0.85))
+                        .frame(width: 46, height: 46)
+                    Image(systemName: isBedtime ? "moon.fill" : "moon.zzz.fill")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(.white)
+                }
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(isBedtime ? "Bedtime" : "Next nap")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(CoachColor.muted)
+                    Text(time(targetTime))
                         .font(.system(size: 24, weight: .bold, design: .rounded))
                         .foregroundStyle(CoachColor.ink)
                         .monospacedDigit()
-                        .lineLimit(2)
-                        .minimumScaleFactor(0.78)
-
-                    Text(primaryCoachLine)
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(CoachColor.muted)
-                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 Spacer(minLength: 8)
 
-                confidenceRing
-            }
-
-            HStack(spacing: 9) {
-                metricPill(
-                    title: "Window",
-                    value: isBedtime ? bedtimeWindowText : napWindowText,
-                    icon: "timer",
-                    color: CoachColor.purpleDeep
-                )
-                metricPill(
-                    title: "Mode",
-                    value: modeLabel,
-                    icon: "brain.head.profile",
-                    color: modeColor
-                )
-            }
-        }
-        .padding(18)
-        .background(premiumCardBackground(cornerRadius: 22))
-        .overlay(cardStroke(22))
-    }
-
-    private var todayDecisionStack: some View {
-        VStack(spacing: 12) {
-            guidanceTimelineCard
-            coachMessageCard
-            signalsCard
-        }
-    }
-
-    private var guidanceTimelineCard: some View {
-        VStack(alignment: .leading, spacing: 15) {
-            sectionHeader("TODAY'S COACH PLAN", icon: "calendar.badge.clock")
-
-            HStack(alignment: .top, spacing: 0) {
-                timelineNode(
-                    icon: "sun.max.fill",
-                    title: "Wake",
-                    timeText: wakeAnchorText,
-                    detail: wakeDetail,
-                    color: CoachColor.sun,
-                    state: .done
-                )
-                timelineSegment(label: firstWakeWindowText, dashed: false)
-                timelineNode(
-                    icon: "moon.fill",
-                    title: "Nap",
-                    timeText: daytimeTimeText,
-                    detail: "Predicted",
-                    color: CoachColor.purpleDeep,
-                    state: .active
-                )
-                timelineSegment(label: eveningWindowText, dashed: true)
-                timelineNode(
-                    icon: "moon.stars.fill",
-                    title: "Bed",
-                    timeText: bedtimeStartText,
-                    detail: "Optimal",
-                    color: CoachColor.purple,
-                    state: .upcoming
-                )
-            }
-
-            infoStrip(
-                icon: "arrow.triangle.2.circlepath",
-                text: "Plan updates after every sleep, wake-up, or wake period entry."
-            )
-        }
-        .padding(16)
-        .background(premiumCardBackground())
-        .overlay(cardStroke(18))
-    }
-
-    private var coachMessageCard: some View {
-        VStack(alignment: .leading, spacing: 13) {
-            HStack(spacing: 9) {
-                iconTile("sparkles", color: CoachColor.purpleDeep, size: 40)
-                VStack(alignment: .leading, spacing: 2) {
-                    sectionHeader("AI COACH NOTE", icon: nil)
-                    Text(tipTitle)
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(CoachColor.ink)
-                }
-                Spacer()
-                Button {
-                    orchestrator.refreshLLM()
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 13, weight: .bold))
-                        .foregroundStyle(CoachColor.purpleDeep)
-                        .frame(width: 32, height: 32)
-                        .background(Circle().fill(CoachColor.purple.opacity(0.10)))
-                }
-                .buttonStyle(.plain)
-            }
-
-            if orchestrator.isLLMLoading {
-                HStack(spacing: 8) {
-                    ProgressView()
-                        .scaleEffect(0.75)
-                        .tint(CoachColor.purpleDeep)
-                    Text("Analyzing \(displayedBabyName)'s rhythm...")
-                        .font(.system(size: 12, weight: .semibold))
+                VStack(spacing: 3) {
+                    Text("Confidence")
+                        .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(CoachColor.muted)
+                    ZStack {
+                        Circle()
+                            .stroke(CoachColor.purple.opacity(0.15), lineWidth: 5)
+                        Circle()
+                            .trim(from: 0, to: CGFloat(confidence) / 100)
+                            .stroke(CoachColor.purpleDeep, style: StrokeStyle(lineWidth: 5, lineCap: .round))
+                            .rotationEffect(.degrees(-90))
+                        Text("\(confidence)%")
+                            .font(.system(size: 12, weight: .bold, design: .rounded))
+                            .foregroundStyle(CoachColor.ink)
+                    }
+                    .frame(width: 40, height: 40)
                 }
-            } else {
-                Text(coachTipText)
-                    .font(.system(size: 12, weight: .semibold))
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 14)
+
+            Divider().overlay(CoachColor.stroke)
+
+            HStack(spacing: 5) {
+                Text("Optimal window")
+                    .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(CoachColor.muted)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+                Text(windowText)
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(CoachColor.ink)
 
-            if let insight = orchestrator.llmResponse?.patternInsight, !insight.isEmpty {
-                Divider().overlay(CoachColor.stroke)
-                insightMiniRow(
-                    icon: "chart.line.uptrend.xyaxis",
-                    title: "Pattern signal",
-                    text: insight,
-                    color: CoachColor.green
-                )
-            }
+                Spacer()
 
-            if let alert = orchestrator.llmResponse?.alert, !alert.isEmpty {
-                insightMiniRow(
-                    icon: "exclamationmark.triangle.fill",
-                    title: "Watch point",
-                    text: alert,
-                    color: CoachColor.sun
-                )
+                Image(systemName: "clock")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(CoachColor.purpleDeep.opacity(0.7))
+                Text(lastUpdatedText)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(CoachColor.muted)
+
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(CoachColor.muted)
             }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
         }
-        .padding(16)
-        .background(premiumCardBackground())
-        .overlay(cardStroke(18))
+        .background(premiumCardBackground(cornerRadius: 20))
+        .overlay(cardStroke(20))
     }
+    
+    
+    private var lastUpdatedText: String {
+        guard let generatedAt = orchestrator.snapshot?.generatedAt else { return "Updated just now" }
+        let minutes = max(0, Int(Date().timeIntervalSince(generatedAt) / 60))
+        if minutes < 1 { return "Updated just now" }
+        if minutes == 1 { return "Updated 1 min ago" }
+        if minutes < 60 { return "Updated \(minutes) min ago" }
+        return "Updated \(minutes / 60)h ago"
+    }
+    
+    private var takeActionCard: some View {
+        let accent = Color(red: 0.85, green: 0.45, blue: 0.10)
 
-    private var signalsCard: some View {
-        VStack(alignment: .leading, spacing: 13) {
-            sectionHeader("\(displayedBabyName.uppercased())'S SIGNALS", icon: "waveform.path.ecg")
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                HStack(spacing: 5) {
+                    Image(systemName: "sun.max.fill")
+                        .font(.system(size: 10, weight: .bold))
+                    Text(actionCardTitle)
+                        .font(.system(size: 10, weight: .bold))
+                        .tracking(0.3)
+                }
+                .foregroundStyle(accent)
 
-            let alerts = orchestrator.snapshot?.insights.alerts ?? []
-            if alerts.isEmpty {
-                emptyStateRow
-            } else {
-                ForEach(Array(alerts.prefix(3).enumerated()), id: \.offset) { index, alert in
-                    alertRow(alert)
-                    if index < min(alerts.count, 3) - 1 {
-                        Divider().overlay(CoachColor.stroke).padding(.leading, 48)
+                Spacer()
+
+                Text(minutesToGoText)
+                    .font(.system(size: 9.5, weight: .bold))
+                    .foregroundStyle(accent)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(
+                        Capsule().fill(Color(red: 1.0, green: 0.6, blue: 0.2).opacity(0.16))
+                    )
+            }
+            .padding(.horizontal, 14)
+            .padding(.top, 11)
+            .padding(.bottom, 8)
+
+            VStack(spacing: 0) {
+                ForEach(Array(actionItems.enumerated()), id: \.element.id) { index, item in
+                    actionRow(item)
+                    if index < actionItems.count - 1 {
+                        Divider()
+                            .overlay(Color(red: 1.0, green: 0.6, blue: 0.2).opacity(0.14))
+                            .padding(.leading, 44)
                     }
                 }
             }
+            .padding(.horizontal, 14)
+            .padding(.bottom, 9)
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 17, style: .continuous)
+                .fill(Color(red: 1.0, green: 0.965, blue: 0.90))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 17, style: .continuous)
+                .stroke(Color(red: 1.0, green: 0.78, blue: 0.45).opacity(0.30), lineWidth: 1)
+        )
+    }
+
+    private var watchForSignsCard: some View {
+        VStack(alignment: .leading, spacing: 11) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Image(systemName: "eye.fill")
+                        .font(.system(size: 10.5, weight: .bold))
+                    Text("WATCH FOR THESE SIGNS")
+                        .font(.system(size: 10.5, weight: .bold, design: .rounded))
+                        .tracking(0.3)
+                }
+                .foregroundStyle(CoachColor.purpleDeep)
+
+                Text("Take your baby to bed when you see 2 or more signs.")
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(CoachColor.muted)
+            }
+
+            VStack(spacing: 8) {
+                signBand(
+                    statusIcon: "checkmark",
+                    statusIconContainer: "circle.fill",
+                    title: "Ready for\nsleep",
+                    titleColor: CoachColor.green,
+                    backgroundColor: CoachColor.green.opacity(0.075),
+                    accentColor: CoachColor.green,
+                    items: [
+                        SignItem(icon: "face.smiling", label: "Rubbing\neyes"),
+                        SignItem(icon: "face.dashed", label: "Yawning"),
+                        SignItem(icon: "figure.play", label: "Quiet play"),
+                        SignItem(icon: "tortoise.fill", label: "Slower\nmovements")
+                    ]
+                )
+
+                signBand(
+                    statusIcon: "exclamationmark",
+                    statusIconContainer: "triangle",
+                    title: "Getting\novertired",
+                    titleColor: CoachColor.red,
+                    backgroundColor: CoachColor.red.opacity(0.075),
+                    accentColor: CoachColor.red,
+                    items: [
+                        SignItem(icon: "figure.walk.motion", label: "Arching\nback"),
+                        SignItem(icon: "face.dashed.fill", label: "Fussiness\nincreasing"),
+                        SignItem(icon: "sparkles", label: "Hyperactive\nbursts"),
+                        SignItem(icon: "heart.slash.fill", label: "Harder to\nsettle")
+                    ]
+                )
+            }
+        }
+        .padding(14)
+        .background(premiumCardBackground(cornerRadius: 18))
+        .overlay(cardStroke(18))
+    }
+
+    private func signBand(
+        statusIcon: String,
+        statusIconContainer: String,
+        title: String,
+        titleColor: Color,
+        backgroundColor: Color,
+        accentColor: Color,
+        items: [SignItem]
+    ) -> some View {
+        HStack(spacing: 7) {
+            statusMark(icon: statusIcon, container: statusIconContainer, color: accentColor)
+
+            Text(title)
+                .font(.system(size: 10.5, weight: .bold, design: .rounded))
+                .foregroundStyle(titleColor)
+                .lineLimit(2)
+                .frame(width: 56, alignment: .leading)
+
+            Image(systemName: "arrow.right")
+                .font(.system(size: 10.5, weight: .bold))
+                .foregroundStyle(accentColor.opacity(0.32))
+
+            HStack(spacing: 6) {
+                ForEach(items) { item in
+                    signItemView(item, color: accentColor)
+                }
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 13, style: .continuous)
+                .fill(backgroundColor)
+        )
+    }
+
+    private func statusMark(icon: String, container: String, color: Color) -> some View {
+        ZStack {
+            if container == "circle.fill" {
+                Circle()
+                    .fill(color.opacity(0.72))
+                    .frame(width: 28, height: 28)
+            } else {
+                Image(systemName: container)
+                    .font(.system(size: 27, weight: .medium))
+                    .foregroundStyle(color.opacity(0.88))
+            }
+
+            Image(systemName: icon)
+                .font(.system(size: 12, weight: .black))
+                .foregroundStyle(container == "circle.fill" ? .white : color)
+        }
+        .frame(width: 30, height: 30)
+    }
+
+    private func signItemView(_ item: SignItem, color: Color) -> some View {
+        VStack(spacing: 5) {
+            ZStack {
+                Circle()
+                    .fill(color.opacity(0.10))
+                    .frame(width: 32, height: 32)
+                Circle()
+                    .stroke(color.opacity(0.23), lineWidth: 1)
+                    .frame(width: 32, height: 32)
+                Image(systemName: item.icon)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(color.opacity(0.78))
+            }
+
+            Text(item.label)
+                .font(.system(size: 8.7, weight: .semibold))
+                .foregroundStyle(CoachColor.ink)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .minimumScaleFactor(0.78)
+                .frame(maxWidth: .infinity, minHeight: 22, alignment: .top)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var aiCoachNoteCard: some View {
+        HStack(alignment: .center, spacing: 13) {
+            CoachBotArtwork()
+                .frame(width: 82, height: 88)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("AI COACH NOTE")
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .tracking(0.35)
+                    .foregroundStyle(CoachColor.purpleDeep)
+
+                Text(coachTipText)
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .lineSpacing(2)
+                    .foregroundStyle(CoachColor.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 0)
+
+            Button {
+                orchestrator.refreshLLM()
+            } label: {
+                Image(systemName: orchestrator.isLLMLoading ? "sparkles" : "heart")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(CoachColor.purpleDeep)
+                    .frame(width: 34, height: 34)
+                    .background(Circle().fill(CoachColor.purple.opacity(0.10)))
+            }
+            .buttonStyle(.plain)
         }
         .padding(16)
+        .background(premiumCardBackground(cornerRadius: 18))
+        .overlay(cardStroke(18))
+    }
+
+    private var learningProgressOverviewCard: some View {
+        let tracked = min(trackedDays, 14)
+        let remaining = max(0, 14 - tracked)
+
+        return HStack(alignment: .center, spacing: 16) {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("LEARNING PROGRESS")
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .tracking(0.35)
+                    .foregroundStyle(CoachColor.green)
+
+                HStack(spacing: 15) {
+                    learningProgressRing(tracked: tracked)
+
+                    VStack(alignment: .leading, spacing: 7) {
+                        Text(learningProgressTitle)
+                            .font(.system(size: 12.5, weight: .bold))
+                            .foregroundStyle(CoachColor.ink)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        Text(learningProgressDetail(remaining: remaining))
+                            .font(.system(size: 11.5, weight: .semibold))
+                            .lineSpacing(2)
+                            .foregroundStyle(CoachColor.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+
+            Spacer(minLength: 0)
+
+            learningBars(tracked: tracked)
+                .frame(width: 78, height: 62)
+        }
+        .padding(16)
+        .background(premiumCardBackground(cornerRadius: 18))
+        .overlay(cardStroke(18))
+    }
+
+    private func learningProgressRing(tracked: Int) -> some View {
+        ZStack {
+            Circle()
+                .trim(from: 0.10, to: 0.90)
+                .stroke(CoachColor.green.opacity(0.26), style: StrokeStyle(lineWidth: 6, lineCap: .round))
+                .rotationEffect(.degrees(90))
+            Circle()
+                .trim(from: 0.10, to: 0.10 + (0.80 * CGFloat(tracked) / 14))
+                .stroke(CoachColor.green, style: StrokeStyle(lineWidth: 6, lineCap: .round))
+                .rotationEffect(.degrees(90))
+            VStack(spacing: 0) {
+                Text("\(tracked)")
+                    .font(.system(size: 22, weight: .bold, design: .rounded))
+                    .foregroundStyle(CoachColor.ink)
+                Text("/14")
+                    .font(.system(size: 10.5, weight: .bold, design: .rounded))
+                    .foregroundStyle(CoachColor.muted)
+            }
+        }
+        .frame(width: 60, height: 60)
+    }
+
+    private func learningBars(tracked: Int) -> some View {
+        HStack(alignment: .bottom, spacing: 9) {
+            ForEach(0..<4, id: \.self) { index in
+                let threshold = (index + 1) * 3
+                let fillOpacity = tracked >= threshold ? 0.82 : 0.22
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .fill(CoachColor.green.opacity(fillOpacity))
+                    .frame(width: 14, height: CGFloat(18 + index * 10))
+            }
+        }
+    }
+
+    private func actionRow(_ item: PreSleepActionItem) -> some View {
+        let status = actionStatus(item)
+        let done = status == .completed
+        return Button {
+            withAnimation(.easeInOut(duration: 0.15)) {
+                toggleAction(item)
+            }
+        } label: {
+            HStack(spacing: 10) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(item.iconBackground)
+                        .frame(width: 30, height: 30)
+                    Image(systemName: item.icon)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(item.iconColor)
+                }
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(item.title)
+                        .font(.system(size: 11.5, weight: .bold))
+                        .foregroundStyle(CoachColor.ink)
+                    Text(item.subtitle)
+                        .font(.system(size: 9.5, weight: .medium))
+                        .foregroundStyle(CoachColor.muted)
+                }
+
+                Spacer()
+                
+                ZStack {
+                    Circle()
+                        .fill(done ? CoachColor.purpleDeep : Color.clear)
+                        .frame(width: 19, height: 19)
+                    Circle()
+                        .stroke(done ? Color.clear : CoachColor.muted.opacity(0.32), lineWidth: 1.3)
+                        .frame(width: 19, height: 19)
+                    if done {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundStyle(.white)
+                    }
+                }
+            }
+            .padding(.vertical, 6.5)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+    private func actionStatus(
+        _ item: PreSleepActionItem,
+        now: Date = .now
+    ) -> ActionStatus {
+
+        if manualActionOverrides[item.id] == true {
+            return .completed
+        }
+
+        let target = actionTargetTime.addingMinutes(-item.offsetMinutesBeforeTarget)
+
+        if now >= target {
+            return .readyNow
+        }
+
+        return .upcoming
+    }
+    
+    private var minutesToGoText: String {
+        let minutes = Int(actionTargetTime.timeIntervalSince(Date()) / 60)
+        guard minutes > 0 else { return "Time's up" }
+        return "~\(minutes) min to go"
+    }
+    
+
+    private func toggleAction(_ item: PreSleepActionItem) {
+
+        let currentlyDone = actionStatus(item) == .completed
+
+        manualActionOverrides[item.id] = !currentlyDone
+    }
+    
+    // MARK: - Action Item Model
+
+    private struct PreSleepActionItem: Identifiable {
+        let id : String
+        let icon: String
+        let iconColor: Color
+        let iconBackground: Color
+        let title: String
+        let subtitle: String
+        let offsetMinutesBeforeTarget: Int
+    }
+
+    // MARK: - Personalization Model
+
+    private struct PersonalizationFactorResult: Identifiable {
+        let id: String
+        let title: String
+        let valueText: String
+        let deltaMinutes: Int
+    }
+
+    private struct PersonalizationBreakdown {
+        let baselineDate: Date
+        let finalDate: Date
+        let factors: [PersonalizationFactorResult]
+        let narrative: String
+    }
+    private struct SignItem: Identifiable {
+        let id = UUID()
+        let icon: String
+        let label: String
+    }
+
+    private var actionTargetTime: Date {
+        let isBedtime = orchestrator.snapshot?.nextSleepKind == .bedtime
+        return isBedtime
+            ? (orchestrator.snapshot?.night.optimalBedtimeStart ?? Date())
+            : (orchestrator.snapshot?.daytime.nextNapTime ?? Date())
+    }
+
+    private var isBedtimeAction: Bool {
+        orchestrator.snapshot?.nextSleepKind == .bedtime
+    }
+
+    private var actionCardTitle: String {
+        isBedtimeAction ? "TAKE ACTION NOW" : "NAP PREP"
+    }
+
+    private var actionItems: [PreSleepActionItem] {
+        isBedtimeAction ? bedtimeActionItems : napActionItems
+    }
+
+    private var bedtimeActionItems: [PreSleepActionItem] {
+        [
+            PreSleepActionItem(
+                id: "dim_lights",
+                icon: "lamp.desk.fill", iconColor: .orange, iconBackground: Color.orange.opacity(0.15),
+                title: "Start dimming lights",
+                subtitle: "Begin by \(time(actionTargetTime.addingMinutes(-45)))",
+                offsetMinutesBeforeTarget: 45
+            ),
+            PreSleepActionItem(
+                id: "quiet_play",
+                icon: "gamecontroller.fill", iconColor: CoachColor.green, iconBackground: CoachColor.green.opacity(0.15),
+                title: "Quiet play only",
+                subtitle: "Avoid stimulating activities",
+                offsetMinutesBeforeTarget: 30
+            ),
+            PreSleepActionItem(
+                id: "feed",
+                icon: "cup.and.saucer.fill", iconColor: CoachColor.purpleDeep, iconBackground: CoachColor.purple.opacity(0.15),
+                title: "Feed before bedtime",
+                subtitle: "Finish feeding by \(time(actionTargetTime.addingMinutes(-15)))",
+                offsetMinutesBeforeTarget: 15
+            ),
+            PreSleepActionItem(
+                id: "prepare_env",
+                icon: "moon.zzz.fill", iconColor: CoachColor.purpleDeep, iconBackground: CoachColor.purple.opacity(0.10),
+                title: "Prepare sleep environment",
+                subtitle: "Dark, cool, and calm",
+                offsetMinutesBeforeTarget: 10
+            ),
+            PreSleepActionItem(
+                id: "routine",
+                icon: "book.fill", iconColor: .orange, iconBackground: Color.orange.opacity(0.15),
+                title: "Begin bedtime routine",
+                subtitle: "Bath, book, and cuddles",
+                offsetMinutesBeforeTarget: 0
+            )
+        ]
+    }
+
+    private var napActionItems: [PreSleepActionItem] {
+        [
+            PreSleepActionItem(
+                id: "sleepy_cues",
+                icon: "eye.fill", iconColor: CoachColor.purpleDeep, iconBackground: CoachColor.purple.opacity(0.12),
+                title: "Watch for sleepy cues",
+                subtitle: "Yawning, eye rubbing, fussiness",
+                offsetMinutesBeforeTarget: 20
+            ),
+            PreSleepActionItem(
+                id: "quiet_play",
+                icon: "gamecontroller.fill", iconColor: CoachColor.green, iconBackground: CoachColor.green.opacity(0.15),
+                title: "Quiet play only",
+                subtitle: "Avoid stimulating activities",
+                offsetMinutesBeforeTarget: 15
+            ),
+            PreSleepActionItem(
+                id: "dim_room",
+                icon: "lamp.desk.fill", iconColor: .orange, iconBackground: Color.orange.opacity(0.15),
+                title: "Dim the room",
+                subtitle: "Begin by \(time(actionTargetTime.addingMinutes(-10)))",
+                offsetMinutesBeforeTarget: 10
+            ),
+            PreSleepActionItem(
+                id: "prepare_space",
+                icon: "moon.zzz.fill", iconColor: CoachColor.purpleDeep, iconBackground: CoachColor.purple.opacity(0.10),
+                title: "Prepare sleep space",
+                subtitle: "Dark, cool, and calm",
+                offsetMinutesBeforeTarget: 5
+            ),
+            PreSleepActionItem(
+                id: "nap_routine",
+                icon: "book.fill", iconColor: .orange, iconBackground: Color.orange.opacity(0.15),
+                title: "Begin nap routine",
+                subtitle: "Swaddle, sound, cuddles",
+                offsetMinutesBeforeTarget: 0
+            )
+        ]
+    }
+    
+    private func loadTodayRecordsForBreakdown() -> [SleepRecord] {
+        guard let data = UserDefaults.standard.data(forKey: "sleepRecords"),
+              let decoded = try? JSONDecoder().decode([SleepRecord].self, from: data)
+        else { return [] }
+        return decoded.filter { Calendar.current.isDateInToday($0.date) }
+    }
+
+    private func loadWakeRecordsForBreakdown() -> [DailyWakeRecord] {
+        guard let data = UserDefaults.standard.data(forKey: "dailyWakeRecords_v1"),
+              let decoded = try? JSONDecoder().decode([DailyWakeRecord].self, from: data)
+        else { return [] }
+        return decoded
+    }
+
+    private func expectedLastNapEndTime(profile: AgeBasedSleepProfile, napCount: Int, anchor: Date) -> Date {
+        guard napCount > 0 else { return anchor }
+        let wwCenter = (profile.wakeWindowRange.lowerBound + profile.wakeWindowRange.upperBound) / 2
+        let napDurationCenter = Int(Double(profile.maxSingleNapMinutes) * 0.75)
+        var cursor = anchor
+        for _ in 0..<napCount {
+            cursor = cursor.addingMinutes(wwCenter).addingMinutes(napDurationCenter)
+        }
+        return cursor
+    }
+
+    private func buildPersonalizationNarrative(
+        factors: [PersonalizationFactorResult],
+        babyName: String
+    ) -> String {
+        let totalDelta = factors.reduce(0) { $0 + $1.deltaMinutes }
+        let direction = totalDelta < 0 ? "earlier" : "later"
+
+        var clauses: [String] = []
+        if let napFactor = factors.first(where: { $0.id == "last_nap" }) {
+            clauses.append(napFactor.deltaMinutes >= 0
+                ? "the last nap ended later than usual"
+                : "the last nap ended earlier than usual")
+        }
+        if let deficitFactor = factors.first(where: { $0.id == "daytime_deficit" }), deficitFactor.deltaMinutes < 0 {
+            clauses.append("today's total daytime sleep was a bit short, raising overtired risk")
+        }
+
+        let intro = clauses.isEmpty
+            ? "Today's sleep signals were close to the baseline"
+            : "Today, " + clauses.joined(separator: ", and ")
+
+        guard totalDelta != 0 else {
+            return "\(intro), so bedtime stays right on the age-based baseline tonight."
+        }
+        return "\(intro), so bedtime is adjusted \(abs(totalDelta)) min \(direction) tonight to protect healthy sleep pressure."
+    }
+    
+    private enum PersonalizationCardState {
+        case notApplicable
+        case insufficientData(missingNaps: Int)
+        case ready(PersonalizationBreakdown)
+    }
+
+    private func personalizationCardState() -> PersonalizationCardState {
+        guard let snapshot = orchestrator.snapshot,
+              snapshot.nextSleepKind == .bedtime,
+              snapshot.ageMonths >= 4
+        else { return .notApplicable }
+
+        let profile = DefaultAgeBasedSleepProfileProvider().profile(forAgeMonths: snapshot.ageMonths)
+        let records = loadTodayRecordsForBreakdown()
+        let dayNaps = records.filter { $0.kind == .dayNap && !$0.isOngoing }
+
+        guard dayNaps.count >= profile.expectedNapCount.lowerBound else {
+            let missing = profile.expectedNapCount.lowerBound - dayNaps.count
+            return .insufficientData(missingNaps: missing)
+        }
+
+        guard let breakdown = personalizationBreakdown() else {
+            return .insufficientData(missingNaps: 0)
+        }
+
+        return .ready(breakdown)
+    }
+    private func personalizationEmptyContent(missingNaps: Int) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 7) {
+                ZStack {
+                    Circle()
+                        .fill(CoachColor.purpleDeep.opacity(0.12))
+                        .frame(width: 19, height: 19)
+                    Text("2")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(CoachColor.purpleDeep)
+                }
+                sectionHeader("PERSONALIZATION (HOW WE ADJUSTED)", icon: nil)
+            }
+
+            HStack(alignment: .top, spacing: 0) {
+                personalizationColumn(
+                    title: "AAP baseline", subtitle: "(bedtime range)",
+                    value: "–", delta: nil, isEndpoint: true
+                )
+                personalizationColumn(
+                    title: "Last nap ended at", subtitle: nil,
+                    value: "–", delta: nil, isEndpoint: false
+                )
+                personalizationColumn(
+                    title: "Today's daytime sleep", subtitle: nil,
+                    value: "–", delta: nil, isEndpoint: false
+                )
+                personalizationColumn(
+                    title: "Final recommendation", subtitle: nil,
+                    value: "–", delta: nil, isEndpoint: true
+                )
+            }
+            .opacity(0.45)
+
+            personalizationDotTrack(stepCount: 4)
+                .opacity(0.35)
+
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(Color(red: 0.85, green: 0.45, blue: 0.10))
+                    .padding(.top, 1)
+
+                Text(missingDataMessage(missingNaps: missingNaps))
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(CoachColor.ink.opacity(0.72))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(11)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .fill(Color(red: 1.0, green: 0.6, blue: 0.2).opacity(0.12))
+            )
+        }
+        .padding(15)
         .background(premiumCardBackground())
         .overlay(cardStroke(18))
+    }
+
+    private func missingDataMessage(missingNaps: Int) -> String {
+        if missingNaps > 0 {
+            return "Not enough naps logged today to personalize tonight's bedtime — \(missingNaps) more nap\(missingNaps == 1 ? "" : "s") needed. Showing this once today's sleep is fully logged."
+        }
+        return "Today's sleep data isn't complete enough yet to explain tonight's adjustment. Log the day's naps and wake time for a personalized breakdown."
+    }
+
+    private func personalizationBreakdown() -> PersonalizationBreakdown? {
+        guard let snapshot = orchestrator.snapshot,
+              snapshot.nextSleepKind == .bedtime,
+              snapshot.ageMonths >= 4
+        else { return nil }
+
+        let profile = DefaultAgeBasedSleepProfileProvider().profile(forAgeMonths: snapshot.ageMonths)
+        let calendar = Calendar.current
+        let now = Date()
+        let today = calendar.startOfDay(for: now)
+
+        let records = loadTodayRecordsForBreakdown()
+        let breaks = records.filter { $0.kind == .break }
+        let dayNaps = records.filter { $0.kind == .dayNap && !$0.isOngoing }.sorted { $0.date < $1.date }
+
+        // Gerçek NightPredictionAgent, yeterli nap tamamlanmadan personalize etmiyor
+        // (o durumda sabit "typical bedtime" fallback'i kullanıyor) — o zaman açıklayacak bir şey yok.
+        guard dayNaps.count >= profile.expectedNapCount.lowerBound,
+              let actualLastNap = dayNaps.last
+        else { return nil }
+
+        let actualLastNapEnd = actualLastNap.date.addingMinutes(actualLastNap.duration)
+
+        let typicalWakeHour = UserDefaults.standard.object(forKey: "typicalWakeHour") as? Double ?? 7.0
+        let typicalWakeMinute = UserDefaults.standard.object(forKey: "typicalWakeMinute") as? Double ?? 0.0
+        let typicalWake = calendar.date(
+            bySettingHour: Int(typicalWakeHour), minute: Int(typicalWakeMinute), second: 0, of: today
+        ) ?? today
+
+        // Baseline: bebek typical saatte uyansaydı ve yaş-minimumu kadar nap yapsaydı beklenen son nap bitişi
+        let baselineLastNapEnd = expectedLastNapEndTime(
+            profile: profile, napCount: profile.expectedNapCount.lowerBound, anchor: typicalWake
+        )
+
+        // OvertiredCalculator.bedtimeWindow ile BİREBİR aynı formül
+        let ewwMin = profile.eveningWakeWindow.lowerBound
+        let totalDaytime = dayNaps.reduce(0) { $0 + $1.totalMinutes(breaks: breaks) }
+        let daytimeDeficit = max(0, profile.daytimeSleepRange.lowerBound - totalDaytime)
+        let adjustment = daytimeDeficit / 3
+
+        let baselineDate = baselineLastNapEnd.addingMinutes(ewwMin)
+        // finalDate'i yeniden hesaplamıyoruz — zaten var olan tek doğruluk kaynağını kullanıyoruz
+        let finalDate = snapshot.night.optimalBedtimeStart
+
+        let napTimingDelta = Int(actualLastNapEnd.timeIntervalSince(baselineLastNapEnd) / 60)
+        let deficitDelta = -adjustment
+
+        var factors: [PersonalizationFactorResult] = []
+
+        if abs(napTimingDelta) >= 3 {
+            factors.append(PersonalizationFactorResult(
+                id: "last_nap",
+                title: "Last nap ended at",
+                valueText: time(actualLastNapEnd),
+                deltaMinutes: napTimingDelta
+            ))
+        }
+
+        if deficitDelta != 0 {
+            factors.append(PersonalizationFactorResult(
+                id: "daytime_deficit",
+                title: "Today's daytime sleep",
+                valueText: TimeFormat.minutes(totalDaytime),
+                deltaMinutes: deficitDelta
+            ))
+        }
+
+        guard !factors.isEmpty else { return nil }
+
+        let narrative = buildPersonalizationNarrative(factors: factors, babyName: displayedBabyName)
+
+        return PersonalizationBreakdown(
+            baselineDate: baselineDate,
+            finalDate: finalDate,
+            factors: factors,
+            narrative: narrative
+        )
+    }
+    private var personalizationCard: some View {
+        Group {
+            switch personalizationCardState() {
+            case .notApplicable:
+                EmptyView()
+            case .insufficientData(let missingNaps):
+                personalizationEmptyContent(missingNaps: missingNaps)
+            case .ready(let breakdown):
+                personalizationContent(breakdown)
+            }
+        }
+    }
+
+    private func personalizationContent(_ breakdown: PersonalizationBreakdown) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 7) {
+                ZStack {
+                    Circle()
+                        .fill(CoachColor.purpleDeep.opacity(0.12))
+                        .frame(width: 19, height: 19)
+                    Text("2")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(CoachColor.purpleDeep)
+                }
+                sectionHeader("PERSONALIZATION (HOW WE ADJUSTED)", icon: nil)
+            }
+
+            HStack(alignment: .top, spacing: 0) {
+                personalizationColumn(
+                    title: "AAP baseline", subtitle: "(bedtime range)",
+                    value: time(breakdown.baselineDate), delta: nil, isEndpoint: true
+                )
+                ForEach(breakdown.factors) { factor in
+                    personalizationColumn(
+                        title: factor.title, subtitle: nil,
+                        value: factor.valueText, delta: factor.deltaMinutes, isEndpoint: false
+                    )
+                }
+                personalizationColumn(
+                    title: "Final recommendation", subtitle: nil,
+                    value: time(breakdown.finalDate), delta: nil, isEndpoint: true
+                )
+            }
+
+            personalizationDotTrack(stepCount: breakdown.factors.count + 2)
+
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(CoachColor.purpleDeep.opacity(0.85))
+                    .padding(.top, 1)
+                Text(breakdown.narrative)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(CoachColor.ink.opacity(0.75))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(11)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .fill(CoachColor.purple.opacity(0.07))
+            )
+        }
+        .padding(15)
+        .background(premiumCardBackground())
+        .overlay(cardStroke(18))
+    }
+
+    private func personalizationColumn(
+        title: String, subtitle: String?, value: String, delta: Int?, isEndpoint: Bool
+    ) -> some View {
+        VStack(spacing: 4) {
+            Text(title)
+                .font(.system(size: 9.5, weight: .semibold))
+                .foregroundStyle(CoachColor.muted)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .minimumScaleFactor(0.85)
+
+            if let subtitle {
+                Text(subtitle)
+                    .font(.system(size: 8.5, weight: .medium))
+                    .foregroundStyle(CoachColor.muted.opacity(0.75))
+            }
+
+            Text(value)
+                .font(.system(size: isEndpoint ? 13 : 11.5, weight: .bold, design: .rounded))
+                .foregroundStyle(isEndpoint ? CoachColor.purpleDeep : CoachColor.ink)
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+
+            if let delta {
+                Text("\(delta >= 0 ? "+" : "–")\(abs(delta)) min")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(CoachColor.sun)
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func personalizationDotTrack(stepCount: Int) -> some View {
+        HStack(spacing: 0) {
+            ForEach(0..<stepCount, id: \.self) { index in
+                Circle()
+                    .stroke(CoachColor.purpleDeep, lineWidth: 1.5)
+                    .background(Circle().fill(Color(.systemBackground)))
+                    .frame(width: 8, height: 8)
+                if index < stepCount - 1 {
+                    Rectangle()
+                        .fill(CoachColor.purpleDeep.opacity(0.35))
+                        .frame(height: 1.5)
+                }
+            }
+        }
     }
 
     // MARK: - Logic
 
     private var predictionLogicStack: some View {
         VStack(spacing: 12) {
+            medicalEvidenceCard
+            personalizationCard
             learningStatusCard
             reasoningCard
             nightWindowCard
@@ -301,6 +1097,114 @@ struct InsightsView: View {
         }
     }
 
+    private var medicalEvidenceCard: some View {
+        let ageMonths = orchestrator.snapshot?.ageMonths ?? 6
+        let profile = DefaultAgeBasedSleepProfileProvider().profile(forAgeMonths: ageMonths)
+
+        return VStack(alignment: .leading, spacing: 13) {
+            HStack(spacing: 7) {
+                ZStack {
+                    Circle()
+                        .fill(CoachColor.purpleDeep.opacity(0.12))
+                        .frame(width: 19, height: 19)
+                    Text("1")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(CoachColor.purpleDeep)
+                }
+                sectionHeader("MEDICAL EVIDENCE", icon: nil)
+            }
+
+            VStack(alignment: .leading, spacing: 9) {
+                Text("For \(ageMonths)-month-old babies")
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .foregroundStyle(CoachColor.ink)
+
+                VStack(alignment: .leading, spacing: 7) {
+                    evidenceRow(napCountText(profile.expectedNapCount))
+                    evidenceRow("Wake window: \(hoursMinutesRangeText(profile.wakeWindowRange))")
+                    evidenceRow("Total sleep: \(hoursMinutesRangeText(profile.totalSleep24hRange))")
+                    evidenceRow("Recommended bedtime: \(bedtimeRangeText(profile.bedtimeHourRange))")
+                }
+            }
+
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "text.badge.checkmark")
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(CoachColor.purpleDeep.opacity(0.85))
+                    .padding(.top, 1)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("These guidelines provide the clinical baseline for safe and healthy sleep.")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(CoachColor.ink.opacity(0.72))
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    Text("Source: American Academy of Pediatrics · healthychildren.org")
+                        .font(.system(size: 9.5, weight: .semibold))
+                        .foregroundStyle(CoachColor.purpleDeep.opacity(0.75))
+                }
+            }
+            .padding(11)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .fill(CoachColor.purple.opacity(0.07))
+            )
+        }
+        .padding(15)
+        .background(premiumCardBackground())
+        .overlay(cardStroke(18))
+    }
+    private func evidenceRow(_ text: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            ZStack {
+                Circle()
+                    .fill(CoachColor.purpleDeep.opacity(0.10))
+                    .frame(width: 16, height: 16)
+                Image(systemName: "checkmark")
+                    .font(.system(size: 8.5, weight: .bold))
+                    .foregroundStyle(CoachColor.purpleDeep)
+            }
+            Text(text)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(CoachColor.ink.opacity(0.82))
+        }
+    }
+    private func napCountText(_ range: ClosedRange<Int>) -> String {
+        if range.lowerBound == range.upperBound {
+            let n = range.lowerBound
+            return "\(n) nap\(n == 1 ? "" : "s") per day"
+        }
+        return "\(range.lowerBound) – \(range.upperBound) naps per day"
+    }
+    
+    private func hoursMinutesRangeText(_ range: ClosedRange<Int>) -> String {
+        "\(hoursMinutesText(range.lowerBound)) – \(hoursMinutesText(range.upperBound))"
+    }
+
+    private func hoursMinutesText(_ minutes: Int) -> String {
+        let h = minutes / 60
+        let m = minutes % 60
+        return m == 0 ? "\(h)h" : "\(h)h\(String(format: "%02d", m))"
+    }
+
+    private func hoursRangeText(_ range: ClosedRange<Int>) -> String {
+        "\(range.lowerBound / 60) – \(range.upperBound / 60) hours"
+    }
+
+    private func bedtimeRangeText(_ range: ClosedRange<Int>) -> String {
+        func hour12(_ hour24: Int) -> (Int, String) {
+            let suffix = hour24 >= 12 ? "PM" : "AM"
+            let h = hour24 > 12 ? hour24 - 12 : (hour24 == 0 ? 12 : hour24)
+            return (h, suffix)
+        }
+        let (lowHour, lowSuffix) = hour12(range.lowerBound)
+        let (highHour, highSuffix) = hour12(range.upperBound)
+        return lowSuffix == highSuffix
+            ? "\(lowHour) – \(highHour) \(lowSuffix)"
+            : "\(lowHour) \(lowSuffix) – \(highHour) \(highSuffix)"
+    }
+    
     private var learningStatusCard: some View {
         let tracked = trackedDays
         return VStack(alignment: .leading, spacing: 13) {
@@ -356,9 +1260,9 @@ struct InsightsView: View {
             sectionHeader("TONIGHT WINDOW", icon: "moon.stars.fill")
 
             HStack(spacing: 10) {
-                metricBox("Start", bedtimeStartText, CoachColor.green)
-                metricBox("End", bedtimeEndText, CoachColor.purpleDeep)
-                metricBox("Risk", overtiredRiskText, CoachColor.sun)
+                metricBox("Recommended Start Bedtime", bedtimeStartText, CoachColor.green)
+                metricBox("Recommended Latest Bedtime", bedtimeEndText, CoachColor.purpleDeep)
+                metricBox("Overtired Risk Hour", overtiredRiskText, CoachColor.sun)
             }
 
             if let night = orchestrator.snapshot?.night {
@@ -387,12 +1291,12 @@ struct InsightsView: View {
 
     // MARK: - Components
 
-    private enum TimelineState {
-        case done
-        case active
+    private enum ActionStatus {
         case upcoming
+        case readyNow
+        case completed
     }
-
+    
     private var confidenceRing: some View {
         let confidence = max(0, min(orchestrator.snapshot?.daytime.confidence ?? 0, 100))
         return ZStack {
@@ -418,84 +1322,6 @@ struct InsightsView: View {
             }
         }
         .frame(width: 78, height: 78)
-    }
-
-    private func timelineNode(
-        icon: String,
-        title: String,
-        timeText: String,
-        detail: String,
-        color: Color,
-        state: TimelineState
-    ) -> some View {
-        let isActive = state == .active
-        let opacity = state == .done ? 0.58 : 1.0
-
-        return VStack(spacing: 6) {
-            ZStack {
-                if isActive {
-                    Circle()
-                        .fill(color.opacity(0.16))
-                        .frame(width: 46, height: 46)
-                        .blur(radius: 7)
-                }
-                Circle()
-                    .fill(color.opacity(isActive ? 0.18 : 0.10))
-                    .frame(width: 34, height: 34)
-                Circle()
-                    .strokeBorder(
-                        color.opacity(state == .upcoming ? 0.35 : 0.58),
-                        style: state == .upcoming
-                            ? StrokeStyle(lineWidth: 1.4, dash: [3, 3])
-                            : StrokeStyle(lineWidth: isActive ? 1.8 : 1.0)
-                    )
-                    .frame(width: 34, height: 34)
-                Image(systemName: icon)
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(color.opacity(opacity))
-            }
-
-            Text(timeText)
-                .font(.system(size: 9, weight: .medium))
-                .foregroundStyle(Color(.tertiaryLabel).opacity(opacity))
-                .monospacedDigit()
-                .lineLimit(1)
-                .minimumScaleFactor(0.75)
-            Text(title)
-                .font(.system(size: 10, weight: .bold))
-                .foregroundStyle((isActive ? CoachColor.ink : CoachColor.muted).opacity(opacity))
-                .lineLimit(1)
-            Text(detail)
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(color.opacity(isActive ? 0.9 : opacity))
-                .lineLimit(1)
-        }
-        .frame(width: 58)
-    }
-
-    private func timelineSegment(label: String, dashed: Bool) -> some View {
-        VStack(spacing: 3) {
-            Rectangle()
-                .fill(Color.clear)
-                .frame(height: 1.5)
-                .overlay(
-                    Rectangle()
-                        .strokeBorder(
-                            CoachColor.purple.opacity(dashed ? 0.24 : 0.34),
-                            style: StrokeStyle(lineWidth: 1.5, dash: dashed ? [4, 3] : [])
-                        )
-                )
-
-            if !label.isEmpty {
-                Text(label)
-                    .font(.system(size: 8, weight: .bold))
-                    .foregroundStyle(Color(.tertiaryLabel))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.6)
-            }
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.top, 16)
     }
 
     private func metricPill(title: String, value: String, icon: String, color: Color) -> some View {
@@ -568,47 +1394,6 @@ struct InsightsView: View {
         }
     }
 
-    private func alertRow(_ alert: SleepAlert) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            iconTile(alertIcon(alert.severity), color: alertColor(alert.severity), size: 38)
-            VStack(alignment: .leading, spacing: 3) {
-                HStack {
-                    Text(alertTitle(alert.severity))
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(CoachColor.ink)
-                    Spacer()
-                    if let action = alert.actionTitle {
-                        Text(action)
-                            .font(.system(size: 9, weight: .bold))
-                            .foregroundStyle(CoachColor.purpleDeep)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 5)
-                            .background(Capsule().fill(CoachColor.purple.opacity(0.10)))
-                    }
-                }
-                Text(alert.message)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(CoachColor.muted)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .padding(.vertical, 2)
-    }
-
-    private var emptyStateRow: some View {
-        HStack(spacing: 10) {
-            iconTile("checkmark.seal.fill", color: CoachColor.green, size: 38)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("No urgent signals")
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(CoachColor.ink)
-                Text("Keep logging sleep to make coaching more personalized.")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(CoachColor.muted)
-            }
-        }
-    }
-
     private func numberedReason(index: Int, text: String) -> some View {
         HStack(alignment: .top, spacing: 10) {
             Text("\(index)")
@@ -621,24 +1406,6 @@ struct InsightsView: View {
                 .foregroundStyle(CoachColor.muted)
                 .fixedSize(horizontal: false, vertical: true)
         }
-    }
-
-    private func infoStrip(icon: String, text: String) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: icon)
-                .font(.system(size: 12, weight: .bold))
-                .foregroundStyle(CoachColor.purpleDeep)
-            Text(text)
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(CoachColor.muted)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(CoachColor.purple.opacity(0.055))
-        )
     }
 
     private func statusBadge(_ text: String, color: Color) -> some View {
@@ -724,20 +1491,27 @@ struct InsightsView: View {
         }
     }
 
+    private var learningProgressTitle: String {
+        orchestrator.snapshot?.phase == .personalized
+            ? "Your baby's rhythm is personalized"
+            : "Learning your baby's unique rhythm"
+    }
+
+    private func learningProgressDetail(remaining: Int) -> String {
+        if orchestrator.snapshot?.phase == .personalized {
+            return "Predictions now prioritize recent wake windows, naps, and bedtime patterns."
+        }
+        if remaining == 1 {
+            return "1 more day until predictions become fully personalized and even more accurate."
+        }
+        return "\(remaining) more days until predictions become fully personalized and even more accurate."
+    }
+
     private var primaryCoachLine: String {
         if let next = orchestrator.snapshot?.nextSleepKind, next == .bedtime {
             return "Tonight's window is \(bedtimeWindowText), with risk rising after \(overtiredRiskText)."
         }
         return "Best nap window: \(napWindowText). Confidence improves as logs become more complete."
-    }
-
-    private var tipTitle: String {
-        guard let readiness = orchestrator.snapshot?.readiness else {
-            return "Start with today's wake-up time"
-        }
-        return readiness.missingSignals.contains(.wakeTime)
-            ? "Start with today's wake-up time"
-            : "Follow the window, then follow the baby"
     }
 
     private var coachTipText: String {
@@ -811,32 +1585,6 @@ struct InsightsView: View {
         return "AAP-endorsed guidance checks total 24h sleep. Nap timing uses \(displayedBabyName)'s own data when enough logs exist."
     }
 
-    // MARK: - Helpers
-
-    private func alertIcon(_ severity: AlertSeverity) -> String {
-        switch severity {
-        case .info: return "info.circle.fill"
-        case .warning: return "exclamationmark.triangle.fill"
-        case .critical: return "exclamationmark.circle.fill"
-        }
-    }
-
-    private func alertColor(_ severity: AlertSeverity) -> Color {
-        switch severity {
-        case .info: return CoachColor.purple
-        case .warning: return CoachColor.sun
-        case .critical: return .red
-        }
-    }
-
-    private func alertTitle(_ severity: AlertSeverity) -> String {
-        switch severity {
-        case .info: return "Info"
-        case .warning: return "Heads up"
-        case .critical: return "Action needed"
-        }
-    }
-
     private func time(_ date: Date) -> String {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
@@ -846,6 +1594,60 @@ struct InsightsView: View {
 
     private func refresh() {
         orchestrator.generate()
+    }
+}
+
+private struct CoachBotArtwork: View {
+    var body: some View {
+        GeometryReader { geo in
+            let w = geo.size.width
+            let h = geo.size.height
+
+            ZStack {
+                Circle()
+                    .fill(CoachColor.purple.opacity(0.10))
+                    .frame(width: w * 0.90, height: w * 0.90)
+                    .position(x: w * 0.48, y: h * 0.45)
+
+                Capsule()
+                    .fill(CoachColor.purple.opacity(0.20))
+                    .frame(width: w * 0.92, height: h * 0.42)
+                    .rotationEffect(.degrees(-8))
+                    .position(x: w * 0.45, y: h * 0.78)
+
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(.white)
+                    .frame(width: w * 0.68, height: h * 0.55)
+                    .shadow(color: CoachColor.purpleDeep.opacity(0.11), radius: 10, x: 0, y: 5)
+                    .position(x: w * 0.50, y: h * 0.44)
+
+                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                    .fill(CoachColor.purpleDeep)
+                    .frame(width: w * 0.50, height: h * 0.29)
+                    .position(x: w * 0.50, y: h * 0.44)
+
+                HStack(spacing: w * 0.13) {
+                    Circle().fill(.white).frame(width: 5, height: 5)
+                    Circle().fill(.white).frame(width: 5, height: 5)
+                }
+                .position(x: w * 0.50, y: h * 0.43)
+
+                Capsule()
+                    .fill(.white.opacity(0.9))
+                    .frame(width: w * 0.18, height: 3)
+                    .position(x: w * 0.50, y: h * 0.52)
+
+                Capsule()
+                    .fill(CoachColor.purple.opacity(0.24))
+                    .frame(width: 5, height: h * 0.15)
+                    .position(x: w * 0.50, y: h * 0.12)
+
+                Circle()
+                    .fill(CoachColor.purple.opacity(0.35))
+                    .frame(width: 7, height: 7)
+                    .position(x: w * 0.50, y: h * 0.04)
+            }
+        }
     }
 }
 
@@ -886,5 +1688,6 @@ private enum CoachColor {
     static let purpleDeep = Color(red: 0.45, green: 0.35, blue: 0.92)
     static let sun = Color(red: 1.0, green: 0.68, blue: 0.12)
     static let green = Color(red: 0.16, green: 0.68, blue: 0.46)
+    static let red = Color(red: 0.95, green: 0.22, blue: 0.32)
     static let stroke = Color(.separator)
 }
