@@ -623,6 +623,21 @@ struct InsightsView: View {
         let offsetMinutesBeforeTarget: Int
     }
 
+    // MARK: - Personalization Model
+
+    private struct PersonalizationFactorResult: Identifiable {
+        let id: String
+        let title: String
+        let valueText: String
+        let deltaMinutes: Int
+    }
+
+    private struct PersonalizationBreakdown {
+        let baselineDate: Date
+        let finalDate: Date
+        let factors: [PersonalizationFactorResult]
+        let narrative: String
+    }
     private struct SignItem: Identifiable {
         let id = UUID()
         let icon: String
@@ -727,12 +742,354 @@ struct InsightsView: View {
             )
         ]
     }
+    
+    private func loadTodayRecordsForBreakdown() -> [SleepRecord] {
+        guard let data = UserDefaults.standard.data(forKey: "sleepRecords"),
+              let decoded = try? JSONDecoder().decode([SleepRecord].self, from: data)
+        else { return [] }
+        return decoded.filter { Calendar.current.isDateInToday($0.date) }
+    }
+
+    private func loadWakeRecordsForBreakdown() -> [DailyWakeRecord] {
+        guard let data = UserDefaults.standard.data(forKey: "dailyWakeRecords_v1"),
+              let decoded = try? JSONDecoder().decode([DailyWakeRecord].self, from: data)
+        else { return [] }
+        return decoded
+    }
+
+    private func expectedLastNapEndTime(profile: AgeBasedSleepProfile, napCount: Int, anchor: Date) -> Date {
+        guard napCount > 0 else { return anchor }
+        let wwCenter = (profile.wakeWindowRange.lowerBound + profile.wakeWindowRange.upperBound) / 2
+        let napDurationCenter = Int(Double(profile.maxSingleNapMinutes) * 0.75)
+        var cursor = anchor
+        for _ in 0..<napCount {
+            cursor = cursor.addingMinutes(wwCenter).addingMinutes(napDurationCenter)
+        }
+        return cursor
+    }
+
+    private func buildPersonalizationNarrative(
+        factors: [PersonalizationFactorResult],
+        babyName: String
+    ) -> String {
+        let totalDelta = factors.reduce(0) { $0 + $1.deltaMinutes }
+        let direction = totalDelta < 0 ? "earlier" : "later"
+
+        var clauses: [String] = []
+        if let napFactor = factors.first(where: { $0.id == "last_nap" }) {
+            clauses.append(napFactor.deltaMinutes >= 0
+                ? "the last nap ended later than usual"
+                : "the last nap ended earlier than usual")
+        }
+        if let deficitFactor = factors.first(where: { $0.id == "daytime_deficit" }), deficitFactor.deltaMinutes < 0 {
+            clauses.append("today's total daytime sleep was a bit short, raising overtired risk")
+        }
+
+        let intro = clauses.isEmpty
+            ? "Today's sleep signals were close to the baseline"
+            : "Today, " + clauses.joined(separator: ", and ")
+
+        guard totalDelta != 0 else {
+            return "\(intro), so bedtime stays right on the age-based baseline tonight."
+        }
+        return "\(intro), so bedtime is adjusted \(abs(totalDelta)) min \(direction) tonight to protect healthy sleep pressure."
+    }
+    
+    private enum PersonalizationCardState {
+        case notApplicable
+        case insufficientData(missingNaps: Int)
+        case ready(PersonalizationBreakdown)
+    }
+
+    private func personalizationCardState() -> PersonalizationCardState {
+        guard let snapshot = orchestrator.snapshot,
+              snapshot.nextSleepKind == .bedtime,
+              snapshot.ageMonths >= 4
+        else { return .notApplicable }
+
+        let profile = DefaultAgeBasedSleepProfileProvider().profile(forAgeMonths: snapshot.ageMonths)
+        let records = loadTodayRecordsForBreakdown()
+        let dayNaps = records.filter { $0.kind == .dayNap && !$0.isOngoing }
+
+        guard dayNaps.count >= profile.expectedNapCount.lowerBound else {
+            let missing = profile.expectedNapCount.lowerBound - dayNaps.count
+            return .insufficientData(missingNaps: missing)
+        }
+
+        guard let breakdown = personalizationBreakdown() else {
+            return .insufficientData(missingNaps: 0)
+        }
+
+        return .ready(breakdown)
+    }
+    private func personalizationEmptyContent(missingNaps: Int) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 7) {
+                ZStack {
+                    Circle()
+                        .fill(CoachColor.purpleDeep.opacity(0.12))
+                        .frame(width: 19, height: 19)
+                    Text("2")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(CoachColor.purpleDeep)
+                }
+                sectionHeader("PERSONALIZATION (HOW WE ADJUSTED)", icon: nil)
+            }
+
+            HStack(alignment: .top, spacing: 0) {
+                personalizationColumn(
+                    title: "AAP baseline", subtitle: "(bedtime range)",
+                    value: "–", delta: nil, isEndpoint: true
+                )
+                personalizationColumn(
+                    title: "Last nap ended at", subtitle: nil,
+                    value: "–", delta: nil, isEndpoint: false
+                )
+                personalizationColumn(
+                    title: "Today's daytime sleep", subtitle: nil,
+                    value: "–", delta: nil, isEndpoint: false
+                )
+                personalizationColumn(
+                    title: "Final recommendation", subtitle: nil,
+                    value: "–", delta: nil, isEndpoint: true
+                )
+            }
+            .opacity(0.45)
+
+            personalizationDotTrack(stepCount: 4)
+                .opacity(0.35)
+
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(Color(red: 0.85, green: 0.45, blue: 0.10))
+                    .padding(.top, 1)
+
+                Text(missingDataMessage(missingNaps: missingNaps))
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(CoachColor.ink.opacity(0.72))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(11)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .fill(Color(red: 1.0, green: 0.6, blue: 0.2).opacity(0.12))
+            )
+        }
+        .padding(15)
+        .background(premiumCardBackground())
+        .overlay(cardStroke(18))
+    }
+
+    private func missingDataMessage(missingNaps: Int) -> String {
+        if missingNaps > 0 {
+            return "Not enough naps logged today to personalize tonight's bedtime — \(missingNaps) more nap\(missingNaps == 1 ? "" : "s") needed. Showing this once today's sleep is fully logged."
+        }
+        return "Today's sleep data isn't complete enough yet to explain tonight's adjustment. Log the day's naps and wake time for a personalized breakdown."
+    }
+
+    private func personalizationBreakdown() -> PersonalizationBreakdown? {
+        guard let snapshot = orchestrator.snapshot,
+              snapshot.nextSleepKind == .bedtime,
+              snapshot.ageMonths >= 4
+        else { return nil }
+
+        let profile = DefaultAgeBasedSleepProfileProvider().profile(forAgeMonths: snapshot.ageMonths)
+        let calendar = Calendar.current
+        let now = Date()
+        let today = calendar.startOfDay(for: now)
+
+        let records = loadTodayRecordsForBreakdown()
+        let breaks = records.filter { $0.kind == .break }
+        let dayNaps = records.filter { $0.kind == .dayNap && !$0.isOngoing }.sorted { $0.date < $1.date }
+
+        // Gerçek NightPredictionAgent, yeterli nap tamamlanmadan personalize etmiyor
+        // (o durumda sabit "typical bedtime" fallback'i kullanıyor) — o zaman açıklayacak bir şey yok.
+        guard dayNaps.count >= profile.expectedNapCount.lowerBound,
+              let actualLastNap = dayNaps.last
+        else { return nil }
+
+        let actualLastNapEnd = actualLastNap.date.addingMinutes(actualLastNap.duration)
+
+        let typicalWakeHour = UserDefaults.standard.object(forKey: "typicalWakeHour") as? Double ?? 7.0
+        let typicalWakeMinute = UserDefaults.standard.object(forKey: "typicalWakeMinute") as? Double ?? 0.0
+        let typicalWake = calendar.date(
+            bySettingHour: Int(typicalWakeHour), minute: Int(typicalWakeMinute), second: 0, of: today
+        ) ?? today
+
+        // Baseline: bebek typical saatte uyansaydı ve yaş-minimumu kadar nap yapsaydı beklenen son nap bitişi
+        let baselineLastNapEnd = expectedLastNapEndTime(
+            profile: profile, napCount: profile.expectedNapCount.lowerBound, anchor: typicalWake
+        )
+
+        // OvertiredCalculator.bedtimeWindow ile BİREBİR aynı formül
+        let ewwMin = profile.eveningWakeWindow.lowerBound
+        let totalDaytime = dayNaps.reduce(0) { $0 + $1.totalMinutes(breaks: breaks) }
+        let daytimeDeficit = max(0, profile.daytimeSleepRange.lowerBound - totalDaytime)
+        let adjustment = daytimeDeficit / 3
+
+        let baselineDate = baselineLastNapEnd.addingMinutes(ewwMin)
+        // finalDate'i yeniden hesaplamıyoruz — zaten var olan tek doğruluk kaynağını kullanıyoruz
+        let finalDate = snapshot.night.optimalBedtimeStart
+
+        let napTimingDelta = Int(actualLastNapEnd.timeIntervalSince(baselineLastNapEnd) / 60)
+        let deficitDelta = -adjustment
+
+        var factors: [PersonalizationFactorResult] = []
+
+        if abs(napTimingDelta) >= 3 {
+            factors.append(PersonalizationFactorResult(
+                id: "last_nap",
+                title: "Last nap ended at",
+                valueText: time(actualLastNapEnd),
+                deltaMinutes: napTimingDelta
+            ))
+        }
+
+        if deficitDelta != 0 {
+            factors.append(PersonalizationFactorResult(
+                id: "daytime_deficit",
+                title: "Today's daytime sleep",
+                valueText: TimeFormat.minutes(totalDaytime),
+                deltaMinutes: deficitDelta
+            ))
+        }
+
+        guard !factors.isEmpty else { return nil }
+
+        let narrative = buildPersonalizationNarrative(factors: factors, babyName: displayedBabyName)
+
+        return PersonalizationBreakdown(
+            baselineDate: baselineDate,
+            finalDate: finalDate,
+            factors: factors,
+            narrative: narrative
+        )
+    }
+    private var personalizationCard: some View {
+        Group {
+            switch personalizationCardState() {
+            case .notApplicable:
+                EmptyView()
+            case .insufficientData(let missingNaps):
+                personalizationEmptyContent(missingNaps: missingNaps)
+            case .ready(let breakdown):
+                personalizationContent(breakdown)
+            }
+        }
+    }
+
+    private func personalizationContent(_ breakdown: PersonalizationBreakdown) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 7) {
+                ZStack {
+                    Circle()
+                        .fill(CoachColor.purpleDeep.opacity(0.12))
+                        .frame(width: 19, height: 19)
+                    Text("2")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(CoachColor.purpleDeep)
+                }
+                sectionHeader("PERSONALIZATION (HOW WE ADJUSTED)", icon: nil)
+            }
+
+            HStack(alignment: .top, spacing: 0) {
+                personalizationColumn(
+                    title: "AAP baseline", subtitle: "(bedtime range)",
+                    value: time(breakdown.baselineDate), delta: nil, isEndpoint: true
+                )
+                ForEach(breakdown.factors) { factor in
+                    personalizationColumn(
+                        title: factor.title, subtitle: nil,
+                        value: factor.valueText, delta: factor.deltaMinutes, isEndpoint: false
+                    )
+                }
+                personalizationColumn(
+                    title: "Final recommendation", subtitle: nil,
+                    value: time(breakdown.finalDate), delta: nil, isEndpoint: true
+                )
+            }
+
+            personalizationDotTrack(stepCount: breakdown.factors.count + 2)
+
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(CoachColor.purpleDeep.opacity(0.85))
+                    .padding(.top, 1)
+                Text(breakdown.narrative)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(CoachColor.ink.opacity(0.75))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(11)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .fill(CoachColor.purple.opacity(0.07))
+            )
+        }
+        .padding(15)
+        .background(premiumCardBackground())
+        .overlay(cardStroke(18))
+    }
+
+    private func personalizationColumn(
+        title: String, subtitle: String?, value: String, delta: Int?, isEndpoint: Bool
+    ) -> some View {
+        VStack(spacing: 4) {
+            Text(title)
+                .font(.system(size: 9.5, weight: .semibold))
+                .foregroundStyle(CoachColor.muted)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .minimumScaleFactor(0.85)
+
+            if let subtitle {
+                Text(subtitle)
+                    .font(.system(size: 8.5, weight: .medium))
+                    .foregroundStyle(CoachColor.muted.opacity(0.75))
+            }
+
+            Text(value)
+                .font(.system(size: isEndpoint ? 13 : 11.5, weight: .bold, design: .rounded))
+                .foregroundStyle(isEndpoint ? CoachColor.purpleDeep : CoachColor.ink)
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+
+            if let delta {
+                Text("\(delta >= 0 ? "+" : "–")\(abs(delta)) min")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(CoachColor.sun)
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func personalizationDotTrack(stepCount: Int) -> some View {
+        HStack(spacing: 0) {
+            ForEach(0..<stepCount, id: \.self) { index in
+                Circle()
+                    .stroke(CoachColor.purpleDeep, lineWidth: 1.5)
+                    .background(Circle().fill(Color(.systemBackground)))
+                    .frame(width: 8, height: 8)
+                if index < stepCount - 1 {
+                    Rectangle()
+                        .fill(CoachColor.purpleDeep.opacity(0.35))
+                        .frame(height: 1.5)
+                }
+            }
+        }
+    }
 
     // MARK: - Logic
 
     private var predictionLogicStack: some View {
         VStack(spacing: 12) {
             medicalEvidenceCard
+            personalizationCard
             learningStatusCard
             reasoningCard
             nightWindowCard

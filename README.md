@@ -22,18 +22,6 @@ SleepCoach.AI uses an agent-based prediction architecture where independent comp
 
 
 
-| Home Dashboard | AI Coach | History |
-|---|---|---|
-| `screenshots/home.png` | `screenshots/ai-coach.png` | `screenshots/history.png` |
-
-Recommended screenshots:
-
-- Home dashboard with next nap / bedtime card
-- Active night sleep state
-- Logged wake-up time state
-- AI Coach Today tab
-- AI Coach Logic tab
-- History daily detail screen
 
 ---
 
@@ -316,15 +304,6 @@ Current test coverage focuses on:
 - Sleep API behavior
 - Add record validation
 - Basic model construction
-
-Recommended next testing layers:
-
-- Wake-up logging and ongoing night sleep closure rules
-- Net sleep calculation with wake periods
-- Daytime prediction edge cases
-- Night sleep prediction windows
-- AI Coach snapshot generation
-- UI state tests for logged / missing wake-up states
 
 ---
 
