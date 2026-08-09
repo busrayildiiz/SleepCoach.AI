@@ -295,15 +295,6 @@ struct SleepListView: View {
         return min(94, 68 + boost + min(records.count, 9) * 2)
     }
 
-    private var recommendationWindow: String {
-        if let d = orchestrator.snapshot?.daytime {
-            return "\(shortTime(d.windowStart)) – \(shortTime(d.windowEnd))"
-        }
-        let start = Calendar.current.date(byAdding: .minute, value: -15, to: nextNapTime) ?? nextNapTime
-        let end   = Calendar.current.date(byAdding: .minute, value:  10, to: nextNapTime) ?? nextNapTime
-        return "\(shortTime(start)) – \(shortTime(end))"
-    }
-
     private var nextNapWindowStart: Date {
         orchestrator.snapshot?.daytime.windowStart
             ?? Calendar.current.date(byAdding: .minute, value: -15, to: nextNapTime)
@@ -410,8 +401,9 @@ struct SleepListView: View {
                 anchorEnd = napEnd
             }
 
+            let shouldPredictMoreNaps = orchestrator.snapshot?.nextSleepKind != .bedtime
             var predictedIndex = sortedNaps.count + 1
-            while items.count < 4 && predictedIndex <= expectedNapSlotCount {
+            while shouldPredictMoreNaps && items.count < 4 && predictedIndex <= expectedNapSlotCount {
                 let predictedStart = timelinePredictedNapStart(
                     napIndex: predictedIndex,
                     anchorEnd: anchorEnd
@@ -457,21 +449,13 @@ struct SleepListView: View {
         todaySleeps.filter { $0.kind == .dayNap }.count
     }
 
-    private var timelineTrackedDays: Int {
-        orchestrator.snapshot.map { max(0, 14 - $0.readiness.daysUntilPersonalized) } ?? 0
-    }
-
-    private var shouldUsePersonalizedTimeline: Bool {
-        timelineTrackedDays >= 14
-    }
-
     private var timelineProfile: AgeBasedSleepProfile {
         let ageMonths = orchestrator.snapshot?.ageMonths ?? 10
         return DefaultAgeBasedSleepProfileProvider().profile(forAgeMonths: ageMonths)
     }
 
     private var timelineExpectedNapDuration: Int {
-        if shouldUsePersonalizedTimeline, let minutes = orchestrator.snapshot?.daytime.expectedDurationMinutes {
+        if let minutes = orchestrator.snapshot?.daytime.expectedDurationMinutes {
             return minutes
         }
         let profile = timelineProfile
@@ -494,7 +478,8 @@ struct SleepListView: View {
     }
 
     private func timelineWakeWindow(forNapIndex index: Int) -> Int {
-        if shouldUsePersonalizedTimeline, let minutes = orchestrator.snapshot?.daytime.wakeWindowUsed {
+        if index == completedNapCountToday + 1,
+           let minutes = orchestrator.snapshot?.daytime.wakeWindowUsed {
             return minutes
         }
 
@@ -509,8 +494,7 @@ struct SleepListView: View {
     }
 
     private func timelinePredictedNapStart(napIndex: Int, anchorEnd: Date) -> Date {
-        if shouldUsePersonalizedTimeline,
-           napIndex == completedNapCountToday + 1,
+        if napIndex == completedNapCountToday + 1,
            let nextNap = orchestrator.snapshot?.daytime.nextNapTime {
             return nextNap
         }
@@ -518,7 +502,7 @@ struct SleepListView: View {
     }
 
     private func timelineBedtime(after anchorEnd: Date) -> Date {
-        if shouldUsePersonalizedTimeline, let bedtime = orchestrator.snapshot?.night.optimalBedtimeStart {
+        if let bedtime = orchestrator.snapshot?.night.optimalBedtimeStart {
             return bedtime
         }
 
@@ -1261,7 +1245,6 @@ struct SleepListView: View {
                 isBedtime:         isBedtime,
                 isOverdue:         isOverdue,
                 displayTime:       displayTime,
-                windowText:        recommendationWindow,
                 windowStart:       nextNapWindowStart,
                 windowEnd:         nextNapWindowEnd,
                 confidencePercent: confidencePercent,
@@ -1278,7 +1261,6 @@ struct SleepListView: View {
         let isBedtime:         Bool
         let isOverdue:         Bool
         let displayTime:       Date
-        let windowText:        String
         let windowStart:       Date
         let windowEnd:         Date
         let confidencePercent: Int
@@ -1490,7 +1472,7 @@ struct SleepListView: View {
         private var subLabelText: String {
             switch stateKind {
             case .nextNap:
-                return "Best start window: \(windowText)"
+                return "Recommended start around \(ampm(displayTime))"
             case .overdueNap:
                 return "Expected \(ampm(displayTime)) — may be overtired"
             case .bedtimeApproaching:

@@ -20,8 +20,7 @@
 		FA7232E52FDCCD6000647487 /* SleepCoachOrchestrator.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA7232E42FDCCD6000647487 /* SleepCoachOrchestrator.swift */; };
 		FA7232E72FDD8D6D00647487 /* SleepCoachLLMAgent.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA7232E62FDD8D6D00647487 /* SleepCoachLLMAgent.swift */; };
 		FA7232EA2FDD8F2B00647487 /* APIConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA7232E92FDD8F2B00647487 /* APIConfig.swift */; };
-		FA75A6072FE5CB9F008CA09C /* UnknownWakeTimeConfirmationSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA75A6062FE5CB9F008CA09C /* UnknownWakeTimeConfirmationSheet.swift */; };
-		FA75A60B2FE60670008CA09C /* DailyWakeRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA75A60A2FE60670008CA09C /* DailyWakeRecord.swift */; };
+		FA75A60D2FE60671008CA09C /* DailyWakeRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA75A60C2FE60671008CA09C /* DailyWakeRecord.swift */; };
 		FA91C5E02FDB46270089E1EE /* SleepMemoryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA91C5DF2FDB46270089E1EE /* SleepMemoryStore.swift */; };
 		FA91C5E62FDB47020089E1EE /* PredictAgent.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA91C5E52FDB47020089E1EE /* PredictAgent.swift */; };
 		FA91C5E82FDB472E0089E1EE /* InsightAgent.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA91C5E72FDB472E0089E1EE /* InsightAgent.swift */; };
@@ -86,8 +85,7 @@
 		FA7232E42FDCCD6000647487 /* SleepCoachOrchestrator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepCoachOrchestrator.swift; sourceTree = "<group>"; };
 		FA7232E62FDD8D6D00647487 /* SleepCoachLLMAgent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepCoachLLMAgent.swift; sourceTree = "<group>"; };
 		FA7232E92FDD8F2B00647487 /* APIConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIConfig.swift; sourceTree = "<group>"; };
-		FA75A6062FE5CB9F008CA09C /* UnknownWakeTimeConfirmationSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnknownWakeTimeConfirmationSheet.swift; sourceTree = "<group>"; };
-		FA75A60A2FE60670008CA09C /* DailyWakeRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DailyWakeRecord.swift; sourceTree = "<group>"; };
+		FA75A60C2FE60671008CA09C /* DailyWakeRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DailyWakeRecord.swift; sourceTree = "<group>"; };
 		FA91C5DF2FDB46270089E1EE /* SleepMemoryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepMemoryStore.swift; sourceTree = "<group>"; };
 		FA91C5E52FDB47020089E1EE /* PredictAgent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PredictAgent.swift; sourceTree = "<group>"; };
 		FA91C5E72FDB472E0089E1EE /* InsightAgent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InsightAgent.swift; sourceTree = "<group>"; };
@@ -210,8 +208,6 @@
 		FAEF10372F4E207F00E76FD4 = {
 			isa = PBXGroup;
 			children = (
-				FA75A60A2FE60670008CA09C /* DailyWakeRecord.swift */,
-				FA75A6062FE5CB9F008CA09C /* UnknownWakeTimeConfirmationSheet.swift */,
 				FAB4BB002FE204A200702F49 /* APIConfig.xcconfig */,
 				FAEF10422F4E207F00E76FD4 /* BabySleepTracker */,
 				FA5488D12FAEB964002BC18B /* BabySleepTrackerTests */,
@@ -259,6 +255,7 @@
 		FAEF105E2F4E269E00E76FD4 /* Models */ = {
 			isa = PBXGroup;
 			children = (
+				FA75A60C2FE60671008CA09C /* DailyWakeRecord.swift */,
 				FAEF106B2F4FA0C800E76FD4 /* SegmentKind.swift */,
 				FAEF105A2F4E210600E76FD4 /* SleepRecord.swift */,
 				FAEF10632F4E284100E76FD4 /* SleepKind.swift */,
@@ -438,12 +435,10 @@
 			files = (
 				FAEF106A2F4E5D0100E76FD4 /* DayDetailViewModel.swift in Sources */,
 				FA7232EA2FDD8F2B00647487 /* APIConfig.swift in Sources */,
-				FA75A60B2FE60670008CA09C /* DailyWakeRecord.swift in Sources */,
 				FA9DB0A52FD49E91000B9211 /* LandingView.swift in Sources */,
 				FA9DB09D2FD44997000B9211 /* InsightView.swift in Sources */,
 				FAEF10502F4E208000E76FD4 /* BabySleepTracker.xcdatamodeld in Sources */,
 				FA9DB09F2FD44B3F000B9211 /* SettingView.swift in Sources */,
-				FA75A6072FE5CB9F008CA09C /* UnknownWakeTimeConfirmationSheet.swift in Sources */,
 				FA91C5E82FDB472E0089E1EE /* InsightAgent.swift in Sources */,
 				FAB4BAFC2FE11F9800702F49 /* ProfileEditSheet.swift in Sources */,
 				FA5488CB2FAEB831002BC18B /* SleepAPI.swift in Sources */,
@@ -474,6 +469,7 @@
 				FAEF10642F4E284100E76FD4 /* SleepKind.swift in Sources */,
 				FAEF10702F530D3100E76FD4 /* SleepRecordRow.swift in Sources */,
 				FA91C5E62FDB47020089E1EE /* PredictAgent.swift in Sources */,
+				FA75A60D2FE60671008CA09C /* DailyWakeRecord.swift in Sources */,
 				FA7232E52FDCCD6000647487 /* SleepCoachOrchestrator.swift in Sources */,
 				FA91C5E02FDB46270089E1EE /* SleepMemoryStore.swift in Sources */,
 				FAEF10442F4E207F00E76FD4 /* BabySleepTrackerApp.swift in Sources */,
