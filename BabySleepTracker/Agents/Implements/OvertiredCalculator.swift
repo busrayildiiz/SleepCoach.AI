@@ -7,7 +7,7 @@ import Foundation
 
 // MARK: - Overtired Risk
 
-enum OvertiredRisk {
+enum OvertiredRisk: Equatable {
     case healthy           // WW içinde, sorun yok
     case slightlyTired     // WW'nin %90'ına gelindi, dikkat
     case moderate          // WW aşıldı, yakında yatırılmalı
@@ -203,7 +203,7 @@ final class OvertiredCalculator {
 
 // MARK: - Daily Sleep Status
 
-enum DailySleepStatus {
+enum DailySleepStatus: Equatable {
     case onTrack
     case below(deficitMinutes: Int)
     case above(excessMinutes: Int)
