@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		FA04E40B3030DF6700EFF932 /* Ruleenginecontracttests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA04E40A3030DF6700EFF932 /* Ruleenginecontracttests.swift */; };
 		FA5488CB2FAEB831002BC18B /* SleepAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA5488CA2FAEB831002BC18B /* SleepAPI.swift */; };
 		FA5488D32FAEB964002BC18B /* BabySleepTrackerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA5488D22FAEB964002BC18B /* BabySleepTrackerTests.swift */; };
 		FA5488DA2FAEB98D002BC18B /* AddRecorViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA5488D92FAEB98D002BC18B /* AddRecorViewModelTests.swift */; };
@@ -71,6 +72,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		FA04E40A3030DF6700EFF932 /* Ruleenginecontracttests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Ruleenginecontracttests.swift; sourceTree = "<group>"; };
 		FA5488CA2FAEB831002BC18B /* SleepAPI.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = SleepAPI.swift; sourceTree = "<group>"; };
 		FA5488D02FAEB964002BC18B /* BabySleepTrackerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BabySleepTrackerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		FA5488D22FAEB964002BC18B /* BabySleepTrackerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BabySleepTrackerTests.swift; sourceTree = "<group>"; };
@@ -158,6 +160,7 @@
 				FA5488D22FAEB964002BC18B /* BabySleepTrackerTests.swift */,
 				FA5488D92FAEB98D002BC18B /* AddRecorViewModelTests.swift */,
 				FA5488DB2FAEBBD4002BC18B /* SleepAPITests.swift */,
+				FA04E40A3030DF6700EFF932 /* Ruleenginecontracttests.swift */,
 			);
 			path = BabySleepTrackerTests;
 			sourceTree = "<group>";
@@ -434,6 +437,7 @@
 				FA5488DA2FAEB98D002BC18B /* AddRecorViewModelTests.swift in Sources */,
 				FA5488DC2FAEBBD4002BC18B /* SleepAPITests.swift in Sources */,
 				FA5488D32FAEB964002BC18B /* BabySleepTrackerTests.swift in Sources */,
+				FA04E40B3030DF6700EFF932 /* Ruleenginecontracttests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
