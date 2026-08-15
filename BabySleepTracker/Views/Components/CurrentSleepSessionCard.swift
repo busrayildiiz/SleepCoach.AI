@@ -4,6 +4,7 @@ struct CurrentSleepSessionCard: View {
     let ongoingNight: SleepRecord?
     let expectedWakeTime: Date
     let nextSleepTime: Date?
+    let isEstimated: Bool
 
     @State private var pulse = false
     @State private var starOpacity1: Double = 0.3
@@ -92,7 +93,8 @@ struct CurrentSleepSessionCard: View {
     }
 
     private var sleepStateTitle: String {
-        ongoingNight?.kind == .nightSleep ? "Sleeping tonight" : "Sleeping..."
+        if isEstimated { return "Likely sleeping" }
+        return ongoingNight?.kind == .nightSleep ? "Sleeping tonight" : "Sleeping..."
     }
 
     private var sleepProgress: Double {
@@ -149,7 +151,7 @@ struct CurrentSleepSessionCard: View {
                         .frame(width: 6, height: 6)
                         .scaleEffect(pulse ? 1.4 : 0.8)
                         .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: pulse)
-                    Text("LIVE SLEEP SESSION")
+                    Text(isEstimated ? "LIKELY NIGHT SLEEP" : "LIVE SLEEP SESSION")
                         .font(.system(size: 10, weight: .bold))
                         .foregroundStyle(t.label)
                         .tracking(0.5)
@@ -167,7 +169,7 @@ struct CurrentSleepSessionCard: View {
                     Image(systemName: "clock")
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(t.mutedText.opacity(0.75))
-                    Text("Started \(ampm(startTime)) · \(TimeFormat.minutes(elapsedMinutes)) asleep")
+                    Text("\(isEstimated ? "Expected start" : "Started") \(ampm(startTime)) · \(TimeFormat.minutes(elapsedMinutes)) asleep")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(t.mutedText)
                         .monospacedDigit()

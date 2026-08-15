@@ -508,7 +508,32 @@ struct AddRecordView: View {
             return cal.date(from: merged) ?? date
         }
 
-        private var startDateTime: Date { combine(date: selectedDate, time: startTime) }
+        private var startDateTime: Date {
+            let start = combine(date: selectedDate, time: startTime)
+            guard shouldTreatNightStartAsPreviousEvening(start) else { return start }
+            return Calendar.current.date(byAdding: .day, value: -1, to: start) ?? start
+        }
+
+        private func shouldTreatNightStartAsPreviousEvening(_ start: Date) -> Bool {
+            guard vm.kind == .nightSleep else { return false }
+            guard Calendar.current.isDateInToday(selectedDate) else { return false }
+            guard start > Date() else { return false }
+
+            let startHour = Calendar.current.component(.hour, from: start)
+            guard startHour >= 12 else { return false }
+
+            let wakeHour = UserDefaults.standard.object(forKey: "typicalWakeHour") as? Double ?? 7.0
+            let wakeMinute = UserDefaults.standard.object(forKey: "typicalWakeMinute") as? Double ?? 0.0
+            let today = Calendar.current.startOfDay(for: Date())
+            let typicalWake = Calendar.current.date(
+                bySettingHour: Int(wakeHour),
+                minute: Int(wakeMinute),
+                second: 0,
+                of: today
+            ) ?? today.addingTimeInterval(7 * 60 * 60)
+
+            return Date() < typicalWake
+        }
 
         private var endDateTime: Date {
             var end = combine(date: selectedDate, time: endTime)

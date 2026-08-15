@@ -189,9 +189,23 @@ struct SleepListView: View {
         wakeRecords.first { Calendar.current.isDateInToday($0.day) }
     }
 
+    private var hasPassedTypicalWakeTime: Bool {
+        let wakeHour = UserDefaults.standard.object(forKey: "typicalWakeHour") as? Double ?? 7.0
+        let wakeMinute = UserDefaults.standard.object(forKey: "typicalWakeMinute") as? Double ?? 0.0
+        let today = Calendar.current.startOfDay(for: Date())
+        let typicalWake = Calendar.current.date(
+            bySettingHour: Int(wakeHour),
+            minute: Int(wakeMinute),
+            second: 0,
+            of: today
+        ) ?? defaultWakeTime
+        return Date() >= typicalWake
+    }
+
     private var shouldShowTodayWakeUpPrompt: Bool {
         todayWakeRecord == nil &&
-        (!isStillInNightSleep || Calendar.current.component(.hour, from: Date()) >= 5)
+        activeSleepRecord == nil &&
+        hasPassedTypicalWakeTime
     }
 
     private var defaultWakeTime: Date {
@@ -830,7 +844,7 @@ struct SleepListView: View {
             HStack(spacing: 10) {
                 summaryCell(
                     icon: "moon.fill",
-                    iconColor: Color(red: 0.45, green: 0.35, blue: 0.92),
+                    iconColor: Color(red: 0.55, green: 0.48, blue: 0.96),
                     title: "Sleep",
                     value: todayTotal > 0 ? "\(todayTotal / 60)h \(todayTotal % 60)m" : "0m",
                     badge: goalBadgeText,
@@ -839,7 +853,7 @@ struct SleepListView: View {
 
                 summaryCell(
                     icon: "moon.zzz.fill",
-                    iconColor: Color(red: 0.45, green: 0.35, blue: 0.92),
+                    iconColor: Color(red: 0.26, green: 0.72, blue: 0.56),
                     title: "Naps",
                     value: "\(todayNapCount)",
                     badge: napBadgeText,
@@ -848,7 +862,7 @@ struct SleepListView: View {
 
                 summaryCell(
                     icon: "waveform.path",
-                    iconColor: Color(red: 0.45, green: 0.35, blue: 0.92),
+                    iconColor: Color(red: 1.0, green: 0.68, blue: 0.24),
                     title: "Rhythm",
                     value: TimeFormat.minutes(orchestrator.snapshot?.pattern?.averageWakeWindowMinutes ?? wakeWindowBeforeLatest),
                     badge: wakeWindowBadgeText,
@@ -960,11 +974,17 @@ struct SleepListView: View {
             // İkon
             ZStack {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(iconColor.opacity(0.10))
+                    .fill(
+                        LinearGradient(
+                            colors: [iconColor.opacity(0.16), iconColor.opacity(0.06)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
                     .frame(width: 32, height: 32)
                 Image(systemName: icon)
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(iconColor.opacity(0.7))
+                    .foregroundStyle(iconColor.opacity(0.78))
             }
 
             // Başlık
@@ -991,9 +1011,24 @@ struct SleepListView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
         .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color(.secondarySystemGroupedBackground))
+            ZStack {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Color(.systemBackground))
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [Color.white.opacity(0.0), iconColor.opacity(0.045)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+            }
         )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(iconColor.opacity(0.10), lineWidth: 1)
+        )
+        .shadow(color: iconColor.opacity(0.08), radius: 10, x: 0, y: 5)
     }
 
     // MARK: - Badge Helpers
@@ -1051,25 +1086,82 @@ struct SleepListView: View {
         return Color(.secondaryLabel)
     }
     
-    // Henüz typical wake time gelmediyse ve bugün hiç kayıt yoksa, bebek hâlâ gece uykusunda kabul edilir.
-    // Ayrıca herhangi bir devam eden uyku kaydı varsa kart canlı uyku durumuna geçer.
-    private var isStillInNightSleep: Bool {
-        // Case 1: Herhangi bir ongoing sleep kaydı var (dünden de olabilir)
-        if records.contains(where: { $0.kind != .break && $0.isOngoing }) {
-            return true
+    private var activeSleepRecord: SleepRecord? {
+        let record = records
+            .filter { $0.kind != .break && $0.isOngoing }
+            .sorted { $0.date > $1.date }
+            .first
+        return normalizedActiveSleepRecord(record)
+    }
+
+    private func normalizedActiveSleepRecord(_ record: SleepRecord?) -> SleepRecord? {
+        guard let record else { return nil }
+        guard record.kind == .nightSleep, record.date > Date(), hasPassedTypicalWakeTime == false else {
+            return record
         }
-        // Case 2: Hiç kayıt yok ve typicalWakeHour henüz gelmedi
-        guard todayWakeRecord == nil, todaySleeps.isEmpty else { return false }
-        let wakeHour   = UserDefaults.standard.object(forKey: "typicalWakeHour") as? Double ?? 7.0
+        guard Calendar.current.isDateInToday(record.date) else { return record }
+        guard let adjustedDate = Calendar.current.date(byAdding: .day, value: -1, to: record.date) else {
+            return record
+        }
+        return SleepRecord(
+            id: record.id,
+            date: adjustedDate,
+            duration: record.duration,
+            kind: record.kind,
+            parentNapID: record.parentNapID,
+            isOngoing: record.isOngoing,
+            createdAt: record.createdAt
+        )
+    }
+
+    private var inferredNightSleepStart: Date? {
+        let now = Date()
+        let bedHour = UserDefaults.standard.object(forKey: "typicalBedHour") as? Double ?? 19.0
+        let bedMinute = UserDefaults.standard.object(forKey: "typicalBedMinute") as? Double ?? 30.0
+        let wakeHour = UserDefaults.standard.object(forKey: "typicalWakeHour") as? Double ?? 7.0
         let wakeMinute = UserDefaults.standard.object(forKey: "typicalWakeMinute") as? Double ?? 0.0
-        let today = Calendar.current.startOfDay(for: Date())
-        let typicalWake = Calendar.current.date(
-            bySettingHour: Int(wakeHour), minute: Int(wakeMinute), second: 0, of: today
-        ) ?? Date()
-        return Date() < typicalWake
-        
-        
-    }    // MARK: next nap or bedtime?
+        let today = Calendar.current.startOfDay(for: now)
+        let todayBedtime = Calendar.current.date(
+            bySettingHour: Int(bedHour),
+            minute: Int(bedMinute),
+            second: 0,
+            of: today
+        ) ?? today.addingMinutes(19 * 60 + 30)
+        let todayWake = Calendar.current.date(
+            bySettingHour: Int(wakeHour),
+            minute: Int(wakeMinute),
+            second: 0,
+            of: today
+        ) ?? today.addingMinutes(7 * 60)
+
+        if now >= todayBedtime {
+            return todayBedtime
+        }
+
+        if now < todayWake {
+            return Calendar.current.date(byAdding: .day, value: -1, to: todayBedtime)
+        }
+
+        return nil
+    }
+
+    private var inferredNightSleepRecord: SleepRecord? {
+        guard activeSleepRecord == nil, let start = inferredNightSleepStart else { return nil }
+        return SleepRecord(
+            date: start,
+            duration: 0,
+            kind: .nightSleep,
+            isOngoing: true,
+            createdAt: start
+        )
+    }
+
+    // Live sleep card gerçek ongoing kayıt varsa canlı, default gece penceresindeysek tahmini gösterilir.
+    private var isStillInNightSleep: Bool {
+        activeSleepRecord != nil || inferredNightSleepRecord != nil
+    }
+
+    // MARK: next nap or bedtime?
 
     @ViewBuilder
     private var nextNapOrBedtimeCard: some View {
@@ -1083,20 +1175,9 @@ struct SleepListView: View {
     // MARK: - Live Night Sleep Card Wrapper
 
     private var stillSleepingCard: some View {
-        // 1. UserDefaults'tan ham kayıtları oku (Orchestrator'daki loader'ın aynısı)
-        let rawRecords: [SleepRecord] = {
-            guard let data = UserDefaults.standard.data(forKey: "sleepRecords"),
-                  let decoded = try? JSONDecoder().decode([SleepRecord].self, from: data)
-            else { return [] }
-            return decoded
-        }()
-        
-        // 2. Bu kayıtlar içinden aktif olan uykuyu filtrele
-        let ongoingSleep = rawRecords
-            .filter { $0.isOngoing && $0.kind != .break }
-            .sorted { $0.date > $1.date }
-            .first
-        
+        let ongoingSleep = activeSleepRecord ?? inferredNightSleepRecord
+        let isEstimated = activeSleepRecord == nil
+
         // Tahmini uyanma saati
         let expectedWake = expectedWakeTime(for: ongoingSleep)
         let nextSleepAfterCurrent = nextSleepTimeAfterCurrentSleep(
@@ -1107,7 +1188,8 @@ struct SleepListView: View {
         return CurrentSleepSessionCard(
             ongoingNight: ongoingSleep,
             expectedWakeTime: expectedWake,
-            nextSleepTime: nextSleepAfterCurrent
+            nextSleepTime: nextSleepAfterCurrent,
+            isEstimated: isEstimated
         )
     }
 
