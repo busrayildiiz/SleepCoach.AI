@@ -24,7 +24,6 @@
 		FA7232EA2FDD8F2B00647487 /* APIConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA7232E92FDD8F2B00647487 /* APIConfig.swift */; };
 		FA75A60D2FE60671008CA09C /* DailyWakeRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA75A60C2FE60671008CA09C /* DailyWakeRecord.swift */; };
 		FA91C5E02FDB46270089E1EE /* SleepMemoryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA91C5DF2FDB46270089E1EE /* SleepMemoryStore.swift */; };
-		FA91C5E62FDB47020089E1EE /* PredictAgent.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA91C5E52FDB47020089E1EE /* PredictAgent.swift */; };
 		FA91C5E82FDB472E0089E1EE /* InsightAgent.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA91C5E72FDB472E0089E1EE /* InsightAgent.swift */; };
 		FA9DB0992FD37964000B9211 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA9DB0982FD37964000B9211 /* ContentView.swift */; };
 		FA9DB09B2FD44532000B9211 /* HistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA9DB09A2FD44532000B9211 /* HistoryView.swift */; };
@@ -91,7 +90,6 @@
 		FA7232E92FDD8F2B00647487 /* APIConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIConfig.swift; sourceTree = "<group>"; };
 		FA75A60C2FE60671008CA09C /* DailyWakeRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DailyWakeRecord.swift; sourceTree = "<group>"; };
 		FA91C5DF2FDB46270089E1EE /* SleepMemoryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepMemoryStore.swift; sourceTree = "<group>"; };
-		FA91C5E52FDB47020089E1EE /* PredictAgent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PredictAgent.swift; sourceTree = "<group>"; };
 		FA91C5E72FDB472E0089E1EE /* InsightAgent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InsightAgent.swift; sourceTree = "<group>"; };
 		FA9DB0982FD37964000B9211 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		FA9DB09A2FD44532000B9211 /* HistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryView.swift; sourceTree = "<group>"; };
@@ -211,7 +209,6 @@
 				FA7232DC2FDCC80200647487 /* NapTransitionAgent.swift */,
 				FA7232DA2FDCC7AE00647487 /* OvertiredCalculator.swift */,
 				FA91C5E72FDB472E0089E1EE /* InsightAgent.swift */,
-				FA91C5E52FDB47020089E1EE /* PredictAgent.swift */,
 				FAD9C3712FDBD0CA00A7D9B7 /* PatternAgent.swift */,
 				FAAD82CD2FDBCDF100F0FBC6 /* PhaseAgent.swift */,
 			);
@@ -484,7 +481,6 @@
 				FA7232DD2FDCC80200647487 /* NapTransitionAgent.swift in Sources */,
 				FAEF10642F4E284100E76FD4 /* SleepKind.swift in Sources */,
 				FAEF10702F530D3100E76FD4 /* SleepRecordRow.swift in Sources */,
-				FA91C5E62FDB47020089E1EE /* PredictAgent.swift in Sources */,
 				FA75A60D2FE60671008CA09C /* DailyWakeRecord.swift in Sources */,
 				FA7232E52FDCCD6000647487 /* SleepCoachOrchestrator.swift in Sources */,
 				FA91C5E02FDB46270089E1EE /* SleepMemoryStore.swift in Sources */,

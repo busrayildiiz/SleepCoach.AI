@@ -176,17 +176,6 @@ struct CurrentSleepSessionCard: View {
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
                 }
-
-                HStack(spacing: 4) {
-                    Image(systemName: "sunrise.fill")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(t.accent)
-                    Text("Expected wake around \(ampm(expectedWakeTime))")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(t.accent)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
-                }
             }
             Spacer()
             sleepProgressRing(t)
@@ -225,21 +214,29 @@ struct CurrentSleepSessionCard: View {
         }
     }
 
+    // While the baby is asleep at night (or an inferred night-sleep window),
+    // the bottom row must show the expected wake time — never a daytime
+    // nap estimate, which is meaningless while still asleep overnight.
+    // "Next nap estimate" only applies while the ongoing session is a day nap.
+    private var isCurrentlyNightSleep: Bool {
+        ongoingNight == nil || ongoingNight?.kind == .nightSleep
+    }
+
     private func bottomRow(_ t: CardTheme) -> some View {
         HStack(spacing: 8) {
             HStack(spacing: 6) {
-                Image(systemName: "moon.zzz.fill")
+                Image(systemName: isCurrentlyNightSleep ? "sunrise.fill" : "moon.zzz.fill")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(t.mutedText.opacity(0.75))
 
-                Text(nextSleepTime == nil ? "Next sleep plan" : "Next nap estimate")
+                Text(isCurrentlyNightSleep ? "Expected wake" : (nextSleepTime == nil ? "Next sleep plan" : "Next nap estimate"))
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(t.mutedText)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
             }
             Spacer()
-            Text(nextSleepTime.map { ampm($0) } ?? "After wake")
+            Text(isCurrentlyNightSleep ? ampm(expectedWakeTime) : (nextSleepTime.map { ampm($0) } ?? "After wake"))
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(t.accent)
                 .lineLimit(1)
