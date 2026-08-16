@@ -173,3 +173,33 @@ final class DayDetailViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.formattedTotal, "0 h 0m")
     }
 }
+
+func testTotalMinutesNeverReturnsNegativeValue() {
+    let napID = UUID()
+
+    let nap = SleepRecord(
+        id: napID,
+        date: Date(),
+        duration: 20,
+        kind: .dayNap
+    )
+
+    let breakRecord = SleepRecord(
+        date: Date(),
+        duration: 30,
+        kind: .break,
+        parentNapID: napID
+    )
+
+    let viewModel = DayDetailViewModel(
+        records: [nap, breakRecord],
+        totalMinutes: 20
+    )
+
+    let result = viewModel.totalMinutes(
+        for: nap,
+        in: [nap, breakRecord]
+    )
+
+    XCTAssertEqual(result, 0)
+}

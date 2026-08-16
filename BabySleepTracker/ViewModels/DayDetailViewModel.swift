@@ -18,8 +18,7 @@ struct DayDetailViewModel {
             $0.parentNapID == nap.id && $0.kind == .break
         }
         let totalBreak = breaks.reduce(0) { $0 + $1.duration }
-        return nap.duration - totalBreak  
-    }
+        return max(0, nap.duration - totalBreak)    }
 
     var formattedTotal: String {
         let hours = totalMinutes / 60
