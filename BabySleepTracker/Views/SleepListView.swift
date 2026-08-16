@@ -691,6 +691,13 @@ struct SleepListView: View {
 
     // MARK: - Rhythm Learning Strip
 
+    // Only relevant while still in the learning window. Once the phase is
+    // personalized (14+ tracked days), predictions are already real and
+    // this strip has nothing meaningful left to communicate.
+    private var shouldShowRhythmLearningStrip: Bool {
+        orchestrator.snapshot?.phase != .personalized
+    }
+
     private var rhythmLearningDays: Int {
         orchestrator.snapshot.map { max(0, 14 - $0.readiness.daysUntilPersonalized) } ?? 0
     }
@@ -726,6 +733,14 @@ struct SleepListView: View {
     }
 
     private var rhythmLearningStrip: some View {
+        Group {
+            if shouldShowRhythmLearningStrip {
+                rhythmLearningStripContent
+            }
+        }
+    }
+
+    private var rhythmLearningStripContent: some View {
         HStack(spacing: 12) {
             ZStack {
                 Circle()
