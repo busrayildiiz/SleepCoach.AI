@@ -377,7 +377,9 @@ final class DefaultSleepCoachLLMAgent: SleepCoachLLMAgentProtocol {
 
     // MARK: - Response Parser
 
-    private func parseResponse(_ text: String) -> LLMCoachResponse? {
+    // internal (not private) so property tests can exercise the parser
+    // directly, without needing a live network call to the model.
+    func parseResponse(_ text: String) -> LLMCoachResponse? {
         // Gemini bazen JSON'u markdown içinde (```json ... ```) döndürebilir, temizliyoruz.
         let cleaned = text
             .trimmingCharacters(in: .whitespacesAndNewlines)

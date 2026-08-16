@@ -10,28 +10,28 @@ import Foundation
 // MARK: - CoachPhase
 
 enum CoachPhase: Equatable {
-    case tooYoung              // 0–4 ay: sadece güvenli uyku bilgisi
-    case baseline              // 4 ay+, 0 tracked day: yaşa göre genel tablolar
-    case learning(day: Int)    // 1–13. gün: veri toplama, blending başlar
-    case personalized          // 14+ gün: tam kişiselleştirme
+    case tooYoung              // 0–4 months: safe-sleep info only
+    case baseline              // 4+ months, 0 tracked days: general age-based tables
+    case learning(day: Int)    // days 1–13: data collection, blending begins
+    case personalized          // 14+ days: full personalization
 }
 
 // MARK: - MissingSignal
 
-enum MissingSignal: String, CaseIterable {
-    case wakeTime        = "Bugünün uyanma saatini ekle"
-    case nightSleep      = "Dün gecenin uykusunu logla"
-    case consecutiveDays = "Daha fazla ardışık gün takip et"
+enum MissingSignal: String, CaseIterable, Equatable {
+    case wakeTime        = "Add today's wake time"
+    case nightSleep      = "Log last night's sleep"
+    case consecutiveDays = "Track more consecutive days"
 }
 
 // MARK: - PhaseReadinessReport
 
 struct PhaseReadinessReport {
     let phase: CoachPhase
-    let daysUntilPersonalized: Int   // 0 ise zaten personalized
+    let daysUntilPersonalized: Int   // 0 if already personalized
     let missingSignals: [MissingSignal]
     let confidence: Int              // 0–100
-    let progressLabel: String        // UI'da gösterilecek kısa açıklama
+    let progressLabel: String        // short label shown in the UI
 }
 
 
@@ -42,7 +42,7 @@ final class DefaultPhaseAgent: PhaseAgentProtocol {
     // MARK: - currentPhase
 
     func currentPhase(ageMonths: Int, trackedDays: Int) -> CoachPhase {
-        // 4 aydan küçükse hiçbir pattern beklenmez
+        // No pattern is expected under 4 months
         guard ageMonths >= 4 else {
             return .tooYoung
         }
@@ -70,20 +70,20 @@ final class DefaultPhaseAgent: PhaseAgentProtocol {
 
         let daysUntilPersonalized: Int = {
             switch phase {
-            case .tooYoung:              return -1   // geçerli değil
+            case .tooYoung:              return -1   // not applicable
             case .baseline:              return 14
             case .learning(let day):     return 14 - day
             case .personalized:          return 0
             }
         }()
 
-        // Eksik sinyaller
+        // Missing signals
         var missing: [MissingSignal] = []
         if !hasTodayWakeTime        { missing.append(.wakeTime) }
         if !hasYesterdayNightSleep  { missing.append(.nightSleep) }
         if trackedDays < 3          { missing.append(.consecutiveDays) }
 
-        // Confidence hesabı
+        // Confidence calculation
         let confidence = calculateConfidence(
             phase: phase,
             trackedDays: trackedDays,
@@ -123,17 +123,17 @@ final class DefaultPhaseAgent: PhaseAgentProtocol {
         case .baseline:
             score = 40
         case .learning(let day):
-            // Her gün +3 puan, max 14 günde +42
+            // +3 points per day, up to +42 at day 14
             score = 40 + (day * 3)
         case .personalized:
             score = 82
         }
 
-        // Bonus sinyaller
+        // Bonus signals
         if hasTodayWakeTime       { score += 8 }
         if hasYesterdayNightSleep { score += 5 }
 
-        return min(score, 94)  // max 94 — hiçbir zaman %100 değil
+        return min(score, 94)  // max 94 — never claims 100%
     }
 
     private func makeProgressLabel(
@@ -143,14 +143,14 @@ final class DefaultPhaseAgent: PhaseAgentProtocol {
     ) -> String {
         switch phase {
         case .tooYoung:
-            return "4 aylıktan itibaren aktif olur"
+            return "Becomes active starting at 4 months"
         case .baseline:
-            return "İlk uykuyu logla — öğrenme başlasın"
+            return "Log the first sleep — let learning begin"
         case .learning(let day):
             let remaining = 14 - day
-            return "\(day)/14 gün • \(remaining) gün sonra kişiselleşiyor"
+            return "\(day)/14 days • personalizes in \(remaining) more days"
         case .personalized:
-            return "Kişiselleştirilmiş mod aktif ✓"
+            return "Personalized mode active ✓"
         }
     }
 }

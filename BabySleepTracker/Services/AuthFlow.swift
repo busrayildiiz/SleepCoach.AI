@@ -60,11 +60,10 @@ struct WelcomeView: View {
     let onContinue: () -> Void
 
     private var babyAge: String {
-        let birth = Date(timeIntervalSince1970: babyBirthDate)
-        let months = Calendar.current.dateComponents([.month], from: birth, to: Date()).month ?? 0
-        if months < 1 { return "Newborn" }
-        if months < 24 { return "\(months) months" }
-        return "\(months / 12) years"
+        BabyAgeFormatter.string(
+            from: Date(timeIntervalSince1970: babyBirthDate),
+            to: Date()
+        )
     }
 
     var body: some View {
@@ -157,6 +156,24 @@ struct WelcomeView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 14)
+    }
+}
+
+enum BabyAgeFormatter {
+    static func string(from birthDate: Date, to currentDate: Date) -> String {
+        let months = Calendar.current
+            .dateComponents([.month], from: birthDate, to: currentDate)
+            .month ?? 0
+
+        if months < 1 {
+            return "Newborn"
+        }
+
+        if months < 24 {
+            return "\(months) months"
+        }
+
+        return "\(months / 12) years"
     }
 }
 
