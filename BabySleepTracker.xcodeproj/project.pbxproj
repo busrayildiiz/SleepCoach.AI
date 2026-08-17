@@ -23,6 +23,10 @@
 		FA41DF5C303264BF005F63A3 /* NapTransitionAgentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA41DF5B303264BF005F63A3 /* NapTransitionAgentTests.swift */; };
 		FA41DF5E303380BF005F63A3 /* DaytimePredictionAgentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA41DF5D303380BF005F63A3 /* DaytimePredictionAgentTests.swift */; };
 		FA41DF60303382D9005F63A3 /* OvertiredCalculatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA41DF5F303382D9005F63A3 /* OvertiredCalculatorTests.swift */; };
+		FA41DF623033849F005F63A3 /* NightPredictionAgentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA41DF613033849F005F63A3 /* NightPredictionAgentTests.swift */; };
+		FA41DF64303396B4005F63A3 /* BabyAgeCalculator.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA41DF63303396B4005F63A3 /* BabyAgeCalculator.swift */; };
+		FA41DF663033B1DD005F63A3 /* Patternagentcontracttests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA41DF653033B1DD005F63A3 /* Patternagentcontracttests.swift */; };
+		FA41DF683033B5D4005F63A3 /* BabyAgeCalculatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA41DF673033B5D4005F63A3 /* BabyAgeCalculatorTests.swift */; };
 		FA5488CB2FAEB831002BC18B /* SleepAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA5488CA2FAEB831002BC18B /* SleepAPI.swift */; };
 		FA5488D32FAEB964002BC18B /* BabySleepTrackerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA5488D22FAEB964002BC18B /* BabySleepTrackerTests.swift */; };
 		FA5488DA2FAEB98D002BC18B /* AddRecorViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA5488D92FAEB98D002BC18B /* AddRecorViewModelTests.swift */; };
@@ -102,6 +106,10 @@
 		FA41DF5B303264BF005F63A3 /* NapTransitionAgentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NapTransitionAgentTests.swift; sourceTree = "<group>"; };
 		FA41DF5D303380BF005F63A3 /* DaytimePredictionAgentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaytimePredictionAgentTests.swift; sourceTree = "<group>"; };
 		FA41DF5F303382D9005F63A3 /* OvertiredCalculatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OvertiredCalculatorTests.swift; sourceTree = "<group>"; };
+		FA41DF613033849F005F63A3 /* NightPredictionAgentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NightPredictionAgentTests.swift; sourceTree = "<group>"; };
+		FA41DF63303396B4005F63A3 /* BabyAgeCalculator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BabyAgeCalculator.swift; sourceTree = "<group>"; };
+		FA41DF653033B1DD005F63A3 /* Patternagentcontracttests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Patternagentcontracttests.swift; sourceTree = "<group>"; };
+		FA41DF673033B5D4005F63A3 /* BabyAgeCalculatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BabyAgeCalculatorTests.swift; sourceTree = "<group>"; };
 		FA5488CA2FAEB831002BC18B /* SleepAPI.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = SleepAPI.swift; sourceTree = "<group>"; };
 		FA5488D02FAEB964002BC18B /* BabySleepTrackerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BabySleepTrackerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		FA5488D22FAEB964002BC18B /* BabySleepTrackerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BabySleepTrackerTests.swift; sourceTree = "<group>"; };
@@ -204,6 +212,9 @@
 				FA41DF5B303264BF005F63A3 /* NapTransitionAgentTests.swift */,
 				FA41DF5D303380BF005F63A3 /* DaytimePredictionAgentTests.swift */,
 				FA41DF5F303382D9005F63A3 /* OvertiredCalculatorTests.swift */,
+				FA41DF613033849F005F63A3 /* NightPredictionAgentTests.swift */,
+				FA41DF653033B1DD005F63A3 /* Patternagentcontracttests.swift */,
+				FA41DF673033B5D4005F63A3 /* BabyAgeCalculatorTests.swift */,
 			);
 			path = BabySleepTrackerTests;
 			sourceTree = "<group>";
@@ -253,6 +264,7 @@
 				FA91C5E72FDB472E0089E1EE /* InsightAgent.swift */,
 				FAD9C3712FDBD0CA00A7D9B7 /* PatternAgent.swift */,
 				FAAD82CD2FDBCDF100F0FBC6 /* PhaseAgent.swift */,
+				FA41DF63303396B4005F63A3 /* BabyAgeCalculator.swift */,
 			);
 			path = Implements;
 			sourceTree = "<group>";
@@ -479,6 +491,7 @@
 				FA04E41D30325A6900EFF932 /* TimeFormatTests.swift in Sources */,
 				FA04E41B303258E800EFF932 /* SegmentKindTests.swift in Sources */,
 				FA04E4133032501500EFF932 /* DayDetailViewModelTests.swift in Sources */,
+				FA41DF623033849F005F63A3 /* NightPredictionAgentTests.swift in Sources */,
 				FA04E41F30325C8700EFF932 /* AgeBasedSleepProfileTests.swift in Sources */,
 				FA41DF5E303380BF005F63A3 /* DaytimePredictionAgentTests.swift in Sources */,
 				FA5488DA2FAEB98D002BC18B /* AddRecorViewModelTests.swift in Sources */,
@@ -490,10 +503,12 @@
 				FA41DF5A30326396005F63A3 /* InsightAgentTests.swift in Sources */,
 				FA41DF5C303264BF005F63A3 /* NapTransitionAgentTests.swift in Sources */,
 				FA41DF5830326067005F63A3 /* SleepCoachOrchestratorTests.swift in Sources */,
+				FA41DF683033B5D4005F63A3 /* BabyAgeCalculatorTests.swift in Sources */,
 				FA04E4193032585000EFF932 /* DailyWakeRecordTests.swift in Sources */,
 				FA5488DC2FAEBBD4002BC18B /* SleepAPITests.swift in Sources */,
 				FA5488D32FAEB964002BC18B /* BabySleepTrackerTests.swift in Sources */,
 				FA41DF60303382D9005F63A3 /* OvertiredCalculatorTests.swift in Sources */,
+				FA41DF663033B1DD005F63A3 /* Patternagentcontracttests.swift in Sources */,
 				FA04E40B3030DF6700EFF932 /* Ruleenginecontracttests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -505,6 +520,7 @@
 				FAEF106A2F4E5D0100E76FD4 /* DayDetailViewModel.swift in Sources */,
 				FA7232EA2FDD8F2B00647487 /* APIConfig.swift in Sources */,
 				FA9DB0A52FD49E91000B9211 /* LandingView.swift in Sources */,
+				FA41DF64303396B4005F63A3 /* BabyAgeCalculator.swift in Sources */,
 				FA9DB09D2FD44997000B9211 /* InsightView.swift in Sources */,
 				FAEF10502F4E208000E76FD4 /* BabySleepTracker.xcdatamodeld in Sources */,
 				FA9DB09F2FD44B3F000B9211 /* SettingView.swift in Sources */,

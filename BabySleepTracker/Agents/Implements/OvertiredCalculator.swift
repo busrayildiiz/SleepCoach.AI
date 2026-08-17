@@ -109,6 +109,17 @@ final class OvertiredCalculator {
         let adjustedIdeal    = ideal.addingMinutes(-adjustment)
         let adjustedLatest   = latest   // latest'i öteleme — bu sınır sabit
 
+        // Plausibility guard: a bedtime prediction that lands before noon or
+        // rolls into the next calendar day is never a valid answer, no
+        // matter what the upstream math produced (wrong age profile match,
+        // a stale last-nap timestamp, an outsized deficit adjustment, etc).
+        // Clamp back into the profile's own bedtime range on the same day
+        // as the last nap rather than surfacing a nonsense time like 5 AM.
+        let clampedEarliest = clampToPlausibleBedtime(adjustedEarliest, referenceDay: lastNapEndTime, profile: profile)
+        let clampedIdeal     = clampToPlausibleBedtime(adjustedIdeal, referenceDay: lastNapEndTime, profile: profile)
+        let clampedLatest    = clampToPlausibleBedtime(adjustedLatest, referenceDay: lastNapEndTime, profile: profile)
+        let clampedCritical  = clampToPlausibleBedtime(critical, referenceDay: lastNapEndTime, profile: profile)
+
         // Şu anki risk
         let risk = overtiredRisk(
             awakeSinceDate: lastNapEndTime,
@@ -128,13 +139,38 @@ final class OvertiredCalculator {
         )
 
         return BedtimeWindow(
-            earliest:     adjustedEarliest,
-            ideal:        adjustedIdeal,
-            latest:       adjustedLatest,
-            overtiredRisk: critical,
+            earliest:     clampedEarliest,
+            ideal:        clampedIdeal,
+            latest:       clampedLatest,
+            overtiredRisk: clampedCritical,
             risk:         risk,
             reasoning:    reasoning
         )
+    }
+
+    // MARK: - Plausibility Clamp
+
+    /// Keeps a computed bedtime within a physically sane window on the same
+    /// day as the reference (last nap end). Bounds are the profile's own
+    /// bedtime range, widened by a couple of hours on each side to allow
+    /// for legitimate early/late days without allowing clearly-broken
+    /// results like an early-morning hour to slip through.
+    private func clampToPlausibleBedtime(
+        _ date: Date,
+        referenceDay: Date,
+        profile: AgeBasedSleepProfile
+    ) -> Date {
+        let day = calendar.startOfDay(for: referenceDay)
+
+        let floorHour = max(12, profile.bedtimeHourRange.lowerBound - 2)
+        let ceilHour  = min(23, profile.bedtimeHourRange.upperBound + 4)
+
+        let floor = calendar.date(bySettingHour: floorHour, minute: 0, second: 0, of: day) ?? day
+        let ceil  = calendar.date(bySettingHour: ceilHour, minute: 59, second: 0, of: day) ?? day
+
+        if date < floor { return floor }
+        if date > ceil  { return ceil }
+        return date
     }
 
     // MARK: - Last Nap Cutoff

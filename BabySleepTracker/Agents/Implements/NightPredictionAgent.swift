@@ -68,13 +68,16 @@ final class DefaultNightPredictionAgent: NightPredictionAgentProtocol {
             .filter { $0.kind == .dayNap }
             .sorted { $0.date < $1.date }
 
-        // Yeterli nap tamamlandıysa gerçek son naptan hesapla,
-        // aksi halde fallback (typicalBedtime veya profil saati)
+        // Use the real last-nap-end whenever at least one nap was actually
+        // completed today. Waiting for the profile's full expected nap
+        // count (e.g. 2 for a 9-11mo baby) throws away real, known data on
+        // transition days or short-nap days and falls back to a generic
+        // typical-bedtime guess instead — which is strictly worse than
+        // using what we actually observed.
         let completedNapCount = dayNaps.filter { !$0.isOngoing }.count
-        let minExpectedNaps   = profile.expectedNapCount.lowerBound
 
         let lastNapEnd: Date?
-        if completedNapCount >= minExpectedNaps {
+        if completedNapCount >= 1 {
             lastNapEnd = dayNaps.last(where: { !$0.isOngoing }).map { nap in
                 calendar.date(byAdding: .minute, value: nap.duration, to: nap.date) ?? nap.date
             }

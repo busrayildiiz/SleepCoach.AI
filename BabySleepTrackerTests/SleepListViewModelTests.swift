@@ -350,9 +350,7 @@ final class SleepListViewModelTests: XCTestCase {
             api: api
         )
 
-        viewModel.load()
-
-        try await Task.sleep(nanoseconds: 10_000_000)
+        await viewModel.loadAsync()
 
         XCTAssertEqual(
             viewModel.records.map(\.id),

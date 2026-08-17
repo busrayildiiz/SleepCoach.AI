@@ -11,7 +11,7 @@ enum NextSleepKind {
     case nap
     case bedtime
 }
-enum DataQuality {
+enum DataQuality: Equatable {
     case poor
     case fair
     case good
@@ -86,6 +86,7 @@ final class SleepCoachOrchestrator: ObservableObject {
     private let overtiredCalc:   OvertiredCalculator
     private let profileProvider: AgeBasedSleepProfileProviding
     private let llmAgent: SleepCoachLLMAgentProtocol
+    private let ageCalculator: BabyAgeCalculating
 
     
     // MARK: - Singleton
@@ -103,7 +104,9 @@ final class SleepCoachOrchestrator: ObservableObject {
            insightAgent:    InsightAgentProtocol     = DefaultInsightAgent(),
            llmAgent:        SleepCoachLLMAgentProtocol     = DefaultSleepCoachLLMAgent(),
            overtiredCalc:   OvertiredCalculator      = OvertiredCalculator(),
-           profileProvider: AgeBasedSleepProfileProviding  = DefaultAgeBasedSleepProfileProvider()
+           profileProvider: AgeBasedSleepProfileProviding  = DefaultAgeBasedSleepProfileProvider(),
+           ageCalculator: BabyAgeCalculating = DefaultBabyAgeCalculator()
+
        ) {
            self.phaseAgent      = phaseAgent
            self.patternAgent    = patternAgent
@@ -114,6 +117,8 @@ final class SleepCoachOrchestrator: ObservableObject {
            self.llmAgent        = llmAgent
            self.overtiredCalc   = overtiredCalc
            self.profileProvider = profileProvider
+           self.ageCalculator = ageCalculator
+
        }
 
        // MARK: - Generate Snapshot
@@ -134,8 +139,17 @@ final class SleepCoachOrchestrator: ObservableObject {
         }
 
         let wakeRecords = loadWakeRecords()
-        let babyName    = loadBabyName()
-        let ageMonths   = loadAgeMonths(at: now)
+        let babyName = loadBabyName()
+
+        guard let birthDate = loadBabyBirthDate() else {
+            snapshot = nil
+            return
+        }
+
+        let ageMonths = ageCalculator.ageInMonths(
+            birthDate: birthDate,
+            on: now
+        )
 
         // 2. Temel metrikler
         let breaks    = records.filter { $0.kind == .break }
@@ -371,25 +385,16 @@ final class SleepCoachOrchestrator: ObservableObject {
                 return name.isEmpty ? "Baby" : name
             }
 
-    private func loadAgeMonths(at now: Date = Date()) -> Int {
-        let birthDate: Date?
-        
-        // UserDefaults'tan doğum tarihini güvenli bir şekilde çözüyoruz
-        if let saved = UserDefaults.standard.object(forKey: "babyBirthDate") as? Date {
-            birthDate = saved
-        } else if let seconds = UserDefaults.standard.object(forKey: "babyBirthDate") as? Double {
-            birthDate = Date(timeIntervalSince1970: seconds)
-        } else {
-            birthDate = nil
+    private func loadBabyBirthDate() -> Date? {
+        if let date = UserDefaults.standard.object(forKey: "babyBirthDate") as? Date {
+            return date
         }
-        
-        guard let babyBirthDate = birthDate else { return 0 }
-        
-        // Takvim sapmalarını (artık yıl/ay) engelleyen kesin hesaplama
-        let calendar = Calendar.current
-        let components = calendar.dateComponents([.month], from: babyBirthDate, to: now)
-        
-        return components.month ?? 0
+
+        if let timestamp = UserDefaults.standard.object(forKey: "babyBirthDate") as? Double {
+            return Date(timeIntervalSince1970: timestamp)
+        }
+
+        return nil
     }
 
             private func countTrackedDays(
