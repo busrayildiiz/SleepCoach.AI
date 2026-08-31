@@ -38,7 +38,12 @@ struct SleepTimelineCalculator {
             anchorEnd = end
         }
 
-        let expectedCount = snapshot?.ageMonths.map { profileProvider.profile(forAgeMonths: $0).expectedNapCount.upperBound } ?? 2
+        let expectedCount: Int
+        if let ageMonths = snapshot?.ageMonths {
+            expectedCount = profileProvider.profile(forAgeMonths: ageMonths).expectedNapCount.upperBound
+        } else {
+            expectedCount = 2
+        }
         var predictedIndex = naps.count + 1
         while snapshot?.nextSleepKind != .bedtime && items.count < 4 && predictedIndex <= expectedCount {
             let start = predictedNapStart(index: predictedIndex, anchorEnd: anchorEnd)
