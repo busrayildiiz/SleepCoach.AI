@@ -88,7 +88,7 @@ struct SleepListView: View {
     @AppStorage("parentName") private var parentName: String = ""
 
     // MARK: - Persistence
-    
+
     private func upsert(_ record: SleepRecord) {
         if let index = records.firstIndex(where: { $0.id == record.id }) {
             records[index] = record
@@ -373,165 +373,35 @@ struct SleepListView: View {
             return profile.expectedNapCount.upperBound
         }
 
-        private var timelineItems: [TimelineItem] {
-            let now = Date()
-            let sortedNaps = todaySleeps
-                .filter { $0.kind == .dayNap }
-                .sorted { $0.date < $1.date }
-            let wakeUp = timelineWakeAnchor(sortedNaps: sortedNaps)
-            let expectedDuration = timelineExpectedNapDuration
-            var items: [TimelineItem] = [
-                TimelineItem(
-                    icon: "sun.max.fill",
-                    iconColor: Color(red: 1.0, green: 0.68, blue: 0.20),
-                    time: shortTime(wakeUp),
-                    title: "Wake up",
-                    detail: timelineWakeDetail,
-                    visualState: wakeUp <= now ? .completed : .upcoming,
-                    isActive: false,
-                    isFuture: wakeUp > now
-                )
-            ]
-
-            var anchorEnd = wakeUp
-            for (index, nap) in sortedNaps.enumerated() {
-                guard items.count < 4 else { return items }
-                let napEnd = Calendar.current.date(byAdding: .minute, value: nap.duration, to: nap.date) ?? nap.date
-                let awakeBeforeNap = max(0, Int(nap.date.timeIntervalSince(anchorEnd) / 60))
-                let isActiveNap = nap.isOngoing || (nap.date <= now && napEnd > now)
-                let state: TimelineItem.VisualState = isActiveNap ? .active : (napEnd <= now ? .completed : .upcoming)
-
-                items.append(TimelineItem(
-                    icon: "moon.fill",
-                    iconColor: timelineNapColor(state: state),
-                    time: shortTime(nap.date),
-                    title: "Nap \(index + 1)",
-                    detail: nap.isOngoing ? "Sleeping now" : TimeFormat.minutes(nap.totalMinutes(breaks: breaks)),
-                    visualState: state,
-                    isActive: isActiveNap,
-                    isFuture: nap.date > now,
-                    awakeBeforeMinutes: awakeBeforeNap
-                ))
-                anchorEnd = napEnd
+    private var timelineItems: [TimelineItem] {
+        let calculator = SleepTimelineCalculator(records: todayRecords, wakeRecord: todayWakeRecord, snapshot: orchestrator.snapshot, defaultWakeTime: defaultWakeTime, now: Date(), profileProvider: DefaultAgeBasedSleepProfileProvider())
+        return calculator.calculate().map { item in
+            let state: TimelineItem.VisualState = {
+                switch item.visualState { case .completed: return .completed; case .active: return .active; case .upcoming: return .upcoming }
+            }()
+            let icon: String
+            let color: Color
+            let title: String
+            let detail: String
+            switch item.kind {
+            case .wake:
+                icon = "sun.max.fill"
+                color = Color(red: 1.0, green: 0.68, blue: 0.20)
+                title = "Wake up"
+                detail = todayWakeRecord == nil ? "Default wake" : "Logged"
+            case .nap(let index):
+                icon = "moon.fill"
+                color = timelineNapColor(state: state)
+                title = "Nap \(index)"
+                detail = item.isOngoing ? "Sleeping now" : TimeFormat.minutes(item.durationMinutes ?? 0)
+            case .bedtime:
+                icon = "moon.stars.fill"
+                color = Color.sleepPurpleDeep
+                title = "Bedtime"
+                detail = "Night sleep"
             }
-
-            let shouldPredictMoreNaps = orchestrator.snapshot?.nextSleepKind != .bedtime
-            var predictedIndex = sortedNaps.count + 1
-            while shouldPredictMoreNaps && items.count < 4 && predictedIndex <= expectedNapSlotCount {
-                let predictedStart = timelinePredictedNapStart(
-                    napIndex: predictedIndex,
-                    anchorEnd: anchorEnd
-                )
-                let awakeBeforeNap = max(0, Int(predictedStart.timeIntervalSince(anchorEnd) / 60))
-
-                items.append(TimelineItem(
-                    icon: "moon.fill",
-                    iconColor: timelineNapColor(state: .upcoming),
-                    time: shortTime(predictedStart),
-                    title: "Nap \(predictedIndex)",
-                    detail: "~\(TimeFormat.minutes(expectedDuration))",
-                    visualState: .upcoming,
-                    isActive: false,
-                    isFuture: true,
-                    awakeBeforeMinutes: awakeBeforeNap
-                ))
-
-                anchorEnd = predictedStart.addingMinutes(expectedDuration)
-                predictedIndex += 1
-            }
-
-            if items.count < 4 {
-                let bedtime = timelineBedtime(after: anchorEnd)
-                let awakeBeforeBed = max(0, Int(bedtime.timeIntervalSince(anchorEnd) / 60))
-                items.append(TimelineItem(
-                    icon: "moon.stars.fill",
-                    iconColor: Color.sleepPurpleDeep,
-                    time: shortTime(bedtime),
-                    title: "Bedtime",
-                    detail: "Night sleep",
-                    visualState: bedtime <= now ? .completed : .upcoming,
-                    isActive: false,
-                    isFuture: bedtime > now,
-                    awakeBeforeMinutes: awakeBeforeBed
-                ))
-            }
-
-            return items
+            return TimelineItem(icon: icon, iconColor: color, time: shortTime(item.time), title: title, detail: detail, visualState: state, isActive: item.isActive, isFuture: item.isFuture, awakeBeforeMinutes: item.awakeBeforeMinutes)
         }
-    
-    private var completedNapCountToday: Int {
-        todaySleeps.filter { $0.kind == .dayNap }.count
-    }
-
-    private var timelineProfile: AgeBasedSleepProfile {
-        let ageMonths = orchestrator.snapshot?.ageMonths ?? 10
-        return DefaultAgeBasedSleepProfileProvider().profile(forAgeMonths: ageMonths)
-    }
-
-    private var timelineExpectedNapDuration: Int {
-        if let minutes = orchestrator.snapshot?.daytime.expectedDurationMinutes {
-            return minutes
-        }
-        let profile = timelineProfile
-        let target = profile.daytimeSleepRange.lowerBound / max(profile.expectedNapCount.upperBound, 1)
-        return min(profile.maxSingleNapMinutes, max(45, target))
-    }
-
-    private var timelineWakeDetail: String {
-        if todayWakeRecord != nil { return "Logged" }
-        return "Default wake"
-    }
-
-    private func timelineWakeAnchor(sortedNaps: [SleepRecord]) -> Date {
-        if let wake = todayWakeRecord?.wakeTime { return wake }
-        if let firstNap = sortedNaps.first {
-            let wakeWindow = timelineWakeWindow(forNapIndex: 1)
-            return Calendar.current.date(byAdding: .minute, value: -wakeWindow, to: firstNap.date) ?? firstNap.date
-        }
-        return defaultWakeTime
-    }
-
-    private func timelineWakeWindow(forNapIndex index: Int) -> Int {
-        if index == completedNapCountToday + 1,
-           let minutes = orchestrator.snapshot?.daytime.wakeWindowUsed {
-            return minutes
-        }
-
-        let profile = timelineProfile
-        if index <= 1 {
-            return (profile.morningWakeWindow.lowerBound + profile.morningWakeWindow.upperBound) / 2
-        }
-        if index >= profile.expectedNapCount.upperBound + 1 {
-            return (profile.eveningWakeWindow.lowerBound + profile.eveningWakeWindow.upperBound) / 2
-        }
-        return (profile.wakeWindowRange.lowerBound + profile.wakeWindowRange.upperBound) / 2
-    }
-
-    private func timelinePredictedNapStart(napIndex: Int, anchorEnd: Date) -> Date {
-        if napIndex == completedNapCountToday + 1,
-           let nextNap = orchestrator.snapshot?.daytime.nextNapTime {
-            return nextNap
-        }
-        return anchorEnd.addingMinutes(timelineWakeWindow(forNapIndex: napIndex))
-    }
-
-    private func timelineBedtime(after anchorEnd: Date) -> Date {
-        if let bedtime = orchestrator.snapshot?.night.optimalBedtimeStart {
-            return bedtime
-        }
-
-        let profile = timelineProfile
-        let proposed = anchorEnd.addingMinutes(timelineWakeWindow(forNapIndex: expectedNapSlotCount + 1))
-        let hour = Calendar.current.component(.hour, from: proposed)
-        guard hour < profile.bedtimeHourRange.lowerBound || hour > profile.bedtimeHourRange.upperBound else {
-            return proposed
-        }
-        return Calendar.current.date(
-            bySettingHour: min(max(hour, profile.bedtimeHourRange.lowerBound), profile.bedtimeHourRange.upperBound),
-            minute: Calendar.current.component(.minute, from: proposed),
-            second: 0,
-            of: proposed
-        ) ?? proposed
     }
 
     private func timelineNapColor(state: TimelineItem.VisualState) -> Color {
