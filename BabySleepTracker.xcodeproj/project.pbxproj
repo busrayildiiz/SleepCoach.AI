@@ -14,6 +14,7 @@
 		FA04E4133032501500EFF932 /* DayDetailViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA04E4123032501500EFF932 /* DayDetailViewModelTests.swift */; };
 		FA04E415303252AC00EFF932 /* AuthFlowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA04E414303252AC00EFF932 /* AuthFlowTests.swift */; };
 		FA04E4173032567000EFF932 /* SleepListViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA04E4163032567000EFF932 /* SleepListViewModelTests.swift */; };
+		FA04E4213032567000EFF932 /* SleepTimelineCalculatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA04E4203032567000EFF932 /* SleepTimelineCalculatorTests.swift */; };
 		FA04E4193032585000EFF932 /* DailyWakeRecordTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA04E4183032585000EFF932 /* DailyWakeRecordTests.swift */; };
 		FA04E41B303258E800EFF932 /* SegmentKindTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA04E41A303258E800EFF932 /* SegmentKindTests.swift */; };
 		FA04E41D30325A6900EFF932 /* TimeFormatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA04E41C30325A6900EFF932 /* TimeFormatTests.swift */; };
@@ -98,6 +99,7 @@
 		FA04E4123032501500EFF932 /* DayDetailViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DayDetailViewModelTests.swift; sourceTree = "<group>"; };
 		FA04E414303252AC00EFF932 /* AuthFlowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthFlowTests.swift; sourceTree = "<group>"; };
 		FA04E4163032567000EFF932 /* SleepListViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepListViewModelTests.swift; sourceTree = "<group>"; };
+		FA04E4203032567000EFF932 /* SleepTimelineCalculatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepTimelineCalculatorTests.swift; sourceTree = "<group>"; };
 		FA04E4183032585000EFF932 /* DailyWakeRecordTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DailyWakeRecordTests.swift; sourceTree = "<group>"; };
 		FA04E41A303258E800EFF932 /* SegmentKindTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SegmentKindTests.swift; sourceTree = "<group>"; };
 		FA04E41C30325A6900EFF932 /* TimeFormatTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimeFormatTests.swift; sourceTree = "<group>"; };
@@ -205,6 +207,7 @@
 				FA04E4123032501500EFF932 /* DayDetailViewModelTests.swift */,
 				FA04E414303252AC00EFF932 /* AuthFlowTests.swift */,
 				FA04E4163032567000EFF932 /* SleepListViewModelTests.swift */,
+				FA04E4203032567000EFF932 /* SleepTimelineCalculatorTests.swift */,
 				FA04E4183032585000EFF932 /* DailyWakeRecordTests.swift */,
 				FA04E41A303258E800EFF932 /* SegmentKindTests.swift */,
 				FA04E41C30325A6900EFF932 /* TimeFormatTests.swift */,
@@ -499,6 +502,7 @@
 				FA41DF5E303380BF005F63A3 /* DaytimePredictionAgentTests.swift in Sources */,
 				FA5488DA2FAEB98D002BC18B /* AddRecorViewModelTests.swift in Sources */,
 				FA04E4173032567000EFF932 /* SleepListViewModelTests.swift in Sources */,
+				FA04E4213032567000EFF932 /* SleepTimelineCalculatorTests.swift in Sources */,
 				FA04E41130324F1100EFF932 /* SleepStoreTests.swift in Sources */,
 				FA04E40D3030E00A00EFF932 /* Llmresponseparsingpropertytests .swift in Sources */,
 				FA04E415303252AC00EFF932 /* AuthFlowTests.swift in Sources */,
