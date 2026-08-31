@@ -83,6 +83,7 @@ struct SleepListView: View {
     @State private var records: [SleepRecord] = []
     @State private var wakeRecords: [DailyWakeRecord] = []
     @State private var addDefaultDate: Date = Date()
+    private let sleepRecordPersistence = SleepRecordPersistence()
 
     @AppStorage("babyName")   private var babyName:   String = "Baby"
     @AppStorage("parentName") private var parentName: String = ""
@@ -98,15 +99,11 @@ struct SleepListView: View {
         saveRecords()
     }
     private func saveRecords() {
-        if let encoded = try? JSONEncoder().encode(records) {
-            UserDefaults.standard.set(encoded, forKey: "sleepRecords")
-            NotificationCenter.default.post(name: .sleepRecordsDidChange, object: nil)
-        }
+        sleepRecordPersistence.save(records)
     }
 
     private func loadRecords() {
-        if let data    = UserDefaults.standard.data(forKey: "sleepRecords"),
-           let decoded = try? JSONDecoder().decode([SleepRecord].self, from: data) {
+        if let decoded = sleepRecordPersistence.load() {
             records = decoded
         }
     }
