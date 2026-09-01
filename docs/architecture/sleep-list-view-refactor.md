@@ -22,6 +22,14 @@ Sleep-record `UserDefaults` encoding and decoding was extracted into a small inj
 
 Daily wake-record `UserDefaults` encoding and decoding was extracted into a small injectable persistence adapter. It was extracted to isolate storage mechanics while leaving wake-time normalization, replacement, and ongoing-night business logic in `SleepListView`. Dedicated tests cover valid, missing, and invalid data, save ordering and values, and successful-save notifications.
 
+### SleepListSheetRouter
+
+Sheet-specific routing and callback wiring was extracted from `SleepListView`. It composes the add-sleep, add-break, day-detail, and wake-time sheets while `SleepListView` retains state ownership, mutations, and persistence calls. Existing routes, filtering, ordering, edit flows, and callbacks are preserved.
+
+### SleepWakeTimeWorkflow
+
+Wake-time normalization and ongoing-night closure were extracted into a deterministic, non-UI workflow. It accepts explicit date, calendar, record, and persistence dependencies and returns updated records and persistence outcomes. It has no SwiftUI, `@State`, `NotificationCenter`, or `SleepCoachOrchestrator` dependency. Dedicated tests cover normalization, replacement, qualifying-night selection, exclusions, duration clamping, metadata preservation, and isolated persistence.
+
 ## Persistence Compatibility
 
 - `"sleepRecords"` remains the key used by `SleepListView` and `SleepCoachOrchestrator`.
@@ -46,14 +54,15 @@ Daily wake-record `UserDefaults` encoding and decoding was extracted into a smal
 The following responsibilities intentionally remain in `SleepListView`:
 
 - SwiftUI presentation
-- User interaction
-- Wake-time normalization and replacement of today’s record
-- Ongoing-night closure logic
-- Sheet and navigation routing
+- `@State` ownership and assignment of workflow/calculator results
+- UI lifecycle and callbacks
+- User interaction integration
+- Sheet presentation and routing integration
+- Notification subscriptions
 - Orchestrator lifecycle
 - UI formatting and visual decisions
 
-These responsibilities have not been extracted by the completed work documented here.
+The wake-time workflow, raw persistence mechanics, timeline calculations, overview calculations, active/night-state calculations, and sheet-specific routing composition have been extracted as described above.
 
 ## Next Refactoring Candidates
 
@@ -61,7 +70,6 @@ Future candidates include:
 
 - Remaining derived and business calculations
 - Orchestrator lifecycle and dependency management
-- Sheet and navigation routing
 - Singleton reduction
 
 These are future possibilities, not completed work.
