@@ -794,6 +794,42 @@ final class SleepCoachOrchestratorLLMLifecycleTests: XCTestCase {
         XCTAssertFalse(orchestrator.isLLMLoading)
     }
 
+    func testCachingResponseWithoutAlertRemovesPreviousCachedAlert() async throws {
+        let alertResponse = response("with alert", alert: "Take care")
+        let alertRequestStarted = expectation(description: "Alert response request started")
+        let alertRequestCompleted = expectation(description: "Alert response request completed")
+        llmAgent.onRequest = { index in
+            if index == 0 { alertRequestStarted.fulfill() }
+        }
+        llmAgent.onCompletion = { index in
+            if index == 0 { alertRequestCompleted.fulfill() }
+        }
+
+        orchestrator.generate(now: Date())
+        await fulfillment(of: [alertRequestStarted], timeout: 1)
+        llmAgent.release(0, with: alertResponse)
+        await fulfillment(of: [alertRequestCompleted], timeout: 1)
+        XCTAssertEqual(UserDefaults.standard.string(forKey: "llm_alert"), "Take care")
+
+        let clearAlertRequestStarted = expectation(description: "Alert-free response request started")
+        let clearAlertRequestCompleted = expectation(description: "Alert-free response request completed")
+        llmAgent.onRequest = { index in
+            if index == 1 { clearAlertRequestStarted.fulfill() }
+        }
+        llmAgent.onCompletion = { index in
+            if index == 1 { clearAlertRequestCompleted.fulfill() }
+        }
+
+        orchestrator.refreshLLM()
+        await fulfillment(of: [clearAlertRequestStarted], timeout: 1)
+        llmAgent.release(1, with: response("without alert"))
+        await fulfillment(of: [clearAlertRequestCompleted], timeout: 1)
+
+        XCTAssertNil(UserDefaults.standard.string(forKey: "llm_alert"))
+        orchestrator.loadCachedLLMResponse()
+        XCTAssertNil(orchestrator.llmResponse?.alert)
+    }
+
     func testStaleResponseCannotOverwriteStateOrCache() async throws {
         let older = response("older")
         let newer = response("newer")
@@ -939,8 +975,8 @@ final class SleepCoachOrchestratorLLMLifecycleTests: XCTestCase {
         await fulfillment(of: [requestCompleted], timeout: 1)
     }
 
-    private func response(_ message: String) -> LLMCoachResponse {
-        LLMCoachResponse(patternInsight: "pattern", coachMessage: message, alert: nil, confidenceNote: "confidence", generatedAt: now)
+    private func response(_ message: String, alert: String? = nil) -> LLMCoachResponse {
+        LLMCoachResponse(patternInsight: "pattern", coachMessage: message, alert: alert, confidenceNote: "confidence", generatedAt: Date())
     }
 
     private func saveRecords(_ records: [SleepRecord]) {

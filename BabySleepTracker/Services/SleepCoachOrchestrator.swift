@@ -933,6 +933,8 @@ final class SleepCoachOrchestrator: ObservableObject {
         UserDefaults.standard.set(response.confidenceNote, forKey: "llm_confidenceNote")
         if let alert = response.alert {
             UserDefaults.standard.set(alert, forKey: "llm_alert")
+        } else {
+            UserDefaults.standard.removeObject(forKey: "llm_alert")
         }
     }
 
