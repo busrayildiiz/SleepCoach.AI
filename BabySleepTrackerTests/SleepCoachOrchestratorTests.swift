@@ -168,6 +168,35 @@ final class SleepCoachOrchestratorTests: XCTestCase {
         XCTAssertNotNil(orchestrator.snapshot?.pattern)
     }
 
+    func testClosingStaleRecordPostsOneSleepRecordsNotification() throws {
+        let staleRecord = SleepRecord(
+            date: now.addingTimeInterval(-2 * 24 * 60 * 60),
+            duration: 0,
+            kind: .nightSleep,
+            isOngoing: true
+        )
+        saveRecords([staleRecord])
+
+        var notificationCount = 0
+        let observer = NotificationCenter.default.addObserver(
+            forName: .sleepRecordsDidChange,
+            object: nil,
+            queue: nil
+        ) { _ in
+            notificationCount += 1
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+
+        orchestrator.generate(now: now)
+
+        XCTAssertEqual(notificationCount, 1)
+        let storedRecords = try loadStoredRecords()
+        let storedRecord = try XCTUnwrap(storedRecords.first)
+        XCTAssertEqual(storedRecord.id, staleRecord.id)
+        XCTAssertFalse(storedRecord.isOngoing)
+        XCTAssertGreaterThan(storedRecord.duration, 0)
+    }
+
     // MARK: - nextSleepKind
 
     func testNextSleepKindIsNapWhenNapCountIsBelowExpectedMaximum() {

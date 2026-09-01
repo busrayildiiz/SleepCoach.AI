@@ -137,7 +137,6 @@ final class SleepCoachOrchestrator: ObservableObject {
         }
         if hasChanges {
             saveRecords(records)
-            NotificationCenter.default.post(name: .sleepRecordsDidChange, object: nil)
         }
 
         let wakeRecords = loadWakeRecords()
