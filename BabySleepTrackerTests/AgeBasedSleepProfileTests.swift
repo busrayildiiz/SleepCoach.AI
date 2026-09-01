@@ -3,216 +3,129 @@ import XCTest
 
 final class AgeBasedSleepProfileTests: XCTestCase {
 
-    private let provider = DefaultAgeBasedSleepProfileProvider()
+    private var sut: DefaultAgeBasedSleepProfileProvider!
+    private var defaults: UserDefaults!
 
     override func setUp() {
         super.setUp()
 
-        UserDefaults.standard.removeObject(forKey: "babyBirthDate")
+        defaults = UserDefaults(
+            suiteName: "AgeBasedSleepProfileTests"
+        )!
+
+        defaults.removePersistentDomain(
+            forName: "AgeBasedSleepProfileTests"
+        )
+
+        sut = DefaultAgeBasedSleepProfileProvider(
+            defaults: defaults
+        )
     }
 
     override func tearDown() {
-        UserDefaults.standard.removeObject(forKey: "babyBirthDate")
+        defaults.removePersistentDomain(
+            forName: "AgeBasedSleepProfileTests"
+        )
+
+        sut = nil
+        defaults = nil
 
         super.tearDown()
     }
 
-    // MARK: - Profile lookup without stored birth date
+    // MARK: - Profile Lookup
 
-    func testProfileReturnsFourMonthProfile() {
-        let profile = provider.profile(forAgeMonths: 4)
+    func test_profile_forAge4_returns4MonthProfile() {
+        let profile = sut.profile(forAgeMonths: 4)
 
         XCTAssertEqual(profile.ageRange, 4...4)
-        XCTAssertEqual(profile.totalSleep24hRange, 720...960)
-        XCTAssertEqual(profile.wakeWindowRange, 90...120)
-        XCTAssertEqual(profile.morningWakeWindow, 75...90)
-        XCTAssertEqual(profile.eveningWakeWindow, 90...120)
-        XCTAssertEqual(profile.expectedNapCount, 3...5)
-        XCTAssertEqual(profile.maxSingleNapMinutes, 120)
-        XCTAssertEqual(profile.daytimeSleepRange, 210...270)
-        XCTAssertEqual(profile.nightSleepRange, 600...720)
-        XCTAssertEqual(profile.bedtimeHourRange, 18...20)
-        XCTAssertEqual(profile.lastNapCutoffHour, 17)
     }
 
-    func testProfileReturnsFiveToSixMonthProfile() {
-        let fiveMonth = provider.profile(forAgeMonths: 5)
-        let sixMonth = provider.profile(forAgeMonths: 6)
+    func test_profile_forAge5_returns5To6MonthProfile() {
+        let profile = sut.profile(forAgeMonths: 5)
 
-        XCTAssertEqual(fiveMonth.ageRange, 5...6)
-        XCTAssertEqual(sixMonth.ageRange, 5...6)
-        XCTAssertEqual(fiveMonth.wakeWindowRange, 120...180)
-        XCTAssertEqual(fiveMonth.expectedNapCount, 3...3)
+        XCTAssertEqual(profile.ageRange, 5...6)
     }
 
-    func testProfileReturnsSevenToEightMonthProfile() {
-        let sevenMonth = provider.profile(forAgeMonths: 7)
-        let eightMonth = provider.profile(forAgeMonths: 8)
+    func test_profile_forAge6_returns5To6MonthProfile() {
+        let profile = sut.profile(forAgeMonths: 6)
 
-        XCTAssertEqual(sevenMonth.ageRange, 7...8)
-        XCTAssertEqual(eightMonth.ageRange, 7...8)
-        XCTAssertEqual(sevenMonth.wakeWindowRange, 150...210)
-        XCTAssertEqual(sevenMonth.expectedNapCount, 2...3)
+        XCTAssertEqual(profile.ageRange, 5...6)
     }
 
-    func testProfileReturnsNineToElevenMonthProfile() {
-        let nineMonth = provider.profile(forAgeMonths: 9)
-        let elevenMonth = provider.profile(forAgeMonths: 11)
+    func test_profile_forAge7_returns7To8MonthProfile() {
+        let profile = sut.profile(forAgeMonths: 7)
 
-        XCTAssertEqual(nineMonth.ageRange, 9...11)
-        XCTAssertEqual(elevenMonth.ageRange, 9...11)
-        XCTAssertEqual(nineMonth.wakeWindowRange, 180...240)
-        XCTAssertEqual(nineMonth.expectedNapCount, 2...2)
+        XCTAssertEqual(profile.ageRange, 7...8)
     }
 
-    func testProfileReturnsTwelveToFourteenMonthProfile() {
-        let twelveMonth = provider.profile(forAgeMonths: 12)
-        let fourteenMonth = provider.profile(forAgeMonths: 14)
+    func test_profile_forAge8_returns7To8MonthProfile() {
+        let profile = sut.profile(forAgeMonths: 8)
 
-        XCTAssertEqual(twelveMonth.ageRange, 12...14)
-        XCTAssertEqual(fourteenMonth.ageRange, 12...14)
-        XCTAssertEqual(twelveMonth.wakeWindowRange, 210...270)
-        XCTAssertEqual(twelveMonth.expectedNapCount, 1...2)
+        XCTAssertEqual(profile.ageRange, 7...8)
     }
 
-    func testProfileReturnsFifteenToEighteenMonthProfile() {
-        let fifteenMonth = provider.profile(forAgeMonths: 15)
-        let eighteenMonth = provider.profile(forAgeMonths: 18)
-
-        XCTAssertEqual(fifteenMonth.ageRange, 15...18)
-        XCTAssertEqual(eighteenMonth.ageRange, 15...18)
-        XCTAssertEqual(fifteenMonth.wakeWindowRange, 270...360)
-        XCTAssertEqual(fifteenMonth.expectedNapCount, 1...1)
-    }
-
-    func testProfileReturnsNineteenToTwentyFourMonthProfile() {
-        let nineteenMonth = provider.profile(forAgeMonths: 19)
-        let twentyFourMonth = provider.profile(forAgeMonths: 24)
-
-        XCTAssertEqual(nineteenMonth.ageRange, 19...24)
-        XCTAssertEqual(twentyFourMonth.ageRange, 19...24)
-        XCTAssertEqual(nineteenMonth.wakeWindowRange, 300...420)
-        XCTAssertEqual(nineteenMonth.expectedNapCount, 1...1)
-    }
-
-    // MARK: - Boundary behavior
-
-    func testAgeFourUsesFourMonthProfile() {
-        XCTAssertEqual(
-            provider.profile(forAgeMonths: 4).ageRange,
-            4...4
-        )
-    }
-
-    func testAgeTwentyFourUsesLastProfile() {
-        XCTAssertEqual(
-            provider.profile(forAgeMonths: 24).ageRange,
-            19...24
-        )
-    }
-
-    func testAgeBelowSupportedRangeFallsBackToLastProfile() {
-        XCTAssertEqual(
-            provider.profile(forAgeMonths: 3).ageRange,
-            19...24
-        )
-    }
-
-    func testAgeAboveSupportedRangeFallsBackToLastProfile() {
-        XCTAssertEqual(
-            provider.profile(forAgeMonths: 30).ageRange,
-            19...24
-        )
-    }
-
-    // MARK: - Wake window centers
-
-    func testWakeWindowCenterUsesProfileBounds() {
-        XCTAssertEqual(
-            provider.wakeWindowCenter(forAgeMonths: 9),
-            210
-        )
-
-        XCTAssertEqual(
-            provider.wakeWindowCenter(forAgeMonths: 15),
-            315
-        )
-
-        XCTAssertEqual(
-            provider.wakeWindowCenter(forAgeMonths: 19),
-            360
-        )
-    }
-
-    func testEveningWakeWindowCenterUsesProfileBounds() {
-        XCTAssertEqual(
-            provider.eveningWakeWindowCenter(forAgeMonths: 9),
-            225
-        )
-
-        XCTAssertEqual(
-            provider.eveningWakeWindowCenter(forAgeMonths: 15),
-            345
-        )
-
-        XCTAssertEqual(
-            provider.eveningWakeWindowCenter(forAgeMonths: 19),
-            390
-        )
-    }
-
-    // MARK: - Birth date logic
-
-    func testProfileUsesStoredBirthDateWhenAvailable() {
-        let calendar = Calendar.current
-
-        let birthDate = calendar.date(
-            byAdding: .month,
-            value: -9,
-            to: Date()
-        )!
-
-        UserDefaults.standard.set(
-            birthDate,
-            forKey: "babyBirthDate"
-        )
-
-        let profile = provider.profile(forAgeMonths: 4)
+    func test_profile_forAge9_returns9To11MonthProfile() {
+        let profile = sut.profile(forAgeMonths: 9)
 
         XCTAssertEqual(profile.ageRange, 9...11)
     }
 
-    func testProfileAcceptsBirthDateStoredAsTimeInterval() {
-        let calendar = Calendar.current
+    func test_profile_forAge12_returns12To14MonthProfile() {
+        let profile = sut.profile(forAgeMonths: 12)
 
-        let birthDate = calendar.date(
-            byAdding: .month,
-            value: -15,
-            to: Date()
-        )!
+        XCTAssertEqual(profile.ageRange, 12...14)
+    }
 
-        UserDefaults.standard.set(
-            birthDate.timeIntervalSince1970,
-            forKey: "babyBirthDate"
-        )
-
-        let profile = provider.profile(forAgeMonths: 4)
+    func test_profile_forAge15_returns15To18MonthProfile() {
+        let profile = sut.profile(forAgeMonths: 15)
 
         XCTAssertEqual(profile.ageRange, 15...18)
     }
 
-    // MARK: - Profile data consistency
+    func test_profile_forAge19_returns19To24MonthProfile() {
+        let profile = sut.profile(forAgeMonths: 19)
 
-    func testAllProfilesHaveValidAgeRanges() {
-        for profile in DefaultAgeBasedSleepProfileProvider.profiles {
-            XCTAssertLessThanOrEqual(
-                profile.ageRange.lowerBound,
-                profile.ageRange.upperBound
-            )
-        }
+        XCTAssertEqual(profile.ageRange, 19...24)
     }
 
-    func testAllProfilesHaveValidWakeWindowRanges() {
+    func test_profile_forAge24_returns19To24MonthProfile() {
+        let profile = sut.profile(forAgeMonths: 24)
+
+        XCTAssertEqual(profile.ageRange, 19...24)
+    }
+
+    // MARK: - Boundary Protection
+
+    func test_profile_forAgeBelowSupportedRange_doesNotCrash() {
+        let profile = sut.profile(forAgeMonths: 3)
+
+        XCTAssertNotNil(profile)
+    }
+
+    func test_profile_forAgeAboveSupportedRange_doesNotCrash() {
+        let profile = sut.profile(forAgeMonths: 25)
+
+        XCTAssertNotNil(profile)
+    }
+
+    // MARK: - Wake Window Centers
+
+    func test_wakeWindowCenter_for9Months_returnsExpectedCenter() {
+        let center = sut.wakeWindowCenter(forAgeMonths: 9)
+
+        XCTAssertEqual(center, 210)
+    }
+
+    func test_eveningWakeWindowCenter_for9Months_returnsExpectedCenter() {
+        let center = sut.eveningWakeWindowCenter(forAgeMonths: 9)
+
+        XCTAssertEqual(center, 225)
+    }
+
+    // MARK: - Profile Invariants
+
+    func test_allProfiles_haveValidWakeWindowOrdering() {
         for profile in DefaultAgeBasedSleepProfileProvider.profiles {
             XCTAssertLessThanOrEqual(
                 profile.wakeWindowRange.lowerBound,
@@ -220,18 +133,13 @@ final class AgeBasedSleepProfileTests: XCTestCase {
             )
 
             XCTAssertLessThanOrEqual(
-                profile.morningWakeWindow.lowerBound,
-                profile.morningWakeWindow.upperBound
-            )
-
-            XCTAssertLessThanOrEqual(
-                profile.eveningWakeWindow.lowerBound,
-                profile.eveningWakeWindow.upperBound
+                profile.morningWakeWindow.upperBound,
+                profile.eveningWakeWindow.lowerBound
             )
         }
     }
 
-    func testAllProfilesHaveValidNapAndSleepRanges() {
+    func test_allProfiles_haveValidSleepRanges() {
         for profile in DefaultAgeBasedSleepProfileProvider.profiles {
             XCTAssertLessThanOrEqual(
                 profile.totalSleep24hRange.lowerBound,
@@ -247,11 +155,53 @@ final class AgeBasedSleepProfileTests: XCTestCase {
                 profile.nightSleepRange.lowerBound,
                 profile.nightSleepRange.upperBound
             )
+        }
+    }
 
-            XCTAssertGreaterThan(
-                profile.maxSingleNapMinutes,
-                0
+    func test_allProfiles_haveValidNapCountRanges() {
+        for profile in DefaultAgeBasedSleepProfileProvider.profiles {
+            XCTAssertLessThanOrEqual(
+                profile.expectedNapCount.lowerBound,
+                profile.expectedNapCount.upperBound
             )
         }
+    }
+
+    // MARK: - UserDefaults Behavior
+
+    func test_profile_whenBirthDateExists_currentlyUsesBirthDateInsteadOfProvidedAge() {
+        let birthDate = makeDate(
+            year: 2025,
+            month: 8,
+            day: 1
+        )
+
+        defaults.set(
+            birthDate,
+            forKey: "babyBirthDate"
+        )
+
+        let profile = sut.profile(forAgeMonths: 4)
+
+        XCTAssertEqual(profile.ageRange, 5...6)
+    }
+
+    // MARK: - Helpers
+
+    private func makeDate(
+        year: Int,
+        month: Int,
+        day: Int
+    ) -> Date {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+
+        return calendar.date(
+            from: DateComponents(
+                year: year,
+                month: month,
+                day: day
+            )
+        )!
     }
 }

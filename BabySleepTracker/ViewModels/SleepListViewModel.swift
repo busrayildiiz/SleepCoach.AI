@@ -26,23 +26,21 @@ final class SleepListViewModel: ObservableObject {
     // MARK: - Load
 
     func load() {
+        Task { await loadAsync() }
+    }
 
-        Task {
-
-            do {
-
-                let data = try await api.fetchRecords()
-
-                await MainActor.run {
-                    self.records = data
-                }
-
-            } catch {
-
-                errorMessage = "Failed to load"
-
-            }
-
+    /// Awaitable entry point for `load()`. Exists so tests can `await` the
+    /// real completion of the fetch instead of guessing at a fixed sleep
+    /// duration, which is inherently flaky under CI/simulator load.
+    @discardableResult
+    func loadAsync() async -> Bool {
+        do {
+            let data = try await api.fetchRecords()
+            self.records = data
+            return true
+        } catch {
+            self.errorMessage = "Failed to load"
+            return false
         }
     }
 

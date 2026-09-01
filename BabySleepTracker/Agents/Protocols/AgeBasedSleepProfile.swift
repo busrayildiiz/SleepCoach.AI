@@ -44,14 +44,24 @@ protocol AgeBasedSleepProfileProviding {
 
 final class DefaultAgeBasedSleepProfileProvider: AgeBasedSleepProfileProviding {
 
+    // Injectable so tests can use an isolated UserDefaults suite instead of
+    // sharing `.standard` with every other test in the target — that
+    // sharing is what caused order-dependent test failures (one test's
+    // stored birth date leaking into another test's assertion).
+    private let defaults: UserDefaults
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
+
     // MARK: - Profile Lookup
         
         func profile(forAgeMonths age: Int) -> AgeBasedSleepProfile {
 
             let birthDate: Date?
-            if let saved = UserDefaults.standard.object(forKey: "babyBirthDate") as? Date {
+            if let saved = defaults.object(forKey: "babyBirthDate") as? Date {
                 birthDate = saved
-            } else if let seconds = UserDefaults.standard.object(forKey: "babyBirthDate") as? Double {
+            } else if let seconds = defaults.object(forKey: "babyBirthDate") as? Double {
                 birthDate = Date(timeIntervalSince1970: seconds)
             } else {
                 birthDate = nil

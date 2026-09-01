@@ -83,12 +83,14 @@ struct SleepListView: View {
     @State private var records: [SleepRecord] = []
     @State private var wakeRecords: [DailyWakeRecord] = []
     @State private var addDefaultDate: Date = Date()
+    private let sleepRecordPersistence = SleepRecordPersistence()
+    private let dailyWakeRecordPersistence = DailyWakeRecordPersistence()
 
     @AppStorage("babyName")   private var babyName:   String = "Baby"
     @AppStorage("parentName") private var parentName: String = ""
 
     // MARK: - Persistence
-    
+
     private func upsert(_ record: SleepRecord) {
         if let index = records.firstIndex(where: { $0.id == record.id }) {
             records[index] = record
@@ -98,66 +100,33 @@ struct SleepListView: View {
         saveRecords()
     }
     private func saveRecords() {
-        if let encoded = try? JSONEncoder().encode(records) {
-            UserDefaults.standard.set(encoded, forKey: "sleepRecords")
-            NotificationCenter.default.post(name: .sleepRecordsDidChange, object: nil)
-        }
+        sleepRecordPersistence.save(records)
     }
 
     private func loadRecords() {
-        if let data    = UserDefaults.standard.data(forKey: "sleepRecords"),
-           let decoded = try? JSONDecoder().decode([SleepRecord].self, from: data) {
+        if let decoded = sleepRecordPersistence.load() {
             records = decoded
         }
     }
 
     private func loadWakeRecords() {
-        if let data    = UserDefaults.standard.data(forKey: "dailyWakeRecords_v1"),
-           let decoded = try? JSONDecoder().decode([DailyWakeRecord].self, from: data) {
+        if let decoded = dailyWakeRecordPersistence.load() {
             wakeRecords = decoded
         }
     }
 
     private func saveWakeTime(_ selectedTime: Date) {
-        let calendar = Calendar.current
-        let today    = calendar.startOfDay(for: Date())
-        let comps    = calendar.dateComponents([.hour, .minute], from: selectedTime)
-        guard let wakeTime = calendar.date(
-            bySettingHour: comps.hour ?? 7,
-            minute:        comps.minute ?? 0,
-            second:        0,
-            of:            today
-        ) else { return }
-
-        wakeRecords.removeAll { calendar.isDate($0.day, inSameDayAs: today) }
-        wakeRecords.append(DailyWakeRecord(day: today, wakeTime: wakeTime))
-
-        if let encoded = try? JSONEncoder().encode(wakeRecords) {
-            UserDefaults.standard.set(encoded, forKey: "dailyWakeRecords_v1")
-            NotificationCenter.default.post(name: .dailyWakeRecordsDidChange, object: nil)
-        }
-
-        closeOngoingNightSleepIfWakeTimeEndsIt(wakeTime)
-    }
-
-    private func closeOngoingNightSleepIfWakeTimeEndsIt(_ wakeTime: Date) {
-        guard let ongoing = records
-            .filter({ $0.kind == .nightSleep && $0.isOngoing && wakeTime > $0.date })
-            .sorted(by: { $0.date > $1.date })
-            .first
-        else { return }
-
-        let duration = max(1, Int(wakeTime.timeIntervalSince(ongoing.date) / 60))
-        let closed = SleepRecord(
-            id: ongoing.id,
-            date: ongoing.date,
-            duration: min(duration, 12 * 60),
-            kind: ongoing.kind,
-            parentNapID: ongoing.parentNapID,
-            isOngoing: false,
-            createdAt: ongoing.createdAt
-        )
-        upsert(closed)
+        let result = SleepWakeTimeWorkflow(
+            selectedWakeTime: selectedTime,
+            now: Date(),
+            calendar: .current,
+            wakeRecords: wakeRecords,
+            sleepRecords: records,
+            wakePersistence: dailyWakeRecordPersistence,
+            sleepPersistence: sleepRecordPersistence
+        ).execute()
+        wakeRecords = result.updatedWakeRecords
+        records = result.updatedSleepRecords
     }
 
     // MARK: - Derived Data
@@ -220,61 +189,18 @@ struct SleepListView: View {
         return name.split(separator: " ").first.map(String.init) ?? name
     }
 
-    private var todayTotal: Int { totalMinutes(for: todayRecords) }
-
-    private var yesterdayTotal: Int {
-        let cal = Calendar.current
-        guard let yesterday = cal.date(byAdding: .day, value: -1, to: Date()) else { return 0 }
-        return totalMinutes(for: records.filter { cal.isDate($0.date, inSameDayAs: yesterday) })
+    private var overviewMetrics: SleepOverviewMetrics {
+        SleepOverviewCalculator(records: records).calculate()
     }
 
-    private var todayDelta: Int { todayTotal - yesterdayTotal }
-
-    private var last7DaysAverage: Int {
-        let cal   = Calendar.current
-        let today = cal.startOfDay(for: Date())
-        let totals = (0..<7).map { offset -> Int in
-            let day   = cal.date(byAdding: .day, value: -offset, to: today) ?? today
-            let items = records.filter { cal.isDate($0.date, inSameDayAs: day) }
-            return totalMinutes(for: items)
-        }
-        return totals.reduce(0, +) / max(totals.count, 1)
-    }
-
-    private var previous7DaysAverage: Int {
-        let cal   = Calendar.current
-        let today = cal.startOfDay(for: Date())
-        let totals = (7..<14).map { offset -> Int in
-            let day   = cal.date(byAdding: .day, value: -offset, to: today) ?? today
-            let items = records.filter { cal.isDate($0.date, inSameDayAs: day) }
-            return totalMinutes(for: items)
-        }
-        return totals.reduce(0, +) / max(totals.count, 1)
-    }
-
-    private var averageNapMinutes: Int {
-        let comparable = sleeps.dropFirst().map { $0.totalMinutes(breaks: breaks) }
-        guard !comparable.isEmpty else { return 80 }
-        return comparable.reduce(0, +) / comparable.count
-    }
-
-    private var latestNapDelta: Int { latestSleepMinutes - averageNapMinutes }
-
-    private var consistencyPercent: Int {
-        let cal   = Calendar.current
-        let today = cal.startOfDay(for: Date())
-        let totals = (0..<7).compactMap { offset -> Int? in
-            let day   = cal.date(byAdding: .day, value: -offset, to: today) ?? today
-            let items = records.filter { cal.isDate($0.date, inSameDayAs: day) }
-            let t     = totalMinutes(for: items)
-            return t > 0 ? t : nil
-        }
-        guard totals.count > 1 else { return records.isEmpty ? 87 : 74 }
-        let avg      = Double(totals.reduce(0, +)) / Double(totals.count)
-        let variance = totals.reduce(0.0) { $0 + pow(Double($1) - avg, 2) } / Double(totals.count)
-        let dev      = sqrt(variance)
-        return max(55, min(97, Int(100 - (dev / max(avg, 1) * 100))))
-    }
+    private var todayTotal: Int { overviewMetrics.todayTotal }
+    private var yesterdayTotal: Int { overviewMetrics.yesterdayTotal }
+    private var todayDelta: Int { overviewMetrics.todayDelta }
+    private var last7DaysAverage: Int { overviewMetrics.last7DaysAverage }
+    private var previous7DaysAverage: Int { overviewMetrics.previous7DaysAverage }
+    private var averageNapMinutes: Int { overviewMetrics.averageNapMinutes }
+    private var latestNapDelta: Int { overviewMetrics.latestNapDelta }
+    private var consistencyPercent: Int { overviewMetrics.consistencyPercent }
 
     private var nextNapAnchor: Date {
         if let last = todaySleeps.last {
@@ -373,165 +299,35 @@ struct SleepListView: View {
             return profile.expectedNapCount.upperBound
         }
 
-        private var timelineItems: [TimelineItem] {
-            let now = Date()
-            let sortedNaps = todaySleeps
-                .filter { $0.kind == .dayNap }
-                .sorted { $0.date < $1.date }
-            let wakeUp = timelineWakeAnchor(sortedNaps: sortedNaps)
-            let expectedDuration = timelineExpectedNapDuration
-            var items: [TimelineItem] = [
-                TimelineItem(
-                    icon: "sun.max.fill",
-                    iconColor: Color(red: 1.0, green: 0.68, blue: 0.20),
-                    time: shortTime(wakeUp),
-                    title: "Wake up",
-                    detail: timelineWakeDetail,
-                    visualState: wakeUp <= now ? .completed : .upcoming,
-                    isActive: false,
-                    isFuture: wakeUp > now
-                )
-            ]
-
-            var anchorEnd = wakeUp
-            for (index, nap) in sortedNaps.enumerated() {
-                guard items.count < 4 else { return items }
-                let napEnd = Calendar.current.date(byAdding: .minute, value: nap.duration, to: nap.date) ?? nap.date
-                let awakeBeforeNap = max(0, Int(nap.date.timeIntervalSince(anchorEnd) / 60))
-                let isActiveNap = nap.isOngoing || (nap.date <= now && napEnd > now)
-                let state: TimelineItem.VisualState = isActiveNap ? .active : (napEnd <= now ? .completed : .upcoming)
-
-                items.append(TimelineItem(
-                    icon: "moon.fill",
-                    iconColor: timelineNapColor(state: state),
-                    time: shortTime(nap.date),
-                    title: "Nap \(index + 1)",
-                    detail: nap.isOngoing ? "Sleeping now" : TimeFormat.minutes(nap.totalMinutes(breaks: breaks)),
-                    visualState: state,
-                    isActive: isActiveNap,
-                    isFuture: nap.date > now,
-                    awakeBeforeMinutes: awakeBeforeNap
-                ))
-                anchorEnd = napEnd
+    private var timelineItems: [TimelineItem] {
+        let calculator = SleepTimelineCalculator(records: todayRecords, wakeRecord: todayWakeRecord, snapshot: orchestrator.snapshot, defaultWakeTime: defaultWakeTime, now: Date(), profileProvider: DefaultAgeBasedSleepProfileProvider())
+        return calculator.calculate().map { item in
+            let state: TimelineItem.VisualState = {
+                switch item.visualState { case .completed: return .completed; case .active: return .active; case .upcoming: return .upcoming }
+            }()
+            let icon: String
+            let color: Color
+            let title: String
+            let detail: String
+            switch item.kind {
+            case .wake:
+                icon = "sun.max.fill"
+                color = Color(red: 1.0, green: 0.68, blue: 0.20)
+                title = "Wake up"
+                detail = todayWakeRecord == nil ? "Default wake" : "Logged"
+            case .nap(let index):
+                icon = "moon.fill"
+                color = timelineNapColor(state: state)
+                title = "Nap \(index)"
+                detail = item.isOngoing ? "Sleeping now" : TimeFormat.minutes(item.durationMinutes ?? 0)
+            case .bedtime:
+                icon = "moon.stars.fill"
+                color = Color.sleepPurpleDeep
+                title = "Bedtime"
+                detail = "Night sleep"
             }
-
-            let shouldPredictMoreNaps = orchestrator.snapshot?.nextSleepKind != .bedtime
-            var predictedIndex = sortedNaps.count + 1
-            while shouldPredictMoreNaps && items.count < 4 && predictedIndex <= expectedNapSlotCount {
-                let predictedStart = timelinePredictedNapStart(
-                    napIndex: predictedIndex,
-                    anchorEnd: anchorEnd
-                )
-                let awakeBeforeNap = max(0, Int(predictedStart.timeIntervalSince(anchorEnd) / 60))
-
-                items.append(TimelineItem(
-                    icon: "moon.fill",
-                    iconColor: timelineNapColor(state: .upcoming),
-                    time: shortTime(predictedStart),
-                    title: "Nap \(predictedIndex)",
-                    detail: "~\(TimeFormat.minutes(expectedDuration))",
-                    visualState: .upcoming,
-                    isActive: false,
-                    isFuture: true,
-                    awakeBeforeMinutes: awakeBeforeNap
-                ))
-
-                anchorEnd = predictedStart.addingMinutes(expectedDuration)
-                predictedIndex += 1
-            }
-
-            if items.count < 4 {
-                let bedtime = timelineBedtime(after: anchorEnd)
-                let awakeBeforeBed = max(0, Int(bedtime.timeIntervalSince(anchorEnd) / 60))
-                items.append(TimelineItem(
-                    icon: "moon.stars.fill",
-                    iconColor: Color.sleepPurpleDeep,
-                    time: shortTime(bedtime),
-                    title: "Bedtime",
-                    detail: "Night sleep",
-                    visualState: bedtime <= now ? .completed : .upcoming,
-                    isActive: false,
-                    isFuture: bedtime > now,
-                    awakeBeforeMinutes: awakeBeforeBed
-                ))
-            }
-
-            return items
+            return TimelineItem(icon: icon, iconColor: color, time: shortTime(item.time), title: title, detail: detail, visualState: state, isActive: item.isActive, isFuture: item.isFuture, awakeBeforeMinutes: item.awakeBeforeMinutes)
         }
-    
-    private var completedNapCountToday: Int {
-        todaySleeps.filter { $0.kind == .dayNap }.count
-    }
-
-    private var timelineProfile: AgeBasedSleepProfile {
-        let ageMonths = orchestrator.snapshot?.ageMonths ?? 10
-        return DefaultAgeBasedSleepProfileProvider().profile(forAgeMonths: ageMonths)
-    }
-
-    private var timelineExpectedNapDuration: Int {
-        if let minutes = orchestrator.snapshot?.daytime.expectedDurationMinutes {
-            return minutes
-        }
-        let profile = timelineProfile
-        let target = profile.daytimeSleepRange.lowerBound / max(profile.expectedNapCount.upperBound, 1)
-        return min(profile.maxSingleNapMinutes, max(45, target))
-    }
-
-    private var timelineWakeDetail: String {
-        if todayWakeRecord != nil { return "Logged" }
-        return "Default wake"
-    }
-
-    private func timelineWakeAnchor(sortedNaps: [SleepRecord]) -> Date {
-        if let wake = todayWakeRecord?.wakeTime { return wake }
-        if let firstNap = sortedNaps.first {
-            let wakeWindow = timelineWakeWindow(forNapIndex: 1)
-            return Calendar.current.date(byAdding: .minute, value: -wakeWindow, to: firstNap.date) ?? firstNap.date
-        }
-        return defaultWakeTime
-    }
-
-    private func timelineWakeWindow(forNapIndex index: Int) -> Int {
-        if index == completedNapCountToday + 1,
-           let minutes = orchestrator.snapshot?.daytime.wakeWindowUsed {
-            return minutes
-        }
-
-        let profile = timelineProfile
-        if index <= 1 {
-            return (profile.morningWakeWindow.lowerBound + profile.morningWakeWindow.upperBound) / 2
-        }
-        if index >= profile.expectedNapCount.upperBound + 1 {
-            return (profile.eveningWakeWindow.lowerBound + profile.eveningWakeWindow.upperBound) / 2
-        }
-        return (profile.wakeWindowRange.lowerBound + profile.wakeWindowRange.upperBound) / 2
-    }
-
-    private func timelinePredictedNapStart(napIndex: Int, anchorEnd: Date) -> Date {
-        if napIndex == completedNapCountToday + 1,
-           let nextNap = orchestrator.snapshot?.daytime.nextNapTime {
-            return nextNap
-        }
-        return anchorEnd.addingMinutes(timelineWakeWindow(forNapIndex: napIndex))
-    }
-
-    private func timelineBedtime(after anchorEnd: Date) -> Date {
-        if let bedtime = orchestrator.snapshot?.night.optimalBedtimeStart {
-            return bedtime
-        }
-
-        let profile = timelineProfile
-        let proposed = anchorEnd.addingMinutes(timelineWakeWindow(forNapIndex: expectedNapSlotCount + 1))
-        let hour = Calendar.current.component(.hour, from: proposed)
-        guard hour < profile.bedtimeHourRange.lowerBound || hour > profile.bedtimeHourRange.upperBound else {
-            return proposed
-        }
-        return Calendar.current.date(
-            bySettingHour: min(max(hour, profile.bedtimeHourRange.lowerBound), profile.bedtimeHourRange.upperBound),
-            minute: Calendar.current.component(.minute, from: proposed),
-            second: 0,
-            of: proposed
-        ) ?? proposed
     }
 
     private func timelineNapColor(state: TimelineItem.VisualState) -> Color {
@@ -545,12 +341,6 @@ struct SleepListView: View {
         }
     }
     // MARK: - Helpers
-
-    private func totalMinutes(for items: [SleepRecord]) -> Int {
-        let naps   = items.filter { $0.kind != .break }
-        let breaks = items.filter { $0.kind == .break }
-        return naps.reduce(0) { $0 + $1.totalMinutes(breaks: breaks) }
-    }
 
     private func shortTime(_ date: Date) -> String {
         let f        = DateFormatter()
@@ -569,6 +359,12 @@ struct SleepListView: View {
         if cal.isDateInToday(day)     { return "Today" }
         if cal.isDateInYesterday(day) { return "Yesterday" }
         return day.formatted(.dateTime.day().month(.abbreviated))
+    }
+
+    private func totalMinutes(for items: [SleepRecord]) -> Int {
+        let naps = items.filter { $0.kind != .break }
+        let breaks = items.filter { $0.kind == .break }
+        return naps.reduce(0) { $0 + $1.totalMinutes(breaks: breaks) }
     }
 
     private func deleteDay(_ day: Date) {
@@ -618,59 +414,23 @@ struct SleepListView: View {
             .environment(\.locale, Locale(identifier: "en_US"))
         }
         .sheet(item: $activeSheet) { sheet in
-            switch sheet {
-
-            case .addSleep(let editing, let date):
-                AddRecordView(
-                    defaultDate: date,
-                    editingRecord: editing,
-                    vm: AddRecordViewModel(),
-                    onSave: { record in upsert(record) }
-                )
-
-            case .addBreak(let napID, let date, let napDuration):
-                let existing = records.filter {
-                    $0.parentNapID == napID && $0.kind == .break
-                }
-                AddBreakView(
-                    defaultDate: date,
-                    targetNapID: napID,
-                    napDuration: napDuration,
-                    existingBreaks: existing,
-                    onSave: { newBreak in
-                        records.append(newBreak)
-                        saveRecords()
-                    }
-                )
-
-            case .dayDetail(let selected):
-                let dayRecords = records
-                    .filter { Calendar.current.isDate($0.date, inSameDayAs: selected.day) }
-                    .sorted { $0.date < $1.date }
-                DayDetailView(
-                    day: selected.day,
-                    records: dayRecords,
-                    onDelete: { ids in
-                        records.removeAll { ids.contains($0.id) }
-                        saveRecords()
-                    },
-                    onAddSleep: { day in
-                        activeSheet = .addSleep(editing: nil, defaultDate: day)
-                    },
-                    onEditNap: { nap in
-                        activeSheet = .addSleep(editing: nap, defaultDate: nap.date)
-                    },
-                    onBreakSaved: { newBreak in
-                        records.append(newBreak)
-                        saveRecords()
-                    }
-                )
-            case .wakeTime:
-                WakeTimeEditorView(
-                    initialTime: todayWakeRecord?.wakeTime ?? defaultWakeTime,
-                    onSave: saveWakeTime
-                )
-            }
+            SleepListSheetRouter(
+                sheet: sheet,
+                records: records,
+                todayWakeTime: todayWakeRecord?.wakeTime,
+                defaultWakeTime: defaultWakeTime,
+                onRecordUpsert: upsert,
+                onBreakSaved: { newBreak in
+                    records.append(newBreak)
+                    saveRecords()
+                },
+                onDeleteRecords: { ids in
+                    records.removeAll { ids.contains($0.id) }
+                    saveRecords()
+                },
+                onSelectSheet: { activeSheet = $0 },
+                onWakeTimeSave: saveWakeTime
+            )
         }
     }
     // MARK: - Header
@@ -1049,11 +809,11 @@ struct SleepListView: View {
     // MARK: - Badge Helpers
 
     private var todayNapCount: Int {
-        todaySleeps.filter { $0.kind == .dayNap }.count
+        overviewMetrics.todayNapCount
     }
 
     private var todayGoalProgress: Double {
-        min(Double(todayTotal) / 840.0, 1.0)
+        overviewMetrics.todayGoalProgress
     }
 
     private var goalBadgeText: String {
@@ -1102,78 +862,39 @@ struct SleepListView: View {
     }
     
     private var activeSleepRecord: SleepRecord? {
-        let record = records
-            .filter { $0.kind != .break && $0.isOngoing }
-            .sorted { $0.date > $1.date }
-            .first
-        return normalizedActiveSleepRecord(record)
-    }
-
-    private func normalizedActiveSleepRecord(_ record: SleepRecord?) -> SleepRecord? {
-        guard let record else { return nil }
-        guard record.kind == .nightSleep, record.date > Date(), hasPassedTypicalWakeTime == false else {
-            return record
-        }
-        guard Calendar.current.isDateInToday(record.date) else { return record }
-        guard let adjustedDate = Calendar.current.date(byAdding: .day, value: -1, to: record.date) else {
-            return record
-        }
-        return SleepRecord(
-            id: record.id,
-            date: adjustedDate,
-            duration: record.duration,
-            kind: record.kind,
-            parentNapID: record.parentNapID,
-            isOngoing: record.isOngoing,
-            createdAt: record.createdAt
-        )
+        activeSleepCalculation.activeSleepRecord
     }
 
     private var inferredNightSleepStart: Date? {
-        let now = Date()
-        let bedHour = UserDefaults.standard.object(forKey: "typicalBedHour") as? Double ?? 19.0
-        let bedMinute = UserDefaults.standard.object(forKey: "typicalBedMinute") as? Double ?? 30.0
-        let wakeHour = UserDefaults.standard.object(forKey: "typicalWakeHour") as? Double ?? 7.0
-        let wakeMinute = UserDefaults.standard.object(forKey: "typicalWakeMinute") as? Double ?? 0.0
-        let today = Calendar.current.startOfDay(for: now)
-        let todayBedtime = Calendar.current.date(
-            bySettingHour: Int(bedHour),
-            minute: Int(bedMinute),
-            second: 0,
-            of: today
-        ) ?? today.addingMinutes(19 * 60 + 30)
-        let todayWake = Calendar.current.date(
-            bySettingHour: Int(wakeHour),
-            minute: Int(wakeMinute),
-            second: 0,
-            of: today
-        ) ?? today.addingMinutes(7 * 60)
-
-        if now >= todayBedtime {
-            return todayBedtime
-        }
-
-        if now < todayWake {
-            return Calendar.current.date(byAdding: .day, value: -1, to: todayBedtime)
-        }
-
-        return nil
+        activeSleepCalculation.inferredNightSleepStart
     }
 
     private var inferredNightSleepRecord: SleepRecord? {
-        guard activeSleepRecord == nil, let start = inferredNightSleepStart else { return nil }
-        return SleepRecord(
-            date: start,
-            duration: 0,
-            kind: .nightSleep,
-            isOngoing: true,
-            createdAt: start
-        )
+        activeSleepCalculation.inferredNightSleepRecord
     }
 
     // Live sleep card gerçek ongoing kayıt varsa canlı, default gece penceresindeysek tahmini gösterilir.
     private var isStillInNightSleep: Bool {
-        activeSleepRecord != nil || inferredNightSleepRecord != nil
+        activeSleepCalculation.isStillInNightSleep
+    }
+
+    private var activeSleepCalculator: SleepStateCalculator {
+        SleepStateCalculator(
+            records: records,
+            now: Date(),
+            calendar: .current,
+            typicalWakeHour: Int(UserDefaults.standard.object(forKey: "typicalWakeHour") as? Double ?? 7.0),
+            typicalWakeMinute: Int(UserDefaults.standard.object(forKey: "typicalWakeMinute") as? Double ?? 0.0),
+            typicalBedHour: Int(UserDefaults.standard.object(forKey: "typicalBedHour") as? Double ?? 19.0),
+            typicalBedMinute: Int(UserDefaults.standard.object(forKey: "typicalBedMinute") as? Double ?? 30.0),
+            averageNapDurationMinutes: orchestrator.snapshot?.pattern?.averageNapDurationMinutes,
+            predictedNextNapTime: orchestrator.snapshot?.daytime.nextNapTime,
+            recommendedWakeWindowMinutes: recommendedWakeWindowMinutes
+        )
+    }
+
+    private var activeSleepCalculation: SleepStateCalculation {
+        activeSleepCalculator.calculate()
     }
 
     // MARK: next nap or bedtime?
@@ -1209,58 +930,11 @@ struct SleepListView: View {
     }
 
     private func expectedWakeTime(for ongoingSleep: SleepRecord?) -> Date {
-        guard let ongoingSleep else {
-            let wakeHour = UserDefaults.standard.object(forKey: "typicalWakeHour") as? Double ?? 7.0
-            let wakeMinute = UserDefaults.standard.object(forKey: "typicalWakeMinute") as? Double ?? 0.0
-            return Calendar.current.date(
-                bySettingHour: Int(wakeHour),
-                minute: Int(wakeMinute),
-                second: 0,
-                of: Date()
-            ) ?? defaultWakeTime
-        }
-
-        if ongoingSleep.kind == .dayNap {
-            let expectedNapMinutes = ongoingSleep.duration > 0
-                ? ongoingSleep.duration
-                : (orchestrator.snapshot?.pattern?.averageNapDurationMinutes ?? 75)
-            return Calendar.current.date(
-                byAdding: .minute,
-                value: expectedNapMinutes,
-                to: ongoingSleep.date
-            ) ?? Date()
-        }
-
-        let wakeHour = UserDefaults.standard.object(forKey: "typicalWakeHour") as? Double ?? 7.0
-        let wakeMinute = UserDefaults.standard.object(forKey: "typicalWakeMinute") as? Double ?? 0.0
-        let candidate = Calendar.current.date(
-            bySettingHour: Int(wakeHour),
-            minute: Int(wakeMinute),
-            second: 0,
-            of: Date()
-        ) ?? defaultWakeTime
-
-        if candidate > ongoingSleep.date {
-            return candidate
-        }
-
-        return Calendar.current.date(byAdding: .day, value: 1, to: candidate) ?? candidate
+        activeSleepCalculator.expectedWakeTime(for: ongoingSleep)
     }
 
     private func nextSleepTimeAfterCurrentSleep(ongoingSleep: SleepRecord?, expectedWake: Date) -> Date? {
-        guard let ongoingSleep else {
-            return orchestrator.snapshot?.daytime.nextNapTime
-        }
-
-        if ongoingSleep.kind == .nightSleep {
-            return orchestrator.snapshot?.daytime.nextNapTime
-        }
-
-        return Calendar.current.date(
-            byAdding: .minute,
-            value: recommendedWakeWindowMinutes,
-            to: expectedWake
-        )
+        activeSleepCalculator.nextSleepTimeAfterCurrentSleep(ongoingSleep: ongoingSleep, expectedWake: expectedWake)
     }
     
     
@@ -2286,67 +1960,6 @@ struct SleepListView: View {
     }
 }
 
-// MARK: - Wake Time Editor
-
-private struct WakeTimeEditorView: View {
-    let onSave: (Date) -> Void
-    @Environment(\.dismiss) private var dismiss
-    @State private var selectedTime: Date
-
-    init(initialTime: Date, onSave: @escaping (Date) -> Void) {
-        self.onSave   = onSave
-        _selectedTime = State(initialValue: initialTime)
-    }
-
-    var body: some View {
-        NavigationStack {
-            VStack(spacing: 20) {
-                ZStack {
-                    Circle().fill(Color.orange.opacity(0.12)).frame(width: 58, height: 58)
-                    Image(systemName: "sunrise.fill")
-                        .font(.system(size: 27, weight: .semibold))
-                        .foregroundStyle(Color.orange)
-                }
-                VStack(spacing: 6) {
-                    Text("When did your baby wake up?")
-                        .font(.system(size: 20, weight: .bold, design: .rounded))
-                        .foregroundStyle(Color.sleepInk)
-                        .multilineTextAlignment(.center)
-                    Text("This time becomes the starting point for today's sleep predictions.")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(Color.sleepMuted)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 24)
-                }
-                DatePicker(
-                    "Wake-up time",
-                    selection: $selectedTime,
-                    displayedComponents: .hourAndMinute
-                )
-                .datePickerStyle(.wheel).labelsHidden()
-                .frame(maxHeight: 150).clipped()
-                Spacer()
-            }
-            .padding(.top, 24)
-            .background(Color.sleepBackground)
-            .navigationTitle("Today's Wake-up")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Save") { onSave(selectedTime); dismiss() }
-                        .fontWeight(.semibold)
-                }
-            }
-        }
-        .tint(Color.sleepPurpleDeep)
-        .presentationDetents([.height(390)])
-        .presentationDragIndicator(.visible)
-    }
-}
-
 // MARK: - Decorative Views
 
 private struct MoonHeaderArt: View {
@@ -2430,7 +2043,7 @@ private struct ArcShape: Shape {
 
 // MARK: - Colors
 
-private extension Color {
+extension Color {
     static let sleepBackground = Color("sleepBackground")
        static let sleepInk        = Color("sleepInk")
        static let sleepMuted      = Color("sleepMuted")

@@ -42,6 +42,16 @@ SleepCoach.AI uses an agent-based prediction architecture where independent comp
 
 ---
 
+## SleepListView Refactoring
+
+`SleepListView` remains the SwiftUI integration point: it owns `@State`, UI lifecycle and callbacks, notification subscriptions, orchestrator generation, sheet presentation, and assignment of calculator/workflow results back into View state.
+
+Focused responsibilities are now separated into `SleepOverviewCalculator` (overview metrics), `SleepTimelineCalculator` (semantic timeline assembly), `SleepStateCalculator` (active and inferred night state), `SleepRecordPersistence` (sleep-record persistence), `DailyWakeRecordPersistence` (daily wake-record persistence), `SleepListSheetRouter` (sheet routing and callback wiring), and `SleepWakeTimeWorkflow` (deterministic wake-time normalization and ongoing-night closure).
+
+`SleepWakeTimeWorkflow` is non-UI and does not depend on SwiftUI, `@State`, `NotificationCenter`, or `SleepCoachOrchestrator`. Persistence keys remain unchanged; these refactors do not migrate storage. See [`docs/architecture/sleep-list-view-refactor.md`](docs/architecture/sleep-list-view-refactor.md) for the current boundaries.
+
+---
+
 
 ## Core Features
 
@@ -261,6 +271,7 @@ SleepCoach.AI/
 │   └── SegmentKind.swift
 ├── Views/
 │   ├── SleepListView.swift
+│   ├── SleepListSheetRouter.swift
 │   ├── InsightView.swift
 │   ├── HistoryView.swift
 │   ├── DayDetailView.swift
@@ -273,6 +284,12 @@ SleepCoach.AI/
 ├── Services/
 │   ├── SleepCoachOrchestrator.swift
 │   ├── SleepCoachLLMAgent.swift
+│   ├── SleepTimelineCalculator.swift
+│   ├── SleepOverviewCalculator.swift
+│   ├── SleepStateCalculator.swift
+│   ├── SleepRecordPersistence.swift
+│   ├── DailyWakeRecordPersistence.swift
+│   ├── SleepWakeTimeWorkflow.swift
 │   ├── SleepAPI.swift
 │   └── SleepStore.swift
 ├── Agents/
@@ -302,11 +319,7 @@ SleepCoach.AI/
 
 ## Testing Strategy
 
-Current test coverage focuses on:
-
-- Sleep API behavior
-- Add record validation
-- Basic model construction
+Focused tests exist for the extracted calculator and persistence boundaries, as well as the deterministic `SleepWakeTimeWorkflow`. They use explicit dates/calendars or isolated persistence stores where appropriate and do not rely on reading SwiftUI `@State` from a plain `SleepListView` value. Broader tests also cover models, agents, and orchestration. This README does not claim a particular test-run result.
 
 ---
 
