@@ -636,6 +636,185 @@ private final class MockLLMAgent: SleepCoachLLMAgentProtocol {
     }
 }
 
+@MainActor
+final class SleepCoachOrchestratorLLMLifecycleTests: XCTestCase {
+    private let now: Date = {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        return calendar.date(from: DateComponents(year: 2026, month: 8, day: 17, hour: 10))!
+    }()
+
+    private var llmAgent: ControlledLLMAgent!
+    private var orchestrator: SleepCoachOrchestrator!
+
+    override func setUp() {
+        super.setUp()
+        clearDefaults()
+        llmAgent = ControlledLLMAgent()
+        orchestrator = SleepCoachOrchestrator(
+            phaseAgent: MockPhaseAgent(),
+            patternAgent: MockPatternAgent(),
+            daytimeAgent: MockDaytimeAgent(),
+            nightAgent: MockNightAgent(),
+            transitionAgent: MockTransitionAgent(),
+            insightAgent: MockInsightAgent(),
+            llmAgent: llmAgent,
+            overtiredCalc: OvertiredCalculator(profileProvider: MockSleepProfileProvider()),
+            profileProvider: MockSleepProfileProvider()
+        )
+        UserDefaults.standard.set("Test Baby", forKey: "babyName")
+        UserDefaults.standard.set(Calendar.current.date(byAdding: .month, value: -9, to: now)!, forKey: "babyBirthDate")
+    }
+
+    override func tearDown() {
+        clearDefaults()
+        orchestrator = nil
+        llmAgent = nil
+        super.tearDown()
+    }
+
+    func testNormalResponseUpdatesStateAndCache() async throws {
+        let response = response("normal")
+        let requestStarted = expectation(description: "LLM request started")
+        let requestCompleted = expectation(description: "LLM request completed")
+        llmAgent.onRequest = { _ in requestStarted.fulfill() }
+        llmAgent.onCompletion = { _ in requestCompleted.fulfill() }
+        orchestrator.generate(now: now)
+        await fulfillment(of: [requestStarted], timeout: 1)
+        llmAgent.release(0, with: response)
+        await fulfillment(of: [requestCompleted], timeout: 1)
+
+        XCTAssertEqual(orchestrator.llmResponse?.coachMessage, "normal")
+        XCTAssertEqual(UserDefaults.standard.string(forKey: "llm_coachMessage"), "normal")
+        XCTAssertFalse(orchestrator.isLLMLoading)
+    }
+
+    func testStaleResponseCannotOverwriteStateOrCache() async throws {
+        let older = response("older")
+        let newer = response("newer")
+        let firstRequestStarted = expectation(description: "First LLM request started")
+        let secondRequestStarted = expectation(description: "Second LLM request started")
+        let newerCompleted = expectation(description: "Newer LLM request completed")
+        let olderCompleted = expectation(description: "Older LLM request completed")
+        llmAgent.onRequest = { index in
+            if index == 0 { firstRequestStarted.fulfill() }
+            if index == 1 { secondRequestStarted.fulfill() }
+        }
+        llmAgent.onCompletion = { index in
+            if index == 1 { newerCompleted.fulfill() }
+            if index == 0 { olderCompleted.fulfill() }
+        }
+        orchestrator.generate(now: now)
+        await fulfillment(of: [firstRequestStarted], timeout: 1)
+        orchestrator.refreshLLM()
+        await fulfillment(of: [secondRequestStarted], timeout: 1)
+
+        llmAgent.release(1, with: newer)
+        await fulfillment(of: [newerCompleted], timeout: 1)
+        llmAgent.release(0, with: older)
+        await fulfillment(of: [olderCompleted], timeout: 1)
+
+        XCTAssertEqual(orchestrator.llmResponse?.coachMessage, "newer")
+        XCTAssertEqual(UserDefaults.standard.string(forKey: "llm_coachMessage"), "newer")
+    }
+
+    func testStaleCompletionDoesNotClearLoadingForNewerRequest() async throws {
+        let firstRequestStarted = expectation(description: "First LLM request started")
+        let secondRequestStarted = expectation(description: "Second LLM request started")
+        let olderCompleted = expectation(description: "Older LLM request completed")
+        let newerCompleted = expectation(description: "Newer LLM request completed")
+        llmAgent.onRequest = { index in
+            if index == 0 { firstRequestStarted.fulfill() }
+            if index == 1 { secondRequestStarted.fulfill() }
+        }
+        llmAgent.onCompletion = { index in
+            if index == 0 { olderCompleted.fulfill() }
+            if index == 1 { newerCompleted.fulfill() }
+        }
+        orchestrator.generate(now: now)
+        await fulfillment(of: [firstRequestStarted], timeout: 1)
+        orchestrator.refreshLLM()
+        await fulfillment(of: [secondRequestStarted], timeout: 1)
+
+        llmAgent.release(0, with: response("older"))
+        await fulfillment(of: [olderCompleted], timeout: 1)
+        XCTAssertTrue(orchestrator.isLLMLoading)
+
+        llmAgent.release(1, with: response("newer"))
+        await fulfillment(of: [newerCompleted], timeout: 1)
+        XCTAssertFalse(orchestrator.isLLMLoading)
+    }
+
+    func testRefreshUsesSameStaleResultProtectionWhenCancellationIsIgnored() async throws {
+        let firstRequestStarted = expectation(description: "First LLM request started")
+        let secondRequestStarted = expectation(description: "Second LLM request started")
+        let refreshCompleted = expectation(description: "Refresh request completed")
+        let automaticCompleted = expectation(description: "Cancelled automatic request completed")
+        llmAgent.onRequest = { index in
+            if index == 0 { firstRequestStarted.fulfill() }
+            if index == 1 { secondRequestStarted.fulfill() }
+        }
+        llmAgent.onCompletion = { index in
+            if index == 0 { automaticCompleted.fulfill() }
+            if index == 1 { refreshCompleted.fulfill() }
+        }
+        orchestrator.generate(now: now)
+        await fulfillment(of: [firstRequestStarted], timeout: 1)
+        orchestrator.refreshLLM()
+        await fulfillment(of: [secondRequestStarted], timeout: 1)
+
+        llmAgent.release(1, with: response("refresh"))
+        await fulfillment(of: [refreshCompleted], timeout: 1)
+        llmAgent.release(0, with: response("cancelled automatic"))
+        await fulfillment(of: [automaticCompleted], timeout: 1)
+
+        XCTAssertEqual(orchestrator.llmResponse?.coachMessage, "refresh")
+        XCTAssertEqual(UserDefaults.standard.string(forKey: "llm_coachMessage"), "refresh")
+    }
+
+    private func response(_ message: String) -> LLMCoachResponse {
+        LLMCoachResponse(patternInsight: "pattern", coachMessage: message, alert: nil, confidenceNote: "confidence", generatedAt: now)
+    }
+
+    private func clearDefaults() {
+        ["sleepRecords", "dailyWakeRecords_v1", "babyName", "babyBirthDate", "typicalWakeHour", "typicalWakeMinute", "llm_lastGenerated", "llm_coachMessage", "llm_patternInsight", "llm_confidenceNote", "llm_alert"].forEach {
+            UserDefaults.standard.removeObject(forKey: $0)
+        }
+    }
+}
+
+@MainActor
+private final class ControlledLLMAgent: SleepCoachLLMAgentProtocol {
+    private var nextRequestID = 0
+    private var continuations: [Int: CheckedContinuation<LLMCoachResponse?, Never>] = [:]
+    private var pendingResponses: [Int: LLMCoachResponse?] = [:]
+    var onRequest: ((Int) -> Void)?
+    var onCompletion: ((Int) -> Void)?
+
+    func generateInsight(snapshot: OrchestratedSnapshot, records: [SleepRecord], trigger: LLMTrigger) async -> LLMCoachResponse? {
+        let index = nextRequestID
+        nextRequestID += 1
+        let response = await withCheckedContinuation { continuation in
+            if let pendingResponse = pendingResponses.removeValue(forKey: index) {
+                continuation.resume(returning: pendingResponse)
+            } else {
+                continuations[index] = continuation
+                onRequest?(index)
+            }
+        }
+        onCompletion?(index)
+        return response
+    }
+
+    func release(_ index: Int, with response: LLMCoachResponse?) {
+        if let continuation = continuations.removeValue(forKey: index) {
+            continuation.resume(returning: response)
+        } else {
+            pendingResponses[index] = response
+        }
+    }
+}
+
 private final class MockSleepProfileProvider: AgeBasedSleepProfileProviding {
 
     private let profile = AgeBasedSleepProfile(

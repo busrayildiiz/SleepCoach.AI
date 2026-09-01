@@ -87,6 +87,8 @@ final class SleepCoachOrchestrator: ObservableObject {
     private let profileProvider: AgeBasedSleepProfileProviding
     private let llmAgent: SleepCoachLLMAgentProtocol
     private let ageCalculator: BabyAgeCalculating
+    private var activeLLMTask: Task<Void, Never>?
+    private var llmRequestToken = 0
 
     
     // MARK: - Singleton
@@ -290,9 +292,7 @@ final class SleepCoachOrchestrator: ObservableObject {
         )
 
         if let trigger {
-            Task {
-                await callLLM(snapshot: result, records: records, trigger: trigger)
-            }
+            startLLMRequest(snapshot: result, records: records, trigger: trigger)
         }
     }
 
@@ -826,24 +826,47 @@ final class SleepCoachOrchestrator: ObservableObject {
     }
     // MARK: - LLM
 
+    private func startLLMRequest(
+        snapshot: OrchestratedSnapshot,
+        records: [SleepRecord],
+        trigger: LLMTrigger
+    ) {
+        activeLLMTask?.cancel()
+        llmRequestToken += 1
+        let requestToken = llmRequestToken
+        isLLMLoading = true
+
+        activeLLMTask = Task { [weak self] in
+            await self?.callLLM(
+                snapshot: snapshot,
+                records: records,
+                trigger: trigger,
+                requestToken: requestToken
+            )
+        }
+    }
+
     private func callLLM(
         snapshot: OrchestratedSnapshot,
         records:  [SleepRecord],
-        trigger:  LLMTrigger
+        trigger:  LLMTrigger,
+        requestToken: Int
     ) async {
-        isLLMLoading = true
-        defer { isLLMLoading = false }
-
         let response = await llmAgent.generateInsight(
             snapshot: snapshot,
             records:  records,
             trigger:  trigger
         )
 
+        guard requestToken == llmRequestToken else { return }
+
         if let response {
             llmResponse = response
             cacheLLMResponse(response)
         }
+
+        isLLMLoading = false
+        activeLLMTask = nil
     }
 
     private func determineTrigger(
@@ -941,12 +964,10 @@ final class SleepCoachOrchestrator: ObservableObject {
         guard let current = snapshot else { return }
         let records = loadRecords()
 
-        Task {
-            await callLLM(
-                snapshot: current,
-                records:  records,
-                trigger:  .manualRefresh
-            )
-        }
+        startLLMRequest(
+            snapshot: current,
+            records: records,
+            trigger: .manualRefresh
+        )
     }
         }
