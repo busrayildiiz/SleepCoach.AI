@@ -830,6 +830,75 @@ final class SleepCoachOrchestratorLLMLifecycleTests: XCTestCase {
         XCTAssertNil(orchestrator.llmResponse?.alert)
     }
 
+    func testSameSourceWithDifferentTriggerRemainsCurrent() async throws {
+        let started = expectation(description: "Initial request started")
+        let completed = expectation(description: "Initial request completed")
+        llmAgent.onRequest = { index in if index == 0 { started.fulfill() } }
+        llmAgent.onCompletion = { index in if index == 0 { completed.fulfill() } }
+
+        let testNow = Date()
+        orchestrator.generate(now: testNow)
+        await fulfillment(of: [started], timeout: 1)
+        llmAgent.release(0, with: response("initial"))
+        await fulfillment(of: [completed], timeout: 1)
+
+        let refreshStarted = expectation(description: "Manual refresh started")
+        let refreshCompleted = expectation(description: "Manual refresh completed")
+        llmAgent.onRequest = { index in if index == 1 { refreshStarted.fulfill() } }
+        llmAgent.onCompletion = { index in if index == 1 { refreshCompleted.fulfill() } }
+        orchestrator.refreshLLM()
+        await fulfillment(of: [refreshStarted], timeout: 1)
+        llmAgent.release(1, with: nil)
+        await fulfillment(of: [refreshCompleted], timeout: 1)
+        XCTAssertEqual(orchestrator.llmCacheState, .current)
+    }
+
+    func testChangedSleepRecordsMarkCachedResponseStale() async throws {
+        let started = expectation(description: "Initial request started")
+        let completed = expectation(description: "Initial request completed")
+        llmAgent.onRequest = { index in if index == 0 { started.fulfill() } }
+        llmAgent.onCompletion = { index in if index == 0 { completed.fulfill() } }
+
+        let testNow = Date()
+        orchestrator.generate(now: testNow)
+        await fulfillment(of: [started], timeout: 1)
+        llmAgent.release(0, with: response("initial"))
+        await fulfillment(of: [completed], timeout: 1)
+        XCTAssertEqual(orchestrator.llmCacheState, .current)
+
+        saveRecords([SleepRecord(date: testNow, duration: 30, kind: .dayNap)])
+        orchestrator.generate(now: testNow)
+        XCTAssertEqual(orchestrator.llmCacheState, .stale)
+    }
+
+    func testChangedProfileStateMarksCachedResponseStale() async throws {
+        let started = expectation(description: "Initial request started")
+        let completed = expectation(description: "Initial request completed")
+        llmAgent.onRequest = { index in if index == 0 { started.fulfill() } }
+        llmAgent.onCompletion = { index in if index == 0 { completed.fulfill() } }
+
+        let testNow = Date()
+        orchestrator.generate(now: testNow)
+        await fulfillment(of: [started], timeout: 1)
+        llmAgent.release(0, with: response("initial"))
+        await fulfillment(of: [completed], timeout: 1)
+
+        UserDefaults.standard.set(8.0, forKey: "typicalWakeHour")
+        orchestrator.generate(now: testNow)
+        XCTAssertEqual(orchestrator.llmCacheState, .stale)
+    }
+
+    func testExpiredCacheRemainsExpiredRegardlessOfFingerprint() {
+        UserDefaults.standard.set(Date.distantPast.timeIntervalSince1970, forKey: "llm_lastGenerated")
+        UserDefaults.standard.set("cached", forKey: "llm_coachMessage")
+        UserDefaults.standard.set("arbitrary", forKey: "llm_sourceFingerprint")
+
+        orchestrator.loadCachedLLMResponse()
+
+        XCTAssertEqual(orchestrator.llmCacheState, .expired)
+        XCTAssertNil(orchestrator.llmResponse)
+    }
+
     func testStaleResponseCannotOverwriteStateOrCache() async throws {
         let older = response("older")
         let newer = response("newer")
@@ -984,7 +1053,7 @@ final class SleepCoachOrchestratorLLMLifecycleTests: XCTestCase {
     }
 
     private func clearDefaults() {
-        ["sleepRecords", "dailyWakeRecords_v1", "babyName", "babyBirthDate", "typicalWakeHour", "typicalWakeMinute", "llm_lastGenerated", "llm_coachMessage", "llm_patternInsight", "llm_confidenceNote", "llm_alert"].forEach {
+        ["sleepRecords", "dailyWakeRecords_v1", "babyName", "babyBirthDate", "typicalWakeHour", "typicalWakeMinute", "llm_lastGenerated", "llm_coachMessage", "llm_patternInsight", "llm_confidenceNote", "llm_alert", "llm_sourceFingerprint"].forEach {
             UserDefaults.standard.removeObject(forKey: $0)
         }
     }
