@@ -439,59 +439,23 @@ struct SleepListView: View {
             .environment(\.locale, Locale(identifier: "en_US"))
         }
         .sheet(item: $activeSheet) { sheet in
-            switch sheet {
-
-            case .addSleep(let editing, let date):
-                AddRecordView(
-                    defaultDate: date,
-                    editingRecord: editing,
-                    vm: AddRecordViewModel(),
-                    onSave: { record in upsert(record) }
-                )
-
-            case .addBreak(let napID, let date, let napDuration):
-                let existing = records.filter {
-                    $0.parentNapID == napID && $0.kind == .break
-                }
-                AddBreakView(
-                    defaultDate: date,
-                    targetNapID: napID,
-                    napDuration: napDuration,
-                    existingBreaks: existing,
-                    onSave: { newBreak in
-                        records.append(newBreak)
-                        saveRecords()
-                    }
-                )
-
-            case .dayDetail(let selected):
-                let dayRecords = records
-                    .filter { Calendar.current.isDate($0.date, inSameDayAs: selected.day) }
-                    .sorted { $0.date < $1.date }
-                DayDetailView(
-                    day: selected.day,
-                    records: dayRecords,
-                    onDelete: { ids in
-                        records.removeAll { ids.contains($0.id) }
-                        saveRecords()
-                    },
-                    onAddSleep: { day in
-                        activeSheet = .addSleep(editing: nil, defaultDate: day)
-                    },
-                    onEditNap: { nap in
-                        activeSheet = .addSleep(editing: nap, defaultDate: nap.date)
-                    },
-                    onBreakSaved: { newBreak in
-                        records.append(newBreak)
-                        saveRecords()
-                    }
-                )
-            case .wakeTime:
-                WakeTimeEditorView(
-                    initialTime: todayWakeRecord?.wakeTime ?? defaultWakeTime,
-                    onSave: saveWakeTime
-                )
-            }
+            SleepListSheetRouter(
+                sheet: sheet,
+                records: records,
+                todayWakeTime: todayWakeRecord?.wakeTime,
+                defaultWakeTime: defaultWakeTime,
+                onRecordUpsert: upsert,
+                onBreakSaved: { newBreak in
+                    records.append(newBreak)
+                    saveRecords()
+                },
+                onDeleteRecords: { ids in
+                    records.removeAll { ids.contains($0.id) }
+                    saveRecords()
+                },
+                onSelectSheet: { activeSheet = $0 },
+                onWakeTimeSave: saveWakeTime
+            )
         }
     }
     // MARK: - Header
@@ -2021,67 +1985,6 @@ struct SleepListView: View {
     }
 }
 
-// MARK: - Wake Time Editor
-
-private struct WakeTimeEditorView: View {
-    let onSave: (Date) -> Void
-    @Environment(\.dismiss) private var dismiss
-    @State private var selectedTime: Date
-
-    init(initialTime: Date, onSave: @escaping (Date) -> Void) {
-        self.onSave   = onSave
-        _selectedTime = State(initialValue: initialTime)
-    }
-
-    var body: some View {
-        NavigationStack {
-            VStack(spacing: 20) {
-                ZStack {
-                    Circle().fill(Color.orange.opacity(0.12)).frame(width: 58, height: 58)
-                    Image(systemName: "sunrise.fill")
-                        .font(.system(size: 27, weight: .semibold))
-                        .foregroundStyle(Color.orange)
-                }
-                VStack(spacing: 6) {
-                    Text("When did your baby wake up?")
-                        .font(.system(size: 20, weight: .bold, design: .rounded))
-                        .foregroundStyle(Color.sleepInk)
-                        .multilineTextAlignment(.center)
-                    Text("This time becomes the starting point for today's sleep predictions.")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(Color.sleepMuted)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 24)
-                }
-                DatePicker(
-                    "Wake-up time",
-                    selection: $selectedTime,
-                    displayedComponents: .hourAndMinute
-                )
-                .datePickerStyle(.wheel).labelsHidden()
-                .frame(maxHeight: 150).clipped()
-                Spacer()
-            }
-            .padding(.top, 24)
-            .background(Color.sleepBackground)
-            .navigationTitle("Today's Wake-up")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Save") { onSave(selectedTime); dismiss() }
-                        .fontWeight(.semibold)
-                }
-            }
-        }
-        .tint(Color.sleepPurpleDeep)
-        .presentationDetents([.height(390)])
-        .presentationDragIndicator(.visible)
-    }
-}
-
 // MARK: - Decorative Views
 
 private struct MoonHeaderArt: View {
@@ -2165,7 +2068,7 @@ private struct ArcShape: Shape {
 
 // MARK: - Colors
 
-private extension Color {
+extension Color {
     static let sleepBackground = Color("sleepBackground")
        static let sleepInk        = Color("sleepInk")
        static let sleepMuted      = Color("sleepMuted")
