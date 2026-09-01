@@ -923,78 +923,39 @@ struct SleepListView: View {
     }
     
     private var activeSleepRecord: SleepRecord? {
-        let record = records
-            .filter { $0.kind != .break && $0.isOngoing }
-            .sorted { $0.date > $1.date }
-            .first
-        return normalizedActiveSleepRecord(record)
-    }
-
-    private func normalizedActiveSleepRecord(_ record: SleepRecord?) -> SleepRecord? {
-        guard let record else { return nil }
-        guard record.kind == .nightSleep, record.date > Date(), hasPassedTypicalWakeTime == false else {
-            return record
-        }
-        guard Calendar.current.isDateInToday(record.date) else { return record }
-        guard let adjustedDate = Calendar.current.date(byAdding: .day, value: -1, to: record.date) else {
-            return record
-        }
-        return SleepRecord(
-            id: record.id,
-            date: adjustedDate,
-            duration: record.duration,
-            kind: record.kind,
-            parentNapID: record.parentNapID,
-            isOngoing: record.isOngoing,
-            createdAt: record.createdAt
-        )
+        activeSleepCalculation.activeSleepRecord
     }
 
     private var inferredNightSleepStart: Date? {
-        let now = Date()
-        let bedHour = UserDefaults.standard.object(forKey: "typicalBedHour") as? Double ?? 19.0
-        let bedMinute = UserDefaults.standard.object(forKey: "typicalBedMinute") as? Double ?? 30.0
-        let wakeHour = UserDefaults.standard.object(forKey: "typicalWakeHour") as? Double ?? 7.0
-        let wakeMinute = UserDefaults.standard.object(forKey: "typicalWakeMinute") as? Double ?? 0.0
-        let today = Calendar.current.startOfDay(for: now)
-        let todayBedtime = Calendar.current.date(
-            bySettingHour: Int(bedHour),
-            minute: Int(bedMinute),
-            second: 0,
-            of: today
-        ) ?? today.addingMinutes(19 * 60 + 30)
-        let todayWake = Calendar.current.date(
-            bySettingHour: Int(wakeHour),
-            minute: Int(wakeMinute),
-            second: 0,
-            of: today
-        ) ?? today.addingMinutes(7 * 60)
-
-        if now >= todayBedtime {
-            return todayBedtime
-        }
-
-        if now < todayWake {
-            return Calendar.current.date(byAdding: .day, value: -1, to: todayBedtime)
-        }
-
-        return nil
+        activeSleepCalculation.inferredNightSleepStart
     }
 
     private var inferredNightSleepRecord: SleepRecord? {
-        guard activeSleepRecord == nil, let start = inferredNightSleepStart else { return nil }
-        return SleepRecord(
-            date: start,
-            duration: 0,
-            kind: .nightSleep,
-            isOngoing: true,
-            createdAt: start
-        )
+        activeSleepCalculation.inferredNightSleepRecord
     }
 
     // Live sleep card gerçek ongoing kayıt varsa canlı, default gece penceresindeysek tahmini gösterilir.
     private var isStillInNightSleep: Bool {
-        activeSleepRecord != nil || inferredNightSleepRecord != nil
+        activeSleepCalculation.isStillInNightSleep
+    }
+
+    private var activeSleepCalculator: SleepStateCalculator {
+        SleepStateCalculator(
+            records: records,
+            now: Date(),
+            calendar: .current,
+            typicalWakeHour: Int(UserDefaults.standard.object(forKey: "typicalWakeHour") as? Double ?? 7.0),
+            typicalWakeMinute: Int(UserDefaults.standard.object(forKey: "typicalWakeMinute") as? Double ?? 0.0),
+            typicalBedHour: Int(UserDefaults.standard.object(forKey: "typicalBedHour") as? Double ?? 19.0),
+            typicalBedMinute: Int(UserDefaults.standard.object(forKey: "typicalBedMinute") as? Double ?? 30.0),
+            averageNapDurationMinutes: orchestrator.snapshot?.pattern?.averageNapDurationMinutes,
+            predictedNextNapTime: orchestrator.snapshot?.daytime.nextNapTime,
+            recommendedWakeWindowMinutes: recommendedWakeWindowMinutes
+        )
+    }
+
+    private var activeSleepCalculation: SleepStateCalculation {
+        activeSleepCalculator.calculate()
     }
 
     // MARK: next nap or bedtime?
@@ -1030,58 +991,11 @@ struct SleepListView: View {
     }
 
     private func expectedWakeTime(for ongoingSleep: SleepRecord?) -> Date {
-        guard let ongoingSleep else {
-            let wakeHour = UserDefaults.standard.object(forKey: "typicalWakeHour") as? Double ?? 7.0
-            let wakeMinute = UserDefaults.standard.object(forKey: "typicalWakeMinute") as? Double ?? 0.0
-            return Calendar.current.date(
-                bySettingHour: Int(wakeHour),
-                minute: Int(wakeMinute),
-                second: 0,
-                of: Date()
-            ) ?? defaultWakeTime
-        }
-
-        if ongoingSleep.kind == .dayNap {
-            let expectedNapMinutes = ongoingSleep.duration > 0
-                ? ongoingSleep.duration
-                : (orchestrator.snapshot?.pattern?.averageNapDurationMinutes ?? 75)
-            return Calendar.current.date(
-                byAdding: .minute,
-                value: expectedNapMinutes,
-                to: ongoingSleep.date
-            ) ?? Date()
-        }
-
-        let wakeHour = UserDefaults.standard.object(forKey: "typicalWakeHour") as? Double ?? 7.0
-        let wakeMinute = UserDefaults.standard.object(forKey: "typicalWakeMinute") as? Double ?? 0.0
-        let candidate = Calendar.current.date(
-            bySettingHour: Int(wakeHour),
-            minute: Int(wakeMinute),
-            second: 0,
-            of: Date()
-        ) ?? defaultWakeTime
-
-        if candidate > ongoingSleep.date {
-            return candidate
-        }
-
-        return Calendar.current.date(byAdding: .day, value: 1, to: candidate) ?? candidate
+        activeSleepCalculator.expectedWakeTime(for: ongoingSleep)
     }
 
     private func nextSleepTimeAfterCurrentSleep(ongoingSleep: SleepRecord?, expectedWake: Date) -> Date? {
-        guard let ongoingSleep else {
-            return orchestrator.snapshot?.daytime.nextNapTime
-        }
-
-        if ongoingSleep.kind == .nightSleep {
-            return orchestrator.snapshot?.daytime.nextNapTime
-        }
-
-        return Calendar.current.date(
-            byAdding: .minute,
-            value: recommendedWakeWindowMinutes,
-            to: expectedWake
-        )
+        activeSleepCalculator.nextSleepTimeAfterCurrentSleep(ongoingSleep: ongoingSleep, expectedWake: expectedWake)
     }
     
     
