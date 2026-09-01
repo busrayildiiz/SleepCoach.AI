@@ -52,6 +52,18 @@ Focused responsibilities are now separated into `SleepOverviewCalculator` (overv
 
 ---
 
+## Production-First Engineering Status
+
+The project prioritizes production correctness, data integrity, maintainability, and testability over refactoring for line count or aesthetics. Work follows a bounded process: analysis, focused implementation, tests, diff/verification, and manual commit. Existing behavior is not assumed correct simply because the app currently works; confirmed production risks are addressed before purely structural cleanup.
+
+Completed Orchestrator safety work includes LLM task tracking with request tokens, cancellation and stale-response protection; previous-snapshot trigger correctness; duplicate sleep-record notification removal; notification-driven generation coalescing; matched manual-refresh snapshot/record context; stale cached-alert removal; and source-aware LLM cache identity. The cache retains its 24-hour expiry and offline fallback while distinguishing current, stale, and expired source state internally.
+
+Deterministic rule-based analytics remain the primary source for sleep guidance. The LLM is an interpretation and coaching layer over those analytics, not the source of sleep rules. The intended product model is observation and rule-based guidance during approximately the first 14 days, followed by an evolving, continuously updated understanding of the baby's individual pattern combined with age-appropriate and evidence-based guidance.
+
+The broad `SleepCoachOrchestrator` decomposition and wake-anchored Sleep Day model remain future work. The Sleep Day concept has been investigated but is not part of the current implementation.
+
+---
+
 
 ## Core Features
 
