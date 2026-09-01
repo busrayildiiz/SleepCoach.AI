@@ -217,61 +217,18 @@ struct SleepListView: View {
         return name.split(separator: " ").first.map(String.init) ?? name
     }
 
-    private var todayTotal: Int { totalMinutes(for: todayRecords) }
-
-    private var yesterdayTotal: Int {
-        let cal = Calendar.current
-        guard let yesterday = cal.date(byAdding: .day, value: -1, to: Date()) else { return 0 }
-        return totalMinutes(for: records.filter { cal.isDate($0.date, inSameDayAs: yesterday) })
+    private var overviewMetrics: SleepOverviewMetrics {
+        SleepOverviewCalculator(records: records).calculate()
     }
 
-    private var todayDelta: Int { todayTotal - yesterdayTotal }
-
-    private var last7DaysAverage: Int {
-        let cal   = Calendar.current
-        let today = cal.startOfDay(for: Date())
-        let totals = (0..<7).map { offset -> Int in
-            let day   = cal.date(byAdding: .day, value: -offset, to: today) ?? today
-            let items = records.filter { cal.isDate($0.date, inSameDayAs: day) }
-            return totalMinutes(for: items)
-        }
-        return totals.reduce(0, +) / max(totals.count, 1)
-    }
-
-    private var previous7DaysAverage: Int {
-        let cal   = Calendar.current
-        let today = cal.startOfDay(for: Date())
-        let totals = (7..<14).map { offset -> Int in
-            let day   = cal.date(byAdding: .day, value: -offset, to: today) ?? today
-            let items = records.filter { cal.isDate($0.date, inSameDayAs: day) }
-            return totalMinutes(for: items)
-        }
-        return totals.reduce(0, +) / max(totals.count, 1)
-    }
-
-    private var averageNapMinutes: Int {
-        let comparable = sleeps.dropFirst().map { $0.totalMinutes(breaks: breaks) }
-        guard !comparable.isEmpty else { return 80 }
-        return comparable.reduce(0, +) / comparable.count
-    }
-
-    private var latestNapDelta: Int { latestSleepMinutes - averageNapMinutes }
-
-    private var consistencyPercent: Int {
-        let cal   = Calendar.current
-        let today = cal.startOfDay(for: Date())
-        let totals = (0..<7).compactMap { offset -> Int? in
-            let day   = cal.date(byAdding: .day, value: -offset, to: today) ?? today
-            let items = records.filter { cal.isDate($0.date, inSameDayAs: day) }
-            let t     = totalMinutes(for: items)
-            return t > 0 ? t : nil
-        }
-        guard totals.count > 1 else { return records.isEmpty ? 87 : 74 }
-        let avg      = Double(totals.reduce(0, +)) / Double(totals.count)
-        let variance = totals.reduce(0.0) { $0 + pow(Double($1) - avg, 2) } / Double(totals.count)
-        let dev      = sqrt(variance)
-        return max(55, min(97, Int(100 - (dev / max(avg, 1) * 100))))
-    }
+    private var todayTotal: Int { overviewMetrics.todayTotal }
+    private var yesterdayTotal: Int { overviewMetrics.yesterdayTotal }
+    private var todayDelta: Int { overviewMetrics.todayDelta }
+    private var last7DaysAverage: Int { overviewMetrics.last7DaysAverage }
+    private var previous7DaysAverage: Int { overviewMetrics.previous7DaysAverage }
+    private var averageNapMinutes: Int { overviewMetrics.averageNapMinutes }
+    private var latestNapDelta: Int { overviewMetrics.latestNapDelta }
+    private var consistencyPercent: Int { overviewMetrics.consistencyPercent }
 
     private var nextNapAnchor: Date {
         if let last = todaySleeps.last {
@@ -413,12 +370,6 @@ struct SleepListView: View {
     }
     // MARK: - Helpers
 
-    private func totalMinutes(for items: [SleepRecord]) -> Int {
-        let naps   = items.filter { $0.kind != .break }
-        let breaks = items.filter { $0.kind == .break }
-        return naps.reduce(0) { $0 + $1.totalMinutes(breaks: breaks) }
-    }
-
     private func shortTime(_ date: Date) -> String {
         let f        = DateFormatter()
         f.locale     = Locale(identifier: "en_US_POSIX")
@@ -436,6 +387,12 @@ struct SleepListView: View {
         if cal.isDateInToday(day)     { return "Today" }
         if cal.isDateInYesterday(day) { return "Yesterday" }
         return day.formatted(.dateTime.day().month(.abbreviated))
+    }
+
+    private func totalMinutes(for items: [SleepRecord]) -> Int {
+        let naps = items.filter { $0.kind != .break }
+        let breaks = items.filter { $0.kind == .break }
+        return naps.reduce(0) { $0 + $1.totalMinutes(breaks: breaks) }
     }
 
     private func deleteDay(_ day: Date) {
@@ -916,11 +873,11 @@ struct SleepListView: View {
     // MARK: - Badge Helpers
 
     private var todayNapCount: Int {
-        todaySleeps.filter { $0.kind == .dayNap }.count
+        overviewMetrics.todayNapCount
     }
 
     private var todayGoalProgress: Double {
-        min(Double(todayTotal) / 840.0, 1.0)
+        overviewMetrics.todayGoalProgress
     }
 
     private var goalBadgeText: String {

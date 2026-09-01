@@ -20,7 +20,7 @@ final class SleepTimelineCalculatorTests: XCTestCase {
         let completed = SleepRecord(date: Date(timeIntervalSince1970: 100), duration: 20)
         let active = SleepRecord(date: Date(timeIntervalSince1970: 1_000), duration: 60, isOngoing: true)
         let upcoming = SleepRecord(date: Date(timeIntervalSince1970: 2_000), duration: 30)
-        let calculator = SleepTimelineCalculator(records: [completed, active, upcoming], wakeRecord: nil, snapshot: nil, defaultWakeTime: Date(timeIntervalSince1970: 0), now: Date(timeIntervalSince1970: 1_020), profileProvider: DefaultAgeBasedSleepProfileProvider())
+        let calculator = SleepTimelineCalculator(records: [completed, active, upcoming], wakeRecord: nil, snapshot: nil, defaultWakeTime: Date(timeIntervalSince1970: 0), now: Date(timeIntervalSince1970: 1_500), profileProvider: DefaultAgeBasedSleepProfileProvider())
 
         let items = calculator.calculate()
 
