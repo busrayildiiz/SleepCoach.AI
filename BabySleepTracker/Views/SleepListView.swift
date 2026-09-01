@@ -116,42 +116,17 @@ struct SleepListView: View {
     }
 
     private func saveWakeTime(_ selectedTime: Date) {
-        let calendar = Calendar.current
-        let today    = calendar.startOfDay(for: Date())
-        let comps    = calendar.dateComponents([.hour, .minute], from: selectedTime)
-        guard let wakeTime = calendar.date(
-            bySettingHour: comps.hour ?? 7,
-            minute:        comps.minute ?? 0,
-            second:        0,
-            of:            today
-        ) else { return }
-
-        wakeRecords.removeAll { calendar.isDate($0.day, inSameDayAs: today) }
-        wakeRecords.append(DailyWakeRecord(day: today, wakeTime: wakeTime))
-
-        dailyWakeRecordPersistence.save(wakeRecords)
-
-        closeOngoingNightSleepIfWakeTimeEndsIt(wakeTime)
-    }
-
-    private func closeOngoingNightSleepIfWakeTimeEndsIt(_ wakeTime: Date) {
-        guard let ongoing = records
-            .filter({ $0.kind == .nightSleep && $0.isOngoing && wakeTime > $0.date })
-            .sorted(by: { $0.date > $1.date })
-            .first
-        else { return }
-
-        let duration = max(1, Int(wakeTime.timeIntervalSince(ongoing.date) / 60))
-        let closed = SleepRecord(
-            id: ongoing.id,
-            date: ongoing.date,
-            duration: min(duration, 12 * 60),
-            kind: ongoing.kind,
-            parentNapID: ongoing.parentNapID,
-            isOngoing: false,
-            createdAt: ongoing.createdAt
-        )
-        upsert(closed)
+        let result = SleepWakeTimeWorkflow(
+            selectedWakeTime: selectedTime,
+            now: Date(),
+            calendar: .current,
+            wakeRecords: wakeRecords,
+            sleepRecords: records,
+            wakePersistence: dailyWakeRecordPersistence,
+            sleepPersistence: sleepRecordPersistence
+        ).execute()
+        wakeRecords = result.updatedWakeRecords
+        records = result.updatedSleepRecords
     }
 
     // MARK: - Derived Data

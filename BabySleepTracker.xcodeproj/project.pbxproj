@@ -11,18 +11,20 @@
 		FA04E40D3030E00A00EFF932 /* Llmresponseparsingpropertytests .swift in Sources */ = {isa = PBXBuildFile; fileRef = FA04E40C3030E00A00EFF932 /* Llmresponseparsingpropertytests .swift */; };
 		FA04E40F30324CF100EFF932 /* SleepRecordTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA04E40E30324CF100EFF932 /* SleepRecordTests.swift */; };
 		FA04E41130324F1100EFF932 /* SleepStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA04E41030324F1100EFF932 /* SleepStoreTests.swift */; };
-		FA04E42330324F1100EFF932 /* SleepRecordPersistenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA04E42230324F1100EFF932 /* SleepRecordPersistenceTests.swift */; };
-		FA04E42530324F1100EFF932 /* SleepOverviewCalculatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA04E42430324F1100EFF932 /* SleepOverviewCalculatorTests.swift */; };
-		FA04E42730324F1100EFF932 /* DailyWakeRecordPersistenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA04E42630324F1100EFF932 /* DailyWakeRecordPersistenceTests.swift */; };
-		FA04E42930324F1100EFF932 /* SleepStateCalculatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA04E42830324F1100EFF932 /* SleepStateCalculatorTests.swift */; };
 		FA04E4133032501500EFF932 /* DayDetailViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA04E4123032501500EFF932 /* DayDetailViewModelTests.swift */; };
 		FA04E415303252AC00EFF932 /* AuthFlowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA04E414303252AC00EFF932 /* AuthFlowTests.swift */; };
 		FA04E4173032567000EFF932 /* SleepListViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA04E4163032567000EFF932 /* SleepListViewModelTests.swift */; };
-		FA04E4213032567000EFF932 /* SleepTimelineCalculatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA04E4203032567000EFF932 /* SleepTimelineCalculatorTests.swift */; };
 		FA04E4193032585000EFF932 /* DailyWakeRecordTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA04E4183032585000EFF932 /* DailyWakeRecordTests.swift */; };
 		FA04E41B303258E800EFF932 /* SegmentKindTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA04E41A303258E800EFF932 /* SegmentKindTests.swift */; };
 		FA04E41D30325A6900EFF932 /* TimeFormatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA04E41C30325A6900EFF932 /* TimeFormatTests.swift */; };
 		FA04E41F30325C8700EFF932 /* AgeBasedSleepProfileTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA04E41E30325C8600EFF932 /* AgeBasedSleepProfileTests.swift */; };
+		FA04E4213032567000EFF932 /* SleepTimelineCalculatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA04E4203032567000EFF932 /* SleepTimelineCalculatorTests.swift */; };
+		FA04E42330324F1100EFF932 /* SleepRecordPersistenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA04E42230324F1100EFF932 /* SleepRecordPersistenceTests.swift */; };
+		FA04E42530324F1100EFF932 /* SleepOverviewCalculatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA04E42430324F1100EFF932 /* SleepOverviewCalculatorTests.swift */; };
+		FA04E42730324F1100EFF932 /* DailyWakeRecordPersistenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA04E42630324F1100EFF932 /* DailyWakeRecordPersistenceTests.swift */; };
+		FA04E42930324F1100EFF932 /* SleepStateCalculatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA04E42830324F1100EFF932 /* SleepStateCalculatorTests.swift */; };
+		FA2947253046678A00BE2E20 /* SleepWakeTimeWorkflow.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA2947243046678A00BE2E20 /* SleepWakeTimeWorkflow.swift */; };
+		FA294727304667BD00BE2E20 /* SleepWakeTimeWorkflowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA294726304667BD00BE2E20 /* SleepWakeTimeWorkflowTests.swift */; };
 		FA41DF5830326067005F63A3 /* SleepCoachOrchestratorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA41DF5730326067005F63A3 /* SleepCoachOrchestratorTests.swift */; };
 		FA41DF5A30326396005F63A3 /* InsightAgentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA41DF5930326396005F63A3 /* InsightAgentTests.swift */; };
 		FA41DF5C303264BF005F63A3 /* NapTransitionAgentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA41DF5B303264BF005F63A3 /* NapTransitionAgentTests.swift */; };
@@ -66,15 +68,9 @@
 		FAE100022FF9000100ABCDEF /* Components/CurrentSleepSessionCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAE100012FF9000100ABCDEF /* Components/CurrentSleepSessionCard.swift */; };
 		FAEF10442F4E207F00E76FD4 /* BabySleepTrackerApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAEF10432F4E207F00E76FD4 /* BabySleepTrackerApp.swift */; };
 		FAEF10462F4E207F00E76FD4 /* SleepListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAEF10452F4E207F00E76FD4 /* SleepListView.swift */; };
-		FAEF107E2F530D3100E76FD4 /* SleepListSheetRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAEF107D2F530D3100E76FD4 /* SleepListSheetRouter.swift */; };
 		FAEF10482F4E208000E76FD4 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = FAEF10472F4E208000E76FD4 /* Assets.xcassets */; };
 		FAEF104B2F4E208000E76FD4 /* Preview Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = FAEF104A2F4E208000E76FD4 /* Preview Assets.xcassets */; };
 		FAEF104D2F4E208000E76FD4 /* SleepStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAEF104C2F4E208000E76FD4 /* SleepStore.swift */; };
-		FAEF10762F530D3100E76FD4 /* SleepRecordPersistence.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAEF10752F530D3100E76FD4 /* SleepRecordPersistence.swift */; };
-		FAEF10782F530D3100E76FD4 /* SleepOverviewCalculator.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAEF10772F530D3100E76FD4 /* SleepOverviewCalculator.swift */; };
-		FAEF107A2F530D3100E76FD4 /* DailyWakeRecordPersistence.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAEF10792F530D3100E76FD4 /* DailyWakeRecordPersistence.swift */; };
-		FAEF107C2F530D3100E76FD4 /* SleepStateCalculator.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAEF107B2F530D3100E76FD4 /* SleepStateCalculator.swift */; };
-		FAEF10742F530D3100E76FD4 /* SleepTimelineCalculator.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAEF10732F530D3100E76FD4 /* SleepTimelineCalculator.swift */; };
 		FAEF10502F4E208000E76FD4 /* BabySleepTracker.xcdatamodeld in Sources */ = {isa = PBXBuildFile; fileRef = FAEF104E2F4E208000E76FD4 /* BabySleepTracker.xcdatamodeld */; };
 		FAEF10572F4E20BC00E76FD4 /* DayDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAEF10562F4E20BC00E76FD4 /* DayDetailView.swift */; };
 		FAEF10592F4E20D600E76FD4 /* AddRecordView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAEF10582F4E20D600E76FD4 /* AddRecordView.swift */; };
@@ -88,6 +84,12 @@
 		FAEF106E2F53066D00E76FD4 /* AddBreakView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAEF106D2F53066D00E76FD4 /* AddBreakView.swift */; };
 		FAEF10702F530D3100E76FD4 /* SleepRecordRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAEF106F2F530D3100E76FD4 /* SleepRecordRow.swift */; };
 		FAEF10722F536DB200E76FD4 /* NapPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAEF10712F536DB200E76FD4 /* NapPickerView.swift */; };
+		FAEF10742F530D3100E76FD4 /* SleepTimelineCalculator.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAEF10732F530D3100E76FD4 /* SleepTimelineCalculator.swift */; };
+		FAEF10762F530D3100E76FD4 /* SleepRecordPersistence.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAEF10752F530D3100E76FD4 /* SleepRecordPersistence.swift */; };
+		FAEF10782F530D3100E76FD4 /* SleepOverviewCalculator.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAEF10772F530D3100E76FD4 /* SleepOverviewCalculator.swift */; };
+		FAEF107A2F530D3100E76FD4 /* DailyWakeRecordPersistence.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAEF10792F530D3100E76FD4 /* DailyWakeRecordPersistence.swift */; };
+		FAEF107C2F530D3100E76FD4 /* SleepStateCalculator.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAEF107B2F530D3100E76FD4 /* SleepStateCalculator.swift */; };
+		FAEF107E2F530D3100E76FD4 /* SleepListSheetRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAEF107D2F530D3100E76FD4 /* SleepListSheetRouter.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -105,18 +107,20 @@
 		FA04E40C3030E00A00EFF932 /* Llmresponseparsingpropertytests .swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Llmresponseparsingpropertytests .swift"; sourceTree = "<group>"; };
 		FA04E40E30324CF100EFF932 /* SleepRecordTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepRecordTests.swift; sourceTree = "<group>"; };
 		FA04E41030324F1100EFF932 /* SleepStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepStoreTests.swift; sourceTree = "<group>"; };
-		FA04E42230324F1100EFF932 /* SleepRecordPersistenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepRecordPersistenceTests.swift; sourceTree = "<group>"; };
-		FA04E42430324F1100EFF932 /* SleepOverviewCalculatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepOverviewCalculatorTests.swift; sourceTree = "<group>"; };
-		FA04E42630324F1100EFF932 /* DailyWakeRecordPersistenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DailyWakeRecordPersistenceTests.swift; sourceTree = "<group>"; };
-		FA04E42830324F1100EFF932 /* SleepStateCalculatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepStateCalculatorTests.swift; sourceTree = "<group>"; };
 		FA04E4123032501500EFF932 /* DayDetailViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DayDetailViewModelTests.swift; sourceTree = "<group>"; };
 		FA04E414303252AC00EFF932 /* AuthFlowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthFlowTests.swift; sourceTree = "<group>"; };
 		FA04E4163032567000EFF932 /* SleepListViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepListViewModelTests.swift; sourceTree = "<group>"; };
-		FA04E4203032567000EFF932 /* SleepTimelineCalculatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepTimelineCalculatorTests.swift; sourceTree = "<group>"; };
 		FA04E4183032585000EFF932 /* DailyWakeRecordTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DailyWakeRecordTests.swift; sourceTree = "<group>"; };
 		FA04E41A303258E800EFF932 /* SegmentKindTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SegmentKindTests.swift; sourceTree = "<group>"; };
 		FA04E41C30325A6900EFF932 /* TimeFormatTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimeFormatTests.swift; sourceTree = "<group>"; };
 		FA04E41E30325C8600EFF932 /* AgeBasedSleepProfileTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgeBasedSleepProfileTests.swift; sourceTree = "<group>"; };
+		FA04E4203032567000EFF932 /* SleepTimelineCalculatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepTimelineCalculatorTests.swift; sourceTree = "<group>"; };
+		FA04E42230324F1100EFF932 /* SleepRecordPersistenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepRecordPersistenceTests.swift; sourceTree = "<group>"; };
+		FA04E42430324F1100EFF932 /* SleepOverviewCalculatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepOverviewCalculatorTests.swift; sourceTree = "<group>"; };
+		FA04E42630324F1100EFF932 /* DailyWakeRecordPersistenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DailyWakeRecordPersistenceTests.swift; sourceTree = "<group>"; };
+		FA04E42830324F1100EFF932 /* SleepStateCalculatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepStateCalculatorTests.swift; sourceTree = "<group>"; };
+		FA2947243046678A00BE2E20 /* SleepWakeTimeWorkflow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepWakeTimeWorkflow.swift; sourceTree = "<group>"; };
+		FA294726304667BD00BE2E20 /* SleepWakeTimeWorkflowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepWakeTimeWorkflowTests.swift; sourceTree = "<group>"; };
 		FA41DF5730326067005F63A3 /* SleepCoachOrchestratorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepCoachOrchestratorTests.swift; sourceTree = "<group>"; };
 		FA41DF5930326396005F63A3 /* InsightAgentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InsightAgentTests.swift; sourceTree = "<group>"; };
 		FA41DF5B303264BF005F63A3 /* NapTransitionAgentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NapTransitionAgentTests.swift; sourceTree = "<group>"; };
@@ -162,15 +166,9 @@
 		FAEF10402F4E207F00E76FD4 /* BabySleepTracker.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = BabySleepTracker.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		FAEF10432F4E207F00E76FD4 /* BabySleepTrackerApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BabySleepTrackerApp.swift; sourceTree = "<group>"; };
 		FAEF10452F4E207F00E76FD4 /* SleepListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepListView.swift; sourceTree = "<group>"; };
-		FAEF107D2F530D3100E76FD4 /* SleepListSheetRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepListSheetRouter.swift; sourceTree = "<group>"; };
 		FAEF10472F4E208000E76FD4 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		FAEF104A2F4E208000E76FD4 /* Preview Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Preview Assets.xcassets"; sourceTree = "<group>"; };
 		FAEF104C2F4E208000E76FD4 /* SleepStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepStore.swift; sourceTree = "<group>"; };
-		FAEF10752F530D3100E76FD4 /* SleepRecordPersistence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepRecordPersistence.swift; sourceTree = "<group>"; };
-		FAEF10772F530D3100E76FD4 /* SleepOverviewCalculator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepOverviewCalculator.swift; sourceTree = "<group>"; };
-		FAEF10792F530D3100E76FD4 /* DailyWakeRecordPersistence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DailyWakeRecordPersistence.swift; sourceTree = "<group>"; };
-		FAEF107B2F530D3100E76FD4 /* SleepStateCalculator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepStateCalculator.swift; sourceTree = "<group>"; };
-		FAEF10732F530D3100E76FD4 /* SleepTimelineCalculator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepTimelineCalculator.swift; sourceTree = "<group>"; };
 		FAEF104F2F4E208000E76FD4 /* BabySleepTracker.xcdatamodel */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcdatamodel; path = BabySleepTracker.xcdatamodel; sourceTree = "<group>"; };
 		FAEF10562F4E20BC00E76FD4 /* DayDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DayDetailView.swift; sourceTree = "<group>"; };
 		FAEF10582F4E20D600E76FD4 /* AddRecordView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AddRecordView.swift; sourceTree = "<group>"; };
@@ -184,6 +182,12 @@
 		FAEF106D2F53066D00E76FD4 /* AddBreakView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AddBreakView.swift; sourceTree = "<group>"; };
 		FAEF106F2F530D3100E76FD4 /* SleepRecordRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepRecordRow.swift; sourceTree = "<group>"; };
 		FAEF10712F536DB200E76FD4 /* NapPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NapPickerView.swift; sourceTree = "<group>"; };
+		FAEF10732F530D3100E76FD4 /* SleepTimelineCalculator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepTimelineCalculator.swift; sourceTree = "<group>"; };
+		FAEF10752F530D3100E76FD4 /* SleepRecordPersistence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepRecordPersistence.swift; sourceTree = "<group>"; };
+		FAEF10772F530D3100E76FD4 /* SleepOverviewCalculator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepOverviewCalculator.swift; sourceTree = "<group>"; };
+		FAEF10792F530D3100E76FD4 /* DailyWakeRecordPersistence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DailyWakeRecordPersistence.swift; sourceTree = "<group>"; };
+		FAEF107B2F530D3100E76FD4 /* SleepStateCalculator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepStateCalculator.swift; sourceTree = "<group>"; };
+		FAEF107D2F530D3100E76FD4 /* SleepListSheetRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepListSheetRouter.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -215,6 +219,7 @@
 		FA5488D12FAEB964002BC18B /* BabySleepTrackerTests */ = {
 			isa = PBXGroup;
 			children = (
+				FA294726304667BD00BE2E20 /* SleepWakeTimeWorkflowTests.swift */,
 				FA5488D22FAEB964002BC18B /* BabySleepTrackerTests.swift */,
 				FA5488D92FAEB98D002BC18B /* AddRecorViewModelTests.swift */,
 				FA5488DB2FAEBBD4002BC18B /* SleepAPITests.swift */,
@@ -391,6 +396,7 @@
 		FAEF10612F4E26CE00E76FD4 /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				FA2947243046678A00BE2E20 /* SleepWakeTimeWorkflow.swift */,
 				FAEF10732F530D3100E76FD4 /* SleepTimelineCalculator.swift */,
 				FAEF10752F530D3100E76FD4 /* SleepRecordPersistence.swift */,
 				FAEF10772F530D3100E76FD4 /* SleepOverviewCalculator.swift */,
@@ -527,6 +533,7 @@
 				FA41DF623033849F005F63A3 /* NightPredictionAgentTests.swift in Sources */,
 				FA04E41F30325C8700EFF932 /* AgeBasedSleepProfileTests.swift in Sources */,
 				FA41DF5E303380BF005F63A3 /* DaytimePredictionAgentTests.swift in Sources */,
+				FA294727304667BD00BE2E20 /* SleepWakeTimeWorkflowTests.swift in Sources */,
 				FA5488DA2FAEB98D002BC18B /* AddRecorViewModelTests.swift in Sources */,
 				FA04E4173032567000EFF932 /* SleepListViewModelTests.swift in Sources */,
 				FA04E4213032567000EFF932 /* SleepTimelineCalculatorTests.swift in Sources */,
@@ -583,6 +590,7 @@
 				FAEF10762F530D3100E76FD4 /* SleepRecordPersistence.swift in Sources */,
 				FAEF10782F530D3100E76FD4 /* SleepOverviewCalculator.swift in Sources */,
 				FAEF107A2F530D3100E76FD4 /* DailyWakeRecordPersistence.swift in Sources */,
+				FA2947253046678A00BE2E20 /* SleepWakeTimeWorkflow.swift in Sources */,
 				FAEF107C2F530D3100E76FD4 /* SleepStateCalculator.swift in Sources */,
 				FA7232E12FDCCB1D00647487 /* NightPredictionAgent.swift in Sources */,
 				FAEF10662F4E5A1E00E76FD4 /* SleepListViewModel.swift in Sources */,
