@@ -84,6 +84,7 @@ struct SleepListView: View {
     @State private var wakeRecords: [DailyWakeRecord] = []
     @State private var addDefaultDate: Date = Date()
     private let sleepRecordPersistence = SleepRecordPersistence()
+    private let dailyWakeRecordPersistence = DailyWakeRecordPersistence()
 
     @AppStorage("babyName")   private var babyName:   String = "Baby"
     @AppStorage("parentName") private var parentName: String = ""
@@ -109,8 +110,7 @@ struct SleepListView: View {
     }
 
     private func loadWakeRecords() {
-        if let data    = UserDefaults.standard.data(forKey: "dailyWakeRecords_v1"),
-           let decoded = try? JSONDecoder().decode([DailyWakeRecord].self, from: data) {
+        if let decoded = dailyWakeRecordPersistence.load() {
             wakeRecords = decoded
         }
     }
@@ -129,10 +129,7 @@ struct SleepListView: View {
         wakeRecords.removeAll { calendar.isDate($0.day, inSameDayAs: today) }
         wakeRecords.append(DailyWakeRecord(day: today, wakeTime: wakeTime))
 
-        if let encoded = try? JSONEncoder().encode(wakeRecords) {
-            UserDefaults.standard.set(encoded, forKey: "dailyWakeRecords_v1")
-            NotificationCenter.default.post(name: .dailyWakeRecordsDidChange, object: nil)
-        }
+        dailyWakeRecordPersistence.save(wakeRecords)
 
         closeOngoingNightSleepIfWakeTimeEndsIt(wakeTime)
     }
