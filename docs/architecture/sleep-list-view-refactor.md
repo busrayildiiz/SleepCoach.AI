@@ -38,6 +38,20 @@ Wake-time normalization and ongoing-night closure were extracted into a determin
 - `"dailyWakeRecords_v1"` remains unchanged.
 - This separation is intentional for now to avoid accidental data loss or compatibility problems.
 
+## Orchestrator Production-Safety Work
+
+The following bounded production-safety changes are complete:
+
+- LLM requests use active-task tracking, request tokens, cancellation, and stale-result checks for published state and cache writes. `refreshLLM()` uses the same lifecycle boundary.
+- LLM trigger detection compares the newly generated snapshot with the previously published snapshot.
+- Sleep-record persistence owns its successful-change notification without a redundant Orchestrator notification.
+- Notification-driven generation is coalesced at the `SleepListView` boundary while each persistence notification remains independently observable.
+- Manual LLM refresh reuses the latest snapshot and the exact records generated with it.
+- Cached alerts are explicitly removed when an accepted response has no alert.
+- LLM cache entries carry a deterministic semantic source fingerprint and are classified internally as current, stale, or expired. The existing 24-hour expiry and offline fallback remain unchanged; trigger identity and snapshot generation timestamp are not part of semantic source identity.
+
+These changes are bounded safety fixes, not a broad `SleepCoachOrchestrator` decomposition.
+
 ## Architectural Rules
 
 - Refactoring must preserve existing behavior unless a deliberate behavior change is explicitly intended.
@@ -66,10 +80,12 @@ The wake-time workflow, raw persistence mechanics, timeline calculations, overvi
 
 ## Next Refactoring Candidates
 
-Future candidates include:
+The current roadmap is:
 
-- Remaining derived and business calculations
-- Orchestrator lifecycle and dependency management
-- Singleton reduction
+- Production-risk audit and bounded fixes in `SleepCoachOrchestrator` remain ongoing.
+- Broader `SleepCoachOrchestrator` decomposition and dependency-management work is pending.
+- Longitudinal LLM context and continuously updated pattern personalization remain product/architecture work, not completed features.
+- A wake-anchored Sleep Day model remains a future domain decision; the investigated `SleepDayBoundaryResolver` work was rolled back and is not part of the current implementation.
+- Singleton reduction remains pending.
 
 These are future possibilities, not completed work.

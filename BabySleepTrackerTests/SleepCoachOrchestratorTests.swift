@@ -168,6 +168,35 @@ final class SleepCoachOrchestratorTests: XCTestCase {
         XCTAssertNotNil(orchestrator.snapshot?.pattern)
     }
 
+    func testClosingStaleRecordPostsOneSleepRecordsNotification() throws {
+        let staleRecord = SleepRecord(
+            date: now.addingTimeInterval(-2 * 24 * 60 * 60),
+            duration: 0,
+            kind: .nightSleep,
+            isOngoing: true
+        )
+        saveRecords([staleRecord])
+
+        var notificationCount = 0
+        let observer = NotificationCenter.default.addObserver(
+            forName: .sleepRecordsDidChange,
+            object: nil,
+            queue: nil
+        ) { _ in
+            notificationCount += 1
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+
+        orchestrator.generate(now: now)
+
+        XCTAssertEqual(notificationCount, 1)
+        let storedRecords = try loadStoredRecords()
+        let storedRecord = try XCTUnwrap(storedRecords.first)
+        XCTAssertEqual(storedRecord.id, staleRecord.id)
+        XCTAssertFalse(storedRecord.isOngoing)
+        XCTAssertGreaterThan(storedRecord.duration, 0)
+    }
+
     // MARK: - nextSleepKind
 
     func testNextSleepKindIsNapWhenNapCountIsBelowExpectedMaximum() {
@@ -188,21 +217,24 @@ final class SleepCoachOrchestratorTests: XCTestCase {
     }
 
     func testNextSleepKindIsBedtimeWhenExpectedNapCountIsReached() {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        let currentDayNow = calendar.date(byAdding: .hour, value: 10, to: today)!
         let firstNap = SleepRecord(
-            date: now.addingTimeInterval(-4 * 60 * 60),
+            date: calendar.date(byAdding: .hour, value: 6, to: today)!,
             duration: 60,
             kind: .dayNap
         )
 
         let secondNap = SleepRecord(
-            date: now.addingTimeInterval(-2 * 60 * 60),
+            date: calendar.date(byAdding: .hour, value: 8, to: today)!,
             duration: 60,
             kind: .dayNap
         )
 
         saveRecords([firstNap, secondNap])
 
-        orchestrator.generate(now: now)
+        orchestrator.generate(now: currentDayNow)
 
         XCTAssertEqual(
             orchestrator.snapshot?.nextSleepKind,
@@ -385,6 +417,27 @@ final class SleepCoachOrchestratorTests: XCTestCase {
         )
 
         XCTAssertFalse(orchestrator.isLLMLoading)
+    }
+
+    func testIncreasedTodaySleepTriggersShortNapLLMCall() async {
+        let currentDay = Date()
+        let triggerReceived = expectation(description: "Short nap trigger received")
+        llmAgent.onTrigger = { trigger in
+            if case .shortNapDetected = trigger {
+                triggerReceived.fulfill()
+            }
+        }
+        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "llm_lastGenerated")
+
+        orchestrator.generate(now: currentDay)
+        saveRecords([
+            SleepRecord(date: currentDay, duration: 30, kind: .dayNap)
+        ])
+        orchestrator.generate(now: currentDay)
+        await fulfillment(of: [triggerReceived], timeout: 1)
+
+        XCTAssertEqual(llmAgent.receivedTriggers.count, 1)
+        XCTAssertEqual(triggerName(llmAgent.receivedTriggers.first), "shortNapDetected")
     }
 
     // MARK: - Helpers
@@ -622,6 +675,7 @@ private struct MockInsightAgent: InsightAgentProtocol {
 private final class MockLLMAgent: SleepCoachLLMAgentProtocol {
 
     var response: LLMCoachResponse?
+    var onTrigger: ((LLMTrigger) -> Void)?
 
     private(set) var receivedTriggers: [LLMTrigger] = []
 
@@ -632,7 +686,414 @@ private final class MockLLMAgent: SleepCoachLLMAgentProtocol {
     ) async -> LLMCoachResponse? {
 
         receivedTriggers.append(trigger)
+        onTrigger?(trigger)
         return response
+    }
+}
+
+final class SleepGenerationCoalescerTests: XCTestCase {
+    func testWakeAndSleepNotificationsShareOnePendingGeneration() {
+        var scheduled: (() -> Void)?
+        let coalescer = SleepGenerationCoalescer { scheduled = $0 }
+        var generationCount = 0
+
+        coalescer.request { generationCount += 1 }
+        coalescer.request { generationCount += 1 }
+
+        XCTAssertEqual(generationCount, 0)
+        scheduled?()
+        XCTAssertEqual(generationCount, 1)
+    }
+
+    func testWakeOnlyNotificationSchedulesOneGeneration() {
+        var scheduled: (() -> Void)?
+        let coalescer = SleepGenerationCoalescer { scheduled = $0 }
+        var generationCount = 0
+
+        coalescer.request { generationCount += 1 }
+        scheduled?()
+
+        XCTAssertEqual(generationCount, 1)
+    }
+
+    func testSleepRecordNotificationSchedulesOneGeneration() {
+        var scheduled: (() -> Void)?
+        let coalescer = SleepGenerationCoalescer { scheduled = $0 }
+        var generationCount = 0
+
+        coalescer.request { generationCount += 1 }
+        scheduled?()
+
+        XCTAssertEqual(generationCount, 1)
+    }
+
+    func testNewPendingCycleCanScheduleAnotherGeneration() {
+        var scheduled: (() -> Void)?
+        let coalescer = SleepGenerationCoalescer { scheduled = $0 }
+        var generationCount = 0
+
+        coalescer.request { generationCount += 1 }
+        scheduled?()
+        coalescer.request { generationCount += 1 }
+        scheduled?()
+
+        XCTAssertEqual(generationCount, 2)
+    }
+}
+
+@MainActor
+final class SleepCoachOrchestratorLLMLifecycleTests: XCTestCase {
+    private let now: Date = {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        return calendar.date(from: DateComponents(year: 2026, month: 8, day: 17, hour: 10))!
+    }()
+
+    private var llmAgent: ControlledLLMAgent!
+    private var orchestrator: SleepCoachOrchestrator!
+
+    override func setUp() {
+        super.setUp()
+        clearDefaults()
+        llmAgent = ControlledLLMAgent()
+        orchestrator = SleepCoachOrchestrator(
+            phaseAgent: MockPhaseAgent(),
+            patternAgent: MockPatternAgent(),
+            daytimeAgent: MockDaytimeAgent(),
+            nightAgent: MockNightAgent(),
+            transitionAgent: MockTransitionAgent(),
+            insightAgent: MockInsightAgent(),
+            llmAgent: llmAgent,
+            overtiredCalc: OvertiredCalculator(profileProvider: MockSleepProfileProvider()),
+            profileProvider: MockSleepProfileProvider()
+        )
+        UserDefaults.standard.set("Test Baby", forKey: "babyName")
+        UserDefaults.standard.set(Calendar.current.date(byAdding: .month, value: -9, to: now)!, forKey: "babyBirthDate")
+    }
+
+    override func tearDown() {
+        clearDefaults()
+        orchestrator = nil
+        llmAgent = nil
+        super.tearDown()
+    }
+
+    func testNormalResponseUpdatesStateAndCache() async throws {
+        let response = response("normal")
+        let requestStarted = expectation(description: "LLM request started")
+        let requestCompleted = expectation(description: "LLM request completed")
+        llmAgent.onRequest = { _ in requestStarted.fulfill() }
+        llmAgent.onCompletion = { _ in requestCompleted.fulfill() }
+        orchestrator.generate(now: now)
+        await fulfillment(of: [requestStarted], timeout: 1)
+        llmAgent.release(0, with: response)
+        await fulfillment(of: [requestCompleted], timeout: 1)
+
+        XCTAssertEqual(orchestrator.llmResponse?.coachMessage, "normal")
+        XCTAssertEqual(UserDefaults.standard.string(forKey: "llm_coachMessage"), "normal")
+        XCTAssertFalse(orchestrator.isLLMLoading)
+    }
+
+    func testCachingResponseWithoutAlertRemovesPreviousCachedAlert() async throws {
+        let alertResponse = response("with alert", alert: "Take care")
+        let alertRequestStarted = expectation(description: "Alert response request started")
+        let alertRequestCompleted = expectation(description: "Alert response request completed")
+        llmAgent.onRequest = { index in
+            if index == 0 { alertRequestStarted.fulfill() }
+        }
+        llmAgent.onCompletion = { index in
+            if index == 0 { alertRequestCompleted.fulfill() }
+        }
+
+        orchestrator.generate(now: Date())
+        await fulfillment(of: [alertRequestStarted], timeout: 1)
+        llmAgent.release(0, with: alertResponse)
+        await fulfillment(of: [alertRequestCompleted], timeout: 1)
+        XCTAssertEqual(UserDefaults.standard.string(forKey: "llm_alert"), "Take care")
+
+        let clearAlertRequestStarted = expectation(description: "Alert-free response request started")
+        let clearAlertRequestCompleted = expectation(description: "Alert-free response request completed")
+        llmAgent.onRequest = { index in
+            if index == 1 { clearAlertRequestStarted.fulfill() }
+        }
+        llmAgent.onCompletion = { index in
+            if index == 1 { clearAlertRequestCompleted.fulfill() }
+        }
+
+        orchestrator.refreshLLM()
+        await fulfillment(of: [clearAlertRequestStarted], timeout: 1)
+        llmAgent.release(1, with: response("without alert"))
+        await fulfillment(of: [clearAlertRequestCompleted], timeout: 1)
+
+        XCTAssertNil(UserDefaults.standard.string(forKey: "llm_alert"))
+        orchestrator.loadCachedLLMResponse()
+        XCTAssertNil(orchestrator.llmResponse?.alert)
+    }
+
+    func testSameSourceWithDifferentTriggerRemainsCurrent() async throws {
+        let started = expectation(description: "Initial request started")
+        let completed = expectation(description: "Initial request completed")
+        llmAgent.onRequest = { index in if index == 0 { started.fulfill() } }
+        llmAgent.onCompletion = { index in if index == 0 { completed.fulfill() } }
+
+        let testNow = Date()
+        orchestrator.generate(now: testNow)
+        await fulfillment(of: [started], timeout: 1)
+        llmAgent.release(0, with: response("initial"))
+        await fulfillment(of: [completed], timeout: 1)
+
+        let refreshStarted = expectation(description: "Manual refresh started")
+        let refreshCompleted = expectation(description: "Manual refresh completed")
+        llmAgent.onRequest = { index in if index == 1 { refreshStarted.fulfill() } }
+        llmAgent.onCompletion = { index in if index == 1 { refreshCompleted.fulfill() } }
+        orchestrator.refreshLLM()
+        await fulfillment(of: [refreshStarted], timeout: 1)
+        llmAgent.release(1, with: nil)
+        await fulfillment(of: [refreshCompleted], timeout: 1)
+        XCTAssertEqual(orchestrator.llmCacheState, .current)
+    }
+
+    func testChangedSleepRecordsMarkCachedResponseStale() async throws {
+        let started = expectation(description: "Initial request started")
+        let completed = expectation(description: "Initial request completed")
+        llmAgent.onRequest = { index in if index == 0 { started.fulfill() } }
+        llmAgent.onCompletion = { index in if index == 0 { completed.fulfill() } }
+
+        let testNow = Date()
+        orchestrator.generate(now: testNow)
+        await fulfillment(of: [started], timeout: 1)
+        llmAgent.release(0, with: response("initial"))
+        await fulfillment(of: [completed], timeout: 1)
+        XCTAssertEqual(orchestrator.llmCacheState, .current)
+
+        saveRecords([SleepRecord(date: testNow, duration: 30, kind: .dayNap)])
+        orchestrator.generate(now: testNow)
+        XCTAssertEqual(orchestrator.llmCacheState, .stale)
+    }
+
+    func testChangedProfileStateMarksCachedResponseStale() async throws {
+        let started = expectation(description: "Initial request started")
+        let completed = expectation(description: "Initial request completed")
+        llmAgent.onRequest = { index in if index == 0 { started.fulfill() } }
+        llmAgent.onCompletion = { index in if index == 0 { completed.fulfill() } }
+
+        let testNow = Date()
+        orchestrator.generate(now: testNow)
+        await fulfillment(of: [started], timeout: 1)
+        llmAgent.release(0, with: response("initial"))
+        await fulfillment(of: [completed], timeout: 1)
+
+        UserDefaults.standard.set(8.0, forKey: "typicalWakeHour")
+        orchestrator.generate(now: testNow)
+        XCTAssertEqual(orchestrator.llmCacheState, .stale)
+    }
+
+    func testExpiredCacheRemainsExpiredRegardlessOfFingerprint() {
+        UserDefaults.standard.set(Date.distantPast.timeIntervalSince1970, forKey: "llm_lastGenerated")
+        UserDefaults.standard.set("cached", forKey: "llm_coachMessage")
+        UserDefaults.standard.set("arbitrary", forKey: "llm_sourceFingerprint")
+
+        orchestrator.loadCachedLLMResponse()
+
+        XCTAssertEqual(orchestrator.llmCacheState, .expired)
+        XCTAssertNil(orchestrator.llmResponse)
+    }
+
+    func testStaleResponseCannotOverwriteStateOrCache() async throws {
+        let older = response("older")
+        let newer = response("newer")
+        let firstRequestStarted = expectation(description: "First LLM request started")
+        let secondRequestStarted = expectation(description: "Second LLM request started")
+        let newerCompleted = expectation(description: "Newer LLM request completed")
+        let olderCompleted = expectation(description: "Older LLM request completed")
+        llmAgent.onRequest = { index in
+            if index == 0 { firstRequestStarted.fulfill() }
+            if index == 1 { secondRequestStarted.fulfill() }
+        }
+        llmAgent.onCompletion = { index in
+            if index == 1 { newerCompleted.fulfill() }
+            if index == 0 { olderCompleted.fulfill() }
+        }
+        orchestrator.generate(now: now)
+        await fulfillment(of: [firstRequestStarted], timeout: 1)
+        orchestrator.refreshLLM()
+        await fulfillment(of: [secondRequestStarted], timeout: 1)
+
+        llmAgent.release(1, with: newer)
+        await fulfillment(of: [newerCompleted], timeout: 1)
+        llmAgent.release(0, with: older)
+        await fulfillment(of: [olderCompleted], timeout: 1)
+
+        XCTAssertEqual(orchestrator.llmResponse?.coachMessage, "newer")
+        XCTAssertEqual(UserDefaults.standard.string(forKey: "llm_coachMessage"), "newer")
+    }
+
+    func testStaleCompletionDoesNotClearLoadingForNewerRequest() async throws {
+        let firstRequestStarted = expectation(description: "First LLM request started")
+        let secondRequestStarted = expectation(description: "Second LLM request started")
+        let olderCompleted = expectation(description: "Older LLM request completed")
+        let newerCompleted = expectation(description: "Newer LLM request completed")
+        llmAgent.onRequest = { index in
+            if index == 0 { firstRequestStarted.fulfill() }
+            if index == 1 { secondRequestStarted.fulfill() }
+        }
+        llmAgent.onCompletion = { index in
+            if index == 0 { olderCompleted.fulfill() }
+            if index == 1 { newerCompleted.fulfill() }
+        }
+        orchestrator.generate(now: now)
+        await fulfillment(of: [firstRequestStarted], timeout: 1)
+        orchestrator.refreshLLM()
+        await fulfillment(of: [secondRequestStarted], timeout: 1)
+
+        llmAgent.release(0, with: response("older"))
+        await fulfillment(of: [olderCompleted], timeout: 1)
+        XCTAssertTrue(orchestrator.isLLMLoading)
+
+        llmAgent.release(1, with: response("newer"))
+        await fulfillment(of: [newerCompleted], timeout: 1)
+        XCTAssertFalse(orchestrator.isLLMLoading)
+    }
+
+    func testRefreshUsesSameStaleResultProtectionWhenCancellationIsIgnored() async throws {
+        let firstRequestStarted = expectation(description: "First LLM request started")
+        let secondRequestStarted = expectation(description: "Second LLM request started")
+        let refreshCompleted = expectation(description: "Refresh request completed")
+        let automaticCompleted = expectation(description: "Cancelled automatic request completed")
+        llmAgent.onRequest = { index in
+            if index == 0 { firstRequestStarted.fulfill() }
+            if index == 1 { secondRequestStarted.fulfill() }
+        }
+        llmAgent.onCompletion = { index in
+            if index == 0 { automaticCompleted.fulfill() }
+            if index == 1 { refreshCompleted.fulfill() }
+        }
+        orchestrator.generate(now: now)
+        await fulfillment(of: [firstRequestStarted], timeout: 1)
+        orchestrator.refreshLLM()
+        await fulfillment(of: [secondRequestStarted], timeout: 1)
+
+        llmAgent.release(1, with: response("refresh"))
+        await fulfillment(of: [refreshCompleted], timeout: 1)
+        llmAgent.release(0, with: response("cancelled automatic"))
+        await fulfillment(of: [automaticCompleted], timeout: 1)
+
+        XCTAssertEqual(orchestrator.llmResponse?.coachMessage, "refresh")
+        XCTAssertEqual(UserDefaults.standard.string(forKey: "llm_coachMessage"), "refresh")
+    }
+
+    func testManualRefreshUsesRecordsMatchedToPublishedSnapshot() async {
+        let currentDay = Date()
+        let requestStarted = expectation(description: "Manual LLM request started")
+        let requestCompleted = expectation(description: "Manual LLM request completed")
+        llmAgent.onRequest = { _ in requestStarted.fulfill() }
+        llmAgent.onCompletion = { _ in requestCompleted.fulfill() }
+
+        UserDefaults.standard.set(currentDay.timeIntervalSince1970, forKey: "llm_lastGenerated")
+        orchestrator.generate(now: currentDay)
+        let stateBRecord = SleepRecord(date: currentDay, duration: 30, kind: .dayNap)
+        saveRecords([stateBRecord])
+
+        orchestrator.refreshLLM()
+        await fulfillment(of: [requestStarted], timeout: 1)
+
+        guard let trigger = llmAgent.receivedTriggers.last else {
+            return XCTFail("Expected a manual refresh trigger")
+        }
+        if case .manualRefresh = trigger {
+            // Expected trigger.
+        } else {
+            XCTFail("Expected a manual refresh trigger")
+        }
+        XCTAssertEqual(llmAgent.receivedSnapshots.last?.todayTotalMinutes, 0)
+        XCTAssertEqual(llmAgent.receivedRecords.last?.count, 0)
+        llmAgent.release(0, with: nil)
+        await fulfillment(of: [requestCompleted], timeout: 1)
+    }
+
+    func testAutomaticGenerationUsesMatchingSnapshotAndRecords() async throws {
+        let currentDay = Date()
+        let requestStarted = expectation(description: "Automatic LLM request started")
+        let requestCompleted = expectation(description: "Automatic LLM request completed")
+        llmAgent.onRequest = { _ in requestStarted.fulfill() }
+        llmAgent.onCompletion = { _ in requestCompleted.fulfill() }
+
+        UserDefaults.standard.set(currentDay.timeIntervalSince1970, forKey: "llm_lastGenerated")
+        orchestrator.generate(now: currentDay)
+        let stateBRecord = SleepRecord(date: currentDay, duration: 30, kind: .dayNap)
+        saveRecords([stateBRecord])
+
+        orchestrator.generate(now: currentDay)
+        await fulfillment(of: [requestStarted], timeout: 1)
+
+        guard let trigger = llmAgent.receivedTriggers.last else {
+            return XCTFail("Expected a short nap trigger")
+        }
+        if case .shortNapDetected = trigger {
+            // Expected trigger.
+        } else {
+            XCTFail("Expected a short nap trigger")
+        }
+        XCTAssertEqual(llmAgent.receivedSnapshots.last?.todayTotalMinutes, 30)
+        let capturedRecord = try XCTUnwrap(llmAgent.receivedRecords.last?.first)
+        XCTAssertEqual(capturedRecord.id, stateBRecord.id)
+        XCTAssertEqual(capturedRecord.date, stateBRecord.date)
+        XCTAssertEqual(capturedRecord.duration, stateBRecord.duration)
+        XCTAssertEqual(capturedRecord.kind, stateBRecord.kind)
+        llmAgent.release(0, with: nil)
+        await fulfillment(of: [requestCompleted], timeout: 1)
+    }
+
+    private func response(_ message: String, alert: String? = nil) -> LLMCoachResponse {
+        LLMCoachResponse(patternInsight: "pattern", coachMessage: message, alert: alert, confidenceNote: "confidence", generatedAt: Date())
+    }
+
+    private func saveRecords(_ records: [SleepRecord]) {
+        UserDefaults.standard.set(try! JSONEncoder().encode(records), forKey: "sleepRecords")
+    }
+
+    private func clearDefaults() {
+        ["sleepRecords", "dailyWakeRecords_v1", "babyName", "babyBirthDate", "typicalWakeHour", "typicalWakeMinute", "llm_lastGenerated", "llm_coachMessage", "llm_patternInsight", "llm_confidenceNote", "llm_alert", "llm_sourceFingerprint"].forEach {
+            UserDefaults.standard.removeObject(forKey: $0)
+        }
+    }
+}
+
+@MainActor
+private final class ControlledLLMAgent: SleepCoachLLMAgentProtocol {
+    private var nextRequestID = 0
+    private var continuations: [Int: CheckedContinuation<LLMCoachResponse?, Never>] = [:]
+    private var pendingResponses: [Int: LLMCoachResponse?] = [:]
+    var onRequest: ((Int) -> Void)?
+    var onCompletion: ((Int) -> Void)?
+    private(set) var receivedSnapshots: [OrchestratedSnapshot] = []
+    private(set) var receivedRecords: [[SleepRecord]] = []
+    private(set) var receivedTriggers: [LLMTrigger] = []
+
+    func generateInsight(snapshot: OrchestratedSnapshot, records: [SleepRecord], trigger: LLMTrigger) async -> LLMCoachResponse? {
+        let index = nextRequestID
+        nextRequestID += 1
+        receivedSnapshots.append(snapshot)
+        receivedRecords.append(records)
+        receivedTriggers.append(trigger)
+        let response = await withCheckedContinuation { continuation in
+            if let pendingResponse = pendingResponses.removeValue(forKey: index) {
+                continuation.resume(returning: pendingResponse)
+            } else {
+                continuations[index] = continuation
+                onRequest?(index)
+            }
+        }
+        onCompletion?(index)
+        return response
+    }
+
+    func release(_ index: Int, with response: LLMCoachResponse?) {
+        if let continuation = continuations.removeValue(forKey: index) {
+            continuation.resume(returning: response)
+        } else {
+            pendingResponses[index] = response
+        }
     }
 }
 

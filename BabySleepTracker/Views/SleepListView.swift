@@ -6,6 +6,26 @@
 import SwiftUI
 import Foundation
 
+final class SleepGenerationCoalescer: ObservableObject {
+    private var isGenerationPending = false
+    private let schedule: (@escaping () -> Void) -> Void
+
+    init(schedule: @escaping (@escaping () -> Void) -> Void = { action in
+        DispatchQueue.main.async(execute: action)
+    }) {
+        self.schedule = schedule
+    }
+
+    func request(_ generation: @escaping () -> Void) {
+        guard !isGenerationPending else { return }
+        isGenerationPending = true
+        schedule { [weak self] in
+            self?.isGenerationPending = false
+            generation()
+        }
+    }
+}
+
 struct SleepListView: View {
 
     // MARK: - Sheet routing
@@ -79,6 +99,7 @@ struct SleepListView: View {
     // MARK: - State
 
     @StateObject private var orchestrator = SleepCoachOrchestrator.shared
+    @StateObject private var generationCoalescer = SleepGenerationCoalescer()
     @State private var activeSheet: ActiveSheet? = nil
     @State private var records: [SleepRecord] = []
     @State private var wakeRecords: [DailyWakeRecord] = []
@@ -402,14 +423,14 @@ struct SleepListView: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: .sleepRecordsDidChange)) { _ in
                 loadRecords()
-                orchestrator.generate()
+                generationCoalescer.request { orchestrator.generate() }
             }
             .onReceive(NotificationCenter.default.publisher(for: .dailyWakeRecordsDidChange)) { _ in
                 loadWakeRecords()
-                orchestrator.generate()
+                generationCoalescer.request { orchestrator.generate() }
             }
             .onReceive(NotificationCenter.default.publisher(for: .babyProfileDidChange)) { _ in
-                orchestrator.generate()
+                generationCoalescer.request { orchestrator.generate() }
             }
             .environment(\.locale, Locale(identifier: "en_US"))
         }

@@ -6,6 +6,13 @@
 //
 
 import Foundation
+import CryptoKit
+
+enum LLMCacheState: Equatable {
+    case current
+    case stale
+    case expired
+}
 
 enum NextSleepKind {
     case nap
@@ -71,9 +78,13 @@ final class SleepCoachOrchestrator: ObservableObject {
     // MARK: - Published State
 
     @Published private(set) var snapshot: OrchestratedSnapshot?
+    private var latestGeneratedRecords: [SleepRecord] = []
     @Published private(set) var isLoading = false
     @Published private(set) var llmResponse: LLMCoachResponse?
     @Published private(set) var isLLMLoading = false
+    private(set) var llmCacheState: LLMCacheState = .expired
+    private var currentLLMSourceFingerprint: String?
+    private var cachedLLMSourceFingerprint: String?
 
     // MARK: - Agents
 
@@ -87,6 +98,8 @@ final class SleepCoachOrchestrator: ObservableObject {
     private let profileProvider: AgeBasedSleepProfileProviding
     private let llmAgent: SleepCoachLLMAgentProtocol
     private let ageCalculator: BabyAgeCalculating
+    private var activeLLMTask: Task<Void, Never>?
+    private var llmRequestToken = 0
 
     
     // MARK: - Singleton
@@ -135,7 +148,6 @@ final class SleepCoachOrchestrator: ObservableObject {
         }
         if hasChanges {
             saveRecords(records)
-            NotificationCenter.default.post(name: .sleepRecordsDidChange, object: nil)
         }
 
         let wakeRecords = loadWakeRecords()
@@ -281,19 +293,24 @@ final class SleepCoachOrchestrator: ObservableObject {
             sleepStatus:       sleepStatus,
             nextSleepKind:     nextSleepKind
         )
+        let previousSnapshot = snapshot
         self.snapshot = result
+        latestGeneratedRecords = records
+        currentLLMSourceFingerprint = llmSourceFingerprint(
+            snapshot: result,
+            records: records
+        )
 
         let trigger = determineTrigger(
             records:  records,
             snapshot: result,
-            previous: snapshot
+            previous: previousSnapshot
         )
 
         if let trigger {
-            Task {
-                await callLLM(snapshot: result, records: records, trigger: trigger)
-            }
+            startLLMRequest(snapshot: result, records: records, trigger: trigger)
         }
+        updateLLMCacheState()
     }
 
             // MARK: - Data Loaders
@@ -826,24 +843,53 @@ final class SleepCoachOrchestrator: ObservableObject {
     }
     // MARK: - LLM
 
+    private func startLLMRequest(
+        snapshot: OrchestratedSnapshot,
+        records: [SleepRecord],
+        trigger: LLMTrigger
+    ) {
+        activeLLMTask?.cancel()
+        llmRequestToken += 1
+        let requestToken = llmRequestToken
+        isLLMLoading = true
+        let sourceFingerprint = llmSourceFingerprint(
+            snapshot: snapshot,
+            records: records
+        )
+
+        activeLLMTask = Task { [weak self] in
+            await self?.callLLM(
+                snapshot: snapshot,
+                records: records,
+                trigger: trigger,
+                sourceFingerprint: sourceFingerprint,
+                requestToken: requestToken
+            )
+        }
+    }
+
     private func callLLM(
         snapshot: OrchestratedSnapshot,
         records:  [SleepRecord],
-        trigger:  LLMTrigger
+        trigger:  LLMTrigger,
+        sourceFingerprint: String,
+        requestToken: Int
     ) async {
-        isLLMLoading = true
-        defer { isLLMLoading = false }
-
         let response = await llmAgent.generateInsight(
             snapshot: snapshot,
             records:  records,
             trigger:  trigger
         )
 
+        guard requestToken == llmRequestToken else { return }
+
         if let response {
             llmResponse = response
-            cacheLLMResponse(response)
+            cacheLLMResponse(response, sourceFingerprint: sourceFingerprint)
         }
+
+        isLLMLoading = false
+        activeLLMTask = nil
     }
 
     private func determineTrigger(
@@ -897,7 +943,7 @@ final class SleepCoachOrchestrator: ObservableObject {
 
     // MARK: - LLM Cache
 
-    private func cacheLLMResponse(_ response: LLMCoachResponse) {
+    private func cacheLLMResponse(_ response: LLMCoachResponse, sourceFingerprint: String) {
         UserDefaults.standard.set(
             response.generatedAt.timeIntervalSince1970,
             forKey: "llm_lastGenerated"
@@ -906,8 +952,13 @@ final class SleepCoachOrchestrator: ObservableObject {
         UserDefaults.standard.set(response.coachMessage,   forKey: "llm_coachMessage")
         UserDefaults.standard.set(response.patternInsight, forKey: "llm_patternInsight")
         UserDefaults.standard.set(response.confidenceNote, forKey: "llm_confidenceNote")
+        UserDefaults.standard.set(sourceFingerprint, forKey: "llm_sourceFingerprint")
+        cachedLLMSourceFingerprint = sourceFingerprint
+        llmCacheState = .current
         if let alert = response.alert {
             UserDefaults.standard.set(alert, forKey: "llm_alert")
+        } else {
+            UserDefaults.standard.removeObject(forKey: "llm_alert")
         }
     }
 
@@ -922,10 +973,18 @@ final class SleepCoachOrchestrator: ObservableObject {
         guard let coachMessage = UserDefaults.standard.string(forKey: "llm_coachMessage"),
               !coachMessage.isEmpty,
               let lastDate = loadLastLLMDate()
-        else { return }
+        else {
+            llmCacheState = .expired
+            return
+        }
 
         // 24 saatten eski cache'i yükleme
-        guard Date().timeIntervalSince(lastDate) < 86400 else { return }
+        guard Date().timeIntervalSince(lastDate) < 86400 else {
+            llmCacheState = .expired
+            return
+        }
+
+        cachedLLMSourceFingerprint = UserDefaults.standard.string(forKey: "llm_sourceFingerprint")
 
         llmResponse = LLMCoachResponse(
             patternInsight: UserDefaults.standard.string(forKey: "llm_patternInsight") ?? "",
@@ -934,19 +993,65 @@ final class SleepCoachOrchestrator: ObservableObject {
             confidenceNote: UserDefaults.standard.string(forKey: "llm_confidenceNote") ?? "",
             generatedAt:    lastDate
         )
+        updateLLMCacheState()
+    }
+
+    private func updateLLMCacheState() {
+        guard llmResponse != nil else {
+            llmCacheState = .expired
+            return
+        }
+        guard let cachedLLMSourceFingerprint else {
+            llmCacheState = .stale
+            return
+        }
+        llmCacheState = cachedLLMSourceFingerprint == currentLLMSourceFingerprint ? .current : .stale
+    }
+
+    private func llmSourceFingerprint(
+        snapshot: OrchestratedSnapshot,
+        records: [SleepRecord]
+    ) -> String {
+        var source = "prompt-version:1|model:gemini-2.5-flash"
+        source += "|snapshot:" + canonicalSnapshot(snapshot)
+        source += "|records:"
+        for record in records.sorted(by: { $0.id.uuidString < $1.id.uuidString }) {
+            source += "\(record.id.uuidString),\(record.date.timeIntervalSince1970),\(record.duration),\(String(reflecting: record.kind)),\(record.parentNapID?.uuidString ?? "nil"),\(record.isOngoing),\(record.createdAt.timeIntervalSince1970);"
+        }
+        source += "|profile:"
+        source += UserDefaults.standard.string(forKey: "babyName") ?? ""
+        source += "|birthDate:\(UserDefaults.standard.object(forKey: "babyBirthDate") as? Date ?? Date.distantPast)"
+        source += "|wakeHour:\(UserDefaults.standard.object(forKey: "typicalWakeHour") as? Double ?? 7.0)"
+        source += "|wakeMinute:\(UserDefaults.standard.object(forKey: "typicalWakeMinute") as? Double ?? 0.0)"
+        return SHA256.hash(data: Data(source.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func canonicalSnapshot(_ snapshot: OrchestratedSnapshot) -> String {
+        [
+            "babyName=\(snapshot.babyName)",
+            "ageMonths=\(snapshot.ageMonths)",
+            "phase=\(String(reflecting: snapshot.phase))",
+            "readiness=\(String(reflecting: snapshot.readiness))",
+            "pattern=\(String(reflecting: snapshot.pattern))",
+            "daytime=\(String(reflecting: snapshot.daytime))",
+            "night=\(String(reflecting: snapshot.night))",
+            "transition=\(String(reflecting: snapshot.transition))",
+            "insights=\(String(reflecting: snapshot.insights))",
+            "quality=\(String(reflecting: snapshot.dataQualityReport))",
+            "todayTotalMinutes=\(snapshot.todayTotalMinutes)",
+            "sleepStatus=\(String(reflecting: snapshot.sleepStatus))",
+            "nextSleepKind=\(String(reflecting: snapshot.nextSleepKind))"
+        ].joined(separator: "|")
     }
 
     // Manuel refresh — kullanıcı istediğinde
     func refreshLLM() {
         guard let current = snapshot else { return }
-        let records = loadRecords()
 
-        Task {
-            await callLLM(
-                snapshot: current,
-                records:  records,
-                trigger:  .manualRefresh
-            )
-        }
+        startLLMRequest(
+            snapshot: current,
+            records: latestGeneratedRecords,
+            trigger: .manualRefresh
+        )
     }
         }
