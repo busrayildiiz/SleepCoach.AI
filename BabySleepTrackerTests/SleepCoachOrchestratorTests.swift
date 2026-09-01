@@ -689,6 +689,56 @@ private final class MockLLMAgent: SleepCoachLLMAgentProtocol {
     }
 }
 
+final class SleepGenerationCoalescerTests: XCTestCase {
+    func testWakeAndSleepNotificationsShareOnePendingGeneration() {
+        var scheduled: (() -> Void)?
+        let coalescer = SleepGenerationCoalescer { scheduled = $0 }
+        var generationCount = 0
+
+        coalescer.request { generationCount += 1 }
+        coalescer.request { generationCount += 1 }
+
+        XCTAssertEqual(generationCount, 0)
+        scheduled?()
+        XCTAssertEqual(generationCount, 1)
+    }
+
+    func testWakeOnlyNotificationSchedulesOneGeneration() {
+        var scheduled: (() -> Void)?
+        let coalescer = SleepGenerationCoalescer { scheduled = $0 }
+        var generationCount = 0
+
+        coalescer.request { generationCount += 1 }
+        scheduled?()
+
+        XCTAssertEqual(generationCount, 1)
+    }
+
+    func testSleepRecordNotificationSchedulesOneGeneration() {
+        var scheduled: (() -> Void)?
+        let coalescer = SleepGenerationCoalescer { scheduled = $0 }
+        var generationCount = 0
+
+        coalescer.request { generationCount += 1 }
+        scheduled?()
+
+        XCTAssertEqual(generationCount, 1)
+    }
+
+    func testNewPendingCycleCanScheduleAnotherGeneration() {
+        var scheduled: (() -> Void)?
+        let coalescer = SleepGenerationCoalescer { scheduled = $0 }
+        var generationCount = 0
+
+        coalescer.request { generationCount += 1 }
+        scheduled?()
+        coalescer.request { generationCount += 1 }
+        scheduled?()
+
+        XCTAssertEqual(generationCount, 2)
+    }
+}
+
 @MainActor
 final class SleepCoachOrchestratorLLMLifecycleTests: XCTestCase {
     private let now: Date = {
