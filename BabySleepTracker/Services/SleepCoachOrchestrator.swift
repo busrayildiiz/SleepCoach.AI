@@ -71,6 +71,7 @@ final class SleepCoachOrchestrator: ObservableObject {
     // MARK: - Published State
 
     @Published private(set) var snapshot: OrchestratedSnapshot?
+    private var latestGeneratedRecords: [SleepRecord] = []
     @Published private(set) var isLoading = false
     @Published private(set) var llmResponse: LLMCoachResponse?
     @Published private(set) var isLLMLoading = false
@@ -284,6 +285,7 @@ final class SleepCoachOrchestrator: ObservableObject {
         )
         let previousSnapshot = snapshot
         self.snapshot = result
+        latestGeneratedRecords = records
 
         let trigger = determineTrigger(
             records:  records,
@@ -962,11 +964,10 @@ final class SleepCoachOrchestrator: ObservableObject {
     // Manuel refresh — kullanıcı istediğinde
     func refreshLLM() {
         guard let current = snapshot else { return }
-        let records = loadRecords()
 
         startLLMRequest(
             snapshot: current,
-            records: records,
+            records: latestGeneratedRecords,
             trigger: .manualRefresh
         )
     }

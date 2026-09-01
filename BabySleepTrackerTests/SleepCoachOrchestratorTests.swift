@@ -217,15 +217,17 @@ final class SleepCoachOrchestratorTests: XCTestCase {
     }
 
     func testNextSleepKindIsBedtimeWhenExpectedNapCountIsReached() {
-        let currentDayNow = Date()
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        let currentDayNow = calendar.date(byAdding: .hour, value: 10, to: today)!
         let firstNap = SleepRecord(
-            date: currentDayNow.addingTimeInterval(-4 * 60 * 60),
+            date: calendar.date(byAdding: .hour, value: 6, to: today)!,
             duration: 60,
             kind: .dayNap
         )
 
         let secondNap = SleepRecord(
-            date: currentDayNow.addingTimeInterval(-2 * 60 * 60),
+            date: calendar.date(byAdding: .hour, value: 8, to: today)!,
             duration: 60,
             kind: .dayNap
         )
@@ -875,8 +877,74 @@ final class SleepCoachOrchestratorLLMLifecycleTests: XCTestCase {
         XCTAssertEqual(UserDefaults.standard.string(forKey: "llm_coachMessage"), "refresh")
     }
 
+    func testManualRefreshUsesRecordsMatchedToPublishedSnapshot() async {
+        let currentDay = Date()
+        let requestStarted = expectation(description: "Manual LLM request started")
+        let requestCompleted = expectation(description: "Manual LLM request completed")
+        llmAgent.onRequest = { _ in requestStarted.fulfill() }
+        llmAgent.onCompletion = { _ in requestCompleted.fulfill() }
+
+        UserDefaults.standard.set(currentDay.timeIntervalSince1970, forKey: "llm_lastGenerated")
+        orchestrator.generate(now: currentDay)
+        let stateBRecord = SleepRecord(date: currentDay, duration: 30, kind: .dayNap)
+        saveRecords([stateBRecord])
+
+        orchestrator.refreshLLM()
+        await fulfillment(of: [requestStarted], timeout: 1)
+
+        guard let trigger = llmAgent.receivedTriggers.last else {
+            return XCTFail("Expected a manual refresh trigger")
+        }
+        if case .manualRefresh = trigger {
+            // Expected trigger.
+        } else {
+            XCTFail("Expected a manual refresh trigger")
+        }
+        XCTAssertEqual(llmAgent.receivedSnapshots.last?.todayTotalMinutes, 0)
+        XCTAssertEqual(llmAgent.receivedRecords.last?.count, 0)
+        llmAgent.release(0, with: nil)
+        await fulfillment(of: [requestCompleted], timeout: 1)
+    }
+
+    func testAutomaticGenerationUsesMatchingSnapshotAndRecords() async throws {
+        let currentDay = Date()
+        let requestStarted = expectation(description: "Automatic LLM request started")
+        let requestCompleted = expectation(description: "Automatic LLM request completed")
+        llmAgent.onRequest = { _ in requestStarted.fulfill() }
+        llmAgent.onCompletion = { _ in requestCompleted.fulfill() }
+
+        UserDefaults.standard.set(currentDay.timeIntervalSince1970, forKey: "llm_lastGenerated")
+        orchestrator.generate(now: currentDay)
+        let stateBRecord = SleepRecord(date: currentDay, duration: 30, kind: .dayNap)
+        saveRecords([stateBRecord])
+
+        orchestrator.generate(now: currentDay)
+        await fulfillment(of: [requestStarted], timeout: 1)
+
+        guard let trigger = llmAgent.receivedTriggers.last else {
+            return XCTFail("Expected a short nap trigger")
+        }
+        if case .shortNapDetected = trigger {
+            // Expected trigger.
+        } else {
+            XCTFail("Expected a short nap trigger")
+        }
+        XCTAssertEqual(llmAgent.receivedSnapshots.last?.todayTotalMinutes, 30)
+        let capturedRecord = try XCTUnwrap(llmAgent.receivedRecords.last?.first)
+        XCTAssertEqual(capturedRecord.id, stateBRecord.id)
+        XCTAssertEqual(capturedRecord.date, stateBRecord.date)
+        XCTAssertEqual(capturedRecord.duration, stateBRecord.duration)
+        XCTAssertEqual(capturedRecord.kind, stateBRecord.kind)
+        llmAgent.release(0, with: nil)
+        await fulfillment(of: [requestCompleted], timeout: 1)
+    }
+
     private func response(_ message: String) -> LLMCoachResponse {
         LLMCoachResponse(patternInsight: "pattern", coachMessage: message, alert: nil, confidenceNote: "confidence", generatedAt: now)
+    }
+
+    private func saveRecords(_ records: [SleepRecord]) {
+        UserDefaults.standard.set(try! JSONEncoder().encode(records), forKey: "sleepRecords")
     }
 
     private func clearDefaults() {
@@ -893,10 +961,16 @@ private final class ControlledLLMAgent: SleepCoachLLMAgentProtocol {
     private var pendingResponses: [Int: LLMCoachResponse?] = [:]
     var onRequest: ((Int) -> Void)?
     var onCompletion: ((Int) -> Void)?
+    private(set) var receivedSnapshots: [OrchestratedSnapshot] = []
+    private(set) var receivedRecords: [[SleepRecord]] = []
+    private(set) var receivedTriggers: [LLMTrigger] = []
 
     func generateInsight(snapshot: OrchestratedSnapshot, records: [SleepRecord], trigger: LLMTrigger) async -> LLMCoachResponse? {
         let index = nextRequestID
         nextRequestID += 1
+        receivedSnapshots.append(snapshot)
+        receivedRecords.append(records)
+        receivedTriggers.append(trigger)
         let response = await withCheckedContinuation { continuation in
             if let pendingResponse = pendingResponses.removeValue(forKey: index) {
                 continuation.resume(returning: pendingResponse)
