@@ -387,6 +387,27 @@ final class SleepCoachOrchestratorTests: XCTestCase {
         XCTAssertFalse(orchestrator.isLLMLoading)
     }
 
+    func testIncreasedTodaySleepTriggersShortNapLLMCall() async {
+        let currentDay = Date()
+        let triggerReceived = expectation(description: "Short nap trigger received")
+        llmAgent.onTrigger = { trigger in
+            if case .shortNapDetected = trigger {
+                triggerReceived.fulfill()
+            }
+        }
+        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "llm_lastGenerated")
+
+        orchestrator.generate(now: currentDay)
+        saveRecords([
+            SleepRecord(date: currentDay, duration: 30, kind: .dayNap)
+        ])
+        orchestrator.generate(now: currentDay)
+        await fulfillment(of: [triggerReceived], timeout: 1)
+
+        XCTAssertEqual(llmAgent.receivedTriggers.count, 1)
+        XCTAssertEqual(triggerName(llmAgent.receivedTriggers.first), "shortNapDetected")
+    }
+
     // MARK: - Helpers
 
     private func saveRecords(
@@ -622,6 +643,7 @@ private struct MockInsightAgent: InsightAgentProtocol {
 private final class MockLLMAgent: SleepCoachLLMAgentProtocol {
 
     var response: LLMCoachResponse?
+    var onTrigger: ((LLMTrigger) -> Void)?
 
     private(set) var receivedTriggers: [LLMTrigger] = []
 
@@ -632,6 +654,7 @@ private final class MockLLMAgent: SleepCoachLLMAgentProtocol {
     ) async -> LLMCoachResponse? {
 
         receivedTriggers.append(trigger)
+        onTrigger?(trigger)
         return response
     }
 }

@@ -283,12 +283,13 @@ final class SleepCoachOrchestrator: ObservableObject {
             sleepStatus:       sleepStatus,
             nextSleepKind:     nextSleepKind
         )
+        let previousSnapshot = snapshot
         self.snapshot = result
 
         let trigger = determineTrigger(
             records:  records,
             snapshot: result,
-            previous: snapshot
+            previous: previousSnapshot
         )
 
         if let trigger {
