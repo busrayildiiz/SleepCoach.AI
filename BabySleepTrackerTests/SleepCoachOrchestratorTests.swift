@@ -188,21 +188,22 @@ final class SleepCoachOrchestratorTests: XCTestCase {
     }
 
     func testNextSleepKindIsBedtimeWhenExpectedNapCountIsReached() {
+        let currentDayNow = Date()
         let firstNap = SleepRecord(
-            date: now.addingTimeInterval(-4 * 60 * 60),
+            date: currentDayNow.addingTimeInterval(-4 * 60 * 60),
             duration: 60,
             kind: .dayNap
         )
 
         let secondNap = SleepRecord(
-            date: now.addingTimeInterval(-2 * 60 * 60),
+            date: currentDayNow.addingTimeInterval(-2 * 60 * 60),
             duration: 60,
             kind: .dayNap
         )
 
         saveRecords([firstNap, secondNap])
 
-        orchestrator.generate(now: now)
+        orchestrator.generate(now: currentDayNow)
 
         XCTAssertEqual(
             orchestrator.snapshot?.nextSleepKind,
