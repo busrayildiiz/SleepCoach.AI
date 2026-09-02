@@ -42,6 +42,47 @@ jobs:
           CODE_SIGNING_REQUIRED=NO
           AD_HOC_CODE_SIGNING_ALLOWED=YES
 
+      - name: Diagnose simulator app signing
+        shell: bash
+        run: |
+          app_path="$(find "$HOME/Library/Developer/Xcode/DerivedData" -type d -path '*/Build/Products/Debug-iphonesimulator/BabySleepTracker.app' -print -quit)"
+
+          if [ -z "$app_path" ]; then
+            echo "BabySleepTracker.app was not found in DerivedData."
+            exit 0
+          fi
+
+          echo "App path: $app_path"
+          echo "Effective BabySleepTracker signing settings:"
+          xcodebuild -showBuildSettings \
+            -project BabySleepTracker.xcodeproj \
+            -target BabySleepTracker \
+            -sdk iphonesimulator \
+            -configuration Debug \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY=- \
+            CODE_SIGNING_ALLOWED=YES \
+            CODE_SIGNING_REQUIRED=NO \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES \
+            | grep -E 'CODE_SIGN_STYLE|CODE_SIGN_IDENTITY|CODE_SIGNING_ALLOWED|CODE_SIGNING_REQUIRED|AD_HOC_CODE_SIGNING_ALLOWED|DEVELOPMENT_TEAM|PROVISIONING_PROFILE_SPECIFIER' || true
+
+          echo "App signature and entitlements:"
+          codesign -dvv --entitlements :- "$app_path" || true
+
+          echo "App signature verification:"
+          codesign --verify --deep --strict --verbose=4 "$app_path" || true
+
+          nested_found=false
+          while IFS= read -r nested_path; do
+            nested_found=true
+            echo "Nested bundle: $nested_path"
+            codesign --verify --deep --strict --verbose=4 "$nested_path" || true
+          done < <(find "$app_path" -type d \( -name '*.framework' -o -name '*.appex' -o -name '*.xctest' \) -print)
+
+          if [ "$nested_found" = false ]; then
+            echo "No nested frameworks, app extensions, or XCTest bundles found."
+          fi
+
       - name: Test
         run: >-
           xcodebuild test
