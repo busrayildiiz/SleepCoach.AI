@@ -440,6 +440,55 @@ final class SleepCoachOrchestratorTests: XCTestCase {
         XCTAssertEqual(triggerName(llmAgent.receivedTriggers.first), "shortNapDetected")
     }
 
+    func testGenerateLoadsRecordsThroughInjectedPersistence() {
+        let suiteName = "SleepCoachOrchestratorTests.persistence.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        var calendar = Calendar.current
+        let testNow = calendar.date(
+            bySettingHour: 10,
+            minute: 0,
+            second: 0,
+            of: calendar.startOfDay(for: Date())
+        )!
+        let previousBirthDate = UserDefaults.standard.object(forKey: "babyBirthDate")
+        UserDefaults.standard.set(
+            calendar.date(byAdding: .month, value: -9, to: testNow)!,
+            forKey: "babyBirthDate"
+        )
+        defer {
+            if let previousBirthDate {
+                UserDefaults.standard.set(previousBirthDate, forKey: "babyBirthDate")
+            } else {
+                UserDefaults.standard.removeObject(forKey: "babyBirthDate")
+            }
+        }
+
+        let sleepPersistence = SleepRecordPersistence(defaults: defaults)
+        let wakePersistence = DailyWakeRecordPersistence(defaults: defaults)
+        XCTAssertTrue(sleepPersistence.save([SleepRecord(date: testNow, duration: 30, kind: .dayNap)]))
+        XCTAssertTrue(wakePersistence.save([]))
+
+        let isolatedOrchestrator = SleepCoachOrchestrator(
+            phaseAgent: phaseAgent,
+            patternAgent: patternAgent,
+            daytimeAgent: daytimeAgent,
+            nightAgent: nightAgent,
+            transitionAgent: transitionAgent,
+            insightAgent: insightAgent,
+            llmAgent: llmAgent,
+            overtiredCalc: OvertiredCalculator(profileProvider: profileProvider),
+            profileProvider: profileProvider,
+            sleepRecordPersistence: sleepPersistence,
+            dailyWakeRecordPersistence: wakePersistence
+        )
+
+        isolatedOrchestrator.generate(now: testNow)
+
+        XCTAssertEqual(isolatedOrchestrator.snapshot?.todayTotalMinutes, 30)
+    }
+
     // MARK: - Helpers
 
     private func saveRecords(

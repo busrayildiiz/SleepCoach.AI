@@ -98,6 +98,8 @@ final class SleepCoachOrchestrator: ObservableObject {
     private let profileProvider: AgeBasedSleepProfileProviding
     private let llmAgent: SleepCoachLLMAgentProtocol
     private let ageCalculator: BabyAgeCalculating
+    private let sleepRecordPersistence: SleepRecordPersistence
+    private let dailyWakeRecordPersistence: DailyWakeRecordPersistence
     private var activeLLMTask: Task<Void, Never>?
     private var llmRequestToken = 0
 
@@ -118,7 +120,9 @@ final class SleepCoachOrchestrator: ObservableObject {
            llmAgent:        SleepCoachLLMAgentProtocol     = DefaultSleepCoachLLMAgent(),
            overtiredCalc:   OvertiredCalculator      = OvertiredCalculator(),
            profileProvider: AgeBasedSleepProfileProviding  = DefaultAgeBasedSleepProfileProvider(),
-           ageCalculator: BabyAgeCalculating = DefaultBabyAgeCalculator()
+           ageCalculator: BabyAgeCalculating = DefaultBabyAgeCalculator(),
+           sleepRecordPersistence: SleepRecordPersistence = SleepRecordPersistence(),
+           dailyWakeRecordPersistence: DailyWakeRecordPersistence = DailyWakeRecordPersistence()
 
        ) {
            self.phaseAgent      = phaseAgent
@@ -131,6 +135,8 @@ final class SleepCoachOrchestrator: ObservableObject {
            self.overtiredCalc   = overtiredCalc
            self.profileProvider = profileProvider
            self.ageCalculator = ageCalculator
+           self.sleepRecordPersistence = sleepRecordPersistence
+           self.dailyWakeRecordPersistence = dailyWakeRecordPersistence
 
        }
 
@@ -316,10 +322,7 @@ final class SleepCoachOrchestrator: ObservableObject {
             // MARK: - Data Loaders
 
             private func loadRecords() -> [SleepRecord] {
-                guard let data = UserDefaults.standard.data(forKey: "sleepRecords"),
-                      let decoded = try? JSONDecoder().decode([SleepRecord].self, from: data)
-                else { return [] }
-                return decoded
+                sleepRecordPersistence.load() ?? []
             }
     private func closeStaleOngoingRecords(
         _ records: [SleepRecord],
@@ -390,10 +393,7 @@ final class SleepCoachOrchestrator: ObservableObject {
     }
 
             private func loadWakeRecords() -> [DailyWakeRecord] {
-                guard let data = UserDefaults.standard.data(forKey: "dailyWakeRecords_v1"),
-                      let decoded = try? JSONDecoder().decode([DailyWakeRecord].self, from: data)
-                else { return [] }
-                return decoded
+                dailyWakeRecordPersistence.load() ?? []
             }
 
             private func loadBabyName() -> String {
@@ -436,10 +436,7 @@ final class SleepCoachOrchestrator: ObservableObject {
     // MARK: - Save Records
     
     private func saveRecords(_ records: [SleepRecord]) {
-        guard let data = try? JSONEncoder().encode(records) else { return }
-        UserDefaults.standard.set(data, forKey: "sleepRecords")
-        // View'ları tetikle
-        NotificationCenter.default.post(name: .sleepRecordsDidChange, object: nil)
+        sleepRecordPersistence.save(records)
     }
     // MARK: - Data Quality
 
