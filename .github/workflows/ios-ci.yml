@@ -1,0 +1,48 @@
+name: iOS CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: macos-14
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Resolve Swift package dependencies
+        run: >-
+          xcodebuild -resolvePackageDependencies
+          -project BabySleepTracker.xcodeproj
+          -scheme BabySleepTracker
+
+      - name: Select an available iPhone simulator
+        id: simulator
+        shell: bash
+        run: |
+          simulator_name="$(xcrun simctl list devices available | awk -F '[()]' '/iPhone/ { print $2; exit }')"
+          test -n "$simulator_name"
+          echo "name=$simulator_name" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        run: >-
+          xcodebuild build
+          -project BabySleepTracker.xcodeproj
+          -scheme BabySleepTracker
+          -sdk iphonesimulator
+          -configuration Debug
+          -destination "platform=iOS Simulator,name=${{ steps.simulator.outputs.name }}"
+          CODE_SIGNING_ALLOWED=NO
+
+      - name: Test
+        run: >-
+          xcodebuild test
+          -project BabySleepTracker.xcodeproj
+          -scheme BabySleepTracker
+          -sdk iphonesimulator
+          -destination "platform=iOS Simulator,name=${{ steps.simulator.outputs.name }}"
+          CODE_SIGNING_ALLOWED=NO
