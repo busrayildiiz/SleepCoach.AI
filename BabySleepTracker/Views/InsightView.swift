@@ -23,7 +23,7 @@ struct InsightsView: View {
 
     @State private var selectedTab: CoachTab = .overview
     @State private var manualActionOverrides: [String: Bool] = [:]
-    @StateObject private var orchestrator = SleepCoachOrchestrator.shared
+    @EnvironmentObject private var orchestrator: SleepCoachOrchestrator
     
     @AppStorage("babyName") private var babyName: String = "Baby"
 

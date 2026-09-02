@@ -19,7 +19,7 @@ struct DayDetailView: View {
     @State private var breakTargetNap: SleepRecord? = nil
     @State private var contextNap: SleepRecord? = nil
     @State private var showNapActions = false
-    @StateObject private var orchestrator = SleepCoachOrchestrator.shared
+    @EnvironmentObject private var orchestrator: SleepCoachOrchestrator
 
 
     @Environment(\.dismiss) private var dismiss

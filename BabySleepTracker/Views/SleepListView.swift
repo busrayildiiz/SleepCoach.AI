@@ -98,7 +98,7 @@ struct SleepListView: View {
 
     // MARK: - State
 
-    @StateObject private var orchestrator = SleepCoachOrchestrator.shared
+    @EnvironmentObject private var orchestrator: SleepCoachOrchestrator
     @StateObject private var generationCoalescer = SleepGenerationCoalescer()
     @State private var activeSheet: ActiveSheet? = nil
     @State private var records: [SleepRecord] = []

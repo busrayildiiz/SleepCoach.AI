@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
 
+    @StateObject private var orchestrator = SleepCoachOrchestrator()
     @State private var selectedTab: Tab = .home
     @State private var showAddSheet = false
 
@@ -42,6 +43,7 @@ struct ContentView: View {
             customTabBar
         }
         .ignoresSafeArea(edges: .bottom)
+        .environmentObject(orchestrator)
         .sheet(isPresented: $showAddSheet) {
             AddRecordView(
                 defaultDate: Date(),
