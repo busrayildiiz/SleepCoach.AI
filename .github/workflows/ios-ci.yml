@@ -37,9 +37,10 @@ jobs:
           -configuration Debug
           -destination "platform=iOS Simulator,name=${{ steps.simulator.outputs.name }}"
           CODE_SIGN_STYLE=Manual
-          CODE_SIGN_IDENTITY="Sign to Run Locally"
+          CODE_SIGN_IDENTITY=-
           CODE_SIGNING_ALLOWED=YES
           CODE_SIGNING_REQUIRED=NO
+          AD_HOC_CODE_SIGNING_ALLOWED=YES
 
       - name: Test
         run: >-
@@ -49,6 +50,7 @@ jobs:
           -sdk iphonesimulator
           -destination "platform=iOS Simulator,name=${{ steps.simulator.outputs.name }}"
           CODE_SIGN_STYLE=Manual
-          CODE_SIGN_IDENTITY="Sign to Run Locally"
+          CODE_SIGN_IDENTITY=-
           CODE_SIGNING_ALLOWED=YES
           CODE_SIGNING_REQUIRED=NO
+          AD_HOC_CODE_SIGNING_ALLOWED=YES
