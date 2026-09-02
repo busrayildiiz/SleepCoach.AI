@@ -44,10 +44,12 @@ jobs:
           DEVELOPMENT_TEAM=
           PROVISIONING_PROFILE_SPECIFIER=
           
-           - name: Diagnose simulator app signing
+        - name: Diagnose simulator app signing
         shell: bash
         run: |
-          echo "Searching for BabySleepTracker.app..."
+
+        find "$HOME" -type d -name "BabySleepTracker.app" -print 2>/dev/null
+          echo "Resolving actual Xcode build output..."
 
           app_path="$(find "$HOME/Library/Developer/Xcode/DerivedData" \
             "$RUNNER_TEMP" \
