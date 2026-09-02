@@ -44,42 +44,28 @@ jobs:
           DEVELOPMENT_TEAM=
           PROVISIONING_PROFILE_SPECIFIER=
           
-      - name: Diagnose simulator app signing
+           - name: Diagnose simulator app signing
         shell: bash
         run: |
-          echo "Resolving actual Xcode build output..."
+          echo "Searching for BabySleepTracker.app..."
 
-          build_settings="$(xcodebuild -showBuildSettings \
-            -project BabySleepTracker.xcodeproj \
-            -target BabySleepTracker \
-            -sdk iphonesimulator \
-            -configuration Debug \
-            CODE_SIGN_STYLE=Manual \
-            CODE_SIGN_IDENTITY=- \
-            CODE_SIGNING_ALLOWED=YES \
-            CODE_SIGNING_REQUIRED=NO \
-            AD_HOC_CODE_SIGNING_ALLOWED=YES \
-            DEVELOPMENT_TEAM= \
-            PROVISIONING_PROFILE_SPECIFIER=)"
+          app_path="$(find "$HOME/Library/Developer/Xcode/DerivedData" \
+            "$RUNNER_TEMP" \
+            -type d \
+            -name "BabySleepTracker.app" \
+            -print -quit 2>/dev/null)"
 
-          target_build_dir="$(printf '%s\n' "$build_settings" | awk -F ' = ' '$1 == "TARGET_BUILD_DIR" { print $2; exit }')"
-          full_product_name="$(printf '%s\n' "$build_settings" | awk -F ' = ' '$1 == "FULL_PRODUCT_NAME" { print $2; exit }')"
-
-          app_path="${target_build_dir}/${full_product_name}"
-
-          echo "TARGET_BUILD_DIR=$target_build_dir"
-          echo "FULL_PRODUCT_NAME=$full_product_name"
-          echo "APP_PATH=$app_path"
-
-          if [ ! -d "$app_path" ]; then
-            echo "BabySleepTracker.app was not found at the resolved build path."
-            echo "Searching DerivedData as a fallback:"
-            find "$HOME/Library/Developer/Xcode/DerivedData" \
+          if [ -z "$app_path" ]; then
+            echo "BabySleepTracker.app was not found."
+            echo "Searching workspace as fallback:"
+            find "$GITHUB_WORKSPACE" \
               -type d \
               -name "BabySleepTracker.app" \
-              -print || true
+              -print 2>/dev/null || true
             exit 0
           fi
+
+          echo "APP_PATH=$app_path"
 
           echo "Bundle signature details:"
           codesign -dv --verbose=4 "$app_path" || true
