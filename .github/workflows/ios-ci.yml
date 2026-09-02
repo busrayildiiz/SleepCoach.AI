@@ -43,8 +43,8 @@ jobs:
           AD_HOC_CODE_SIGNING_ALLOWED=YES
           DEVELOPMENT_TEAM=
           PROVISIONING_PROFILE_SPECIFIER=
-
-        - name: Diagnose simulator app signing
+          
+      - name: Diagnose simulator app signing
         shell: bash
         run: |
           echo "Resolving actual Xcode build output..."
@@ -98,7 +98,7 @@ jobs:
 
           echo "Entitlements:"
           codesign -d --entitlements :- "$app_path" || true
-
+          
       - name: Test
         run: >-
           xcodebuild test
