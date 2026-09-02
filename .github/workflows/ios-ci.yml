@@ -36,6 +36,10 @@ jobs:
           -sdk iphonesimulator
           -configuration Debug
           -destination "platform=iOS Simulator,name=${{ steps.simulator.outputs.name }}"
+          CODE_SIGN_STYLE=Manual
+          CODE_SIGN_IDENTITY=-
+          CODE_SIGNING_ALLOWED=YES
+          CODE_SIGNING_REQUIRED=NO
 
       - name: Test
         run: >-
@@ -44,3 +48,7 @@ jobs:
           -scheme BabySleepTracker
           -sdk iphonesimulator
           -destination "platform=iOS Simulator,name=${{ steps.simulator.outputs.name }}"
+          CODE_SIGN_STYLE=Manual
+          CODE_SIGN_IDENTITY=-
+          CODE_SIGNING_ALLOWED=YES
+          CODE_SIGNING_REQUIRED=NO
