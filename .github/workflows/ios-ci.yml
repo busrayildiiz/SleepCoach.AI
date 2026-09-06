@@ -24,7 +24,7 @@ jobs:
         id: simulator
         shell: bash
         run: |
-          simulator_name="$(xcrun simctl list devices available | awk -F '[()]' '/iPhone/ { print $2; exit }')"
+          simulator_name="$(xcrun simctl list devices available | awk -F '[()]' '/iPhone/ { print $1; exit }' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
           test -n "$simulator_name"
           echo "name=$simulator_name" >> "$GITHUB_OUTPUT"
 
