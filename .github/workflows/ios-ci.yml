@@ -28,6 +28,13 @@ jobs:
           test -n "$simulator_name"
           echo "name=$simulator_name" >> "$GITHUB_OUTPUT"
 
+      - name: Set derived data path
+        id: paths
+        shell: bash
+        run: |
+          derived_data_path="$RUNNER_TEMP/DerivedData"
+          echo "derived_data_path=$derived_data_path" >> "$GITHUB_OUTPUT"
+
       - name: Build
         run: >-
           xcodebuild build
@@ -36,6 +43,23 @@ jobs:
           -sdk iphonesimulator
           -configuration Debug
           -destination "platform=iOS Simulator,name=${{ steps.simulator.outputs.name }}"
+          -derivedDataPath "${{ steps.paths.outputs.derived_data_path }}"
+          CODE_SIGN_STYLE=Manual
+          CODE_SIGN_IDENTITY=-
+          CODE_SIGNING_ALLOWED=YES
+          CODE_SIGNING_REQUIRED=NO
+          AD_HOC_CODE_SIGNING_ALLOWED=YES
+          DEVELOPMENT_TEAM=
+          PROVISIONING_PROFILE_SPECIFIER=
+
+      - name: Test
+        run: >-
+          xcodebuild test
+          -project BabySleepTracker.xcodeproj
+          -scheme BabySleepTracker
+          -sdk iphonesimulator
+          -destination "platform=iOS Simulator,name=${{ steps.simulator.outputs.name }}"
+          -derivedDataPath "${{ steps.paths.outputs.derived_data_path }}"
           CODE_SIGN_STYLE=Manual
           CODE_SIGN_IDENTITY=-
           CODE_SIGNING_ALLOWED=YES
@@ -45,31 +69,34 @@ jobs:
           PROVISIONING_PROFILE_SPECIFIER=
 
       - name: Diagnose simulator app signing
+        if: ${{ always() }}
         shell: bash
         run: |
-          find "$HOME" -type d -name "BabySleepTracker.app" -print 2>/dev/null
+          derived_data_path="${{ steps.paths.outputs.derived_data_path }}"
 
-          echo "Resolving actual Xcode build output..."
+          echo "Derived data path: $derived_data_path"
 
-          app_path="$(find "$HOME/Library/Developer/Xcode/DerivedData" \
-            "$RUNNER_TEMP" \
-            -type d \
-            -name "BabySleepTracker.app" \
-            -print -quit 2>/dev/null)"
+          app_path="$derived_data_path/Build/Products/Debug-iphonesimulator/BabySleepTracker.app"
 
-          if [ -z "$app_path" ]; then
-            echo "BabySleepTracker.app was not found."
-            echo "Searching workspace as fallback:"
+          echo "Resolved simulator app path: $app_path"
 
-            find "$GITHUB_WORKSPACE" \
-              -type d \
-              -name "BabySleepTracker.app" \
-              -print 2>/dev/null || true
-
+          if [ ! -d "$app_path" ]; then
+            echo "MISSING EXPECTED ARTIFACT: BabySleepTracker.app was not found at the expected simulator build path:"
+            echo "  $app_path"
+            echo "Full Build/Products directory tree for context:"
+            find "$derived_data_path/Build/Products" -print 2>/dev/null || echo "  (Build/Products does not exist under $derived_data_path)"
             exit 0
           fi
 
           echo "APP_PATH=$app_path"
+
+          echo "Platform/build info:"
+          echo "Info.plist DTPlatformName:"
+          /usr/libexec/PlistBuddy -c "Print :DTPlatformName" "$app_path/Info.plist" 2>/dev/null || true
+          echo "Info.plist DTSDKName:"
+          /usr/libexec/PlistBuddy -c "Print :DTSDKName" "$app_path/Info.plist" 2>/dev/null || true
+          echo "Executable architecture info:"
+          lipo -info "$app_path/BabySleepTracker" 2>/dev/null || file "$app_path/BabySleepTracker" || true
 
           echo "Bundle signature details:"
           codesign -dv --verbose=4 "$app_path" || true
@@ -88,18 +115,3 @@ jobs:
 
           echo "Entitlements:"
           codesign -d --entitlements :- "$app_path" || true
-
-      - name: Test
-        run: >-
-          xcodebuild test
-          -project BabySleepTracker.xcodeproj
-          -scheme BabySleepTracker
-          -sdk iphonesimulator
-          -destination "platform=iOS Simulator,name=${{ steps.simulator.outputs.name }}"
-          CODE_SIGN_STYLE=Manual
-          CODE_SIGN_IDENTITY=-
-          CODE_SIGNING_ALLOWED=YES
-          CODE_SIGNING_REQUIRED=NO
-          AD_HOC_CODE_SIGNING_ALLOWED=YES
-          DEVELOPMENT_TEAM=
-          PROVISIONING_PROFILE_SPECIFIER=
