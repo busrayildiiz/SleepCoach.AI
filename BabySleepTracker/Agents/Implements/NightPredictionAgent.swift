@@ -91,10 +91,11 @@ final class DefaultNightPredictionAgent: NightPredictionAgentProtocol {
             .reduce(0, +)
 
         // Bedtime window hesabı
+        let usePersonalizedBedtime = lastNapEnd != nil && trackedDays >= 14
+
         let bedtimeWindow: BedtimeWindow
 
-        if let lastNapEnd {
-            // Yeterli nap var → son nap bitişinden evening WW ekle
+        if usePersonalizedBedtime, let lastNapEnd {
             bedtimeWindow = overtiredCalculator.bedtimeWindow(
                 lastNapEndTime:           lastNapEnd,
                 totalDaytimeSleepMinutes: totalDaytime,
@@ -102,7 +103,6 @@ final class DefaultNightPredictionAgent: NightPredictionAgentProtocol {
                 now:                      now
             )
         } else {
-            // Henüz yeterli nap tamamlanmadı → sabit bedtime göster
             bedtimeWindow = fixedBedtimeWindow(profile: profile, now: now)
         }
 
@@ -124,7 +124,7 @@ final class DefaultNightPredictionAgent: NightPredictionAgentProtocol {
 
         let reasoning = buildReasoning(
             profile:      profile,
-            lastNapEnd:   lastNapEnd,
+            lastNapEnd:   usePersonalizedBedtime ? lastNapEnd : nil,
             totalDaytime: totalDaytime,
             bedtime:      bedtimeWindow.ideal,
             ageMonths:    ageMonths,

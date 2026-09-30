@@ -10,50 +10,66 @@ final class NightPredictionAgentTests: XCTestCase {
 
     // MARK: - Properties
 
-    private var profileProvider: DefaultAgeBasedSleepProfileProvider!
-    private var overtiredCalculator: OvertiredCalculator!
-    private var agent: DefaultNightPredictionAgent!
+       private var defaults: UserDefaults!
+       private var profileProvider: DefaultAgeBasedSleepProfileProvider!
+       private var overtiredCalculator: OvertiredCalculator!
+       private var agent: DefaultNightPredictionAgent!
 
-    // IMPORTANT:
-    // Production code uses Calendar.current inside OvertiredCalculator.
-    // The tests must use the same calendar/timezone.
-    private let calendar = Calendar.current
+       // IMPORTANT:
+       // Production code uses Calendar.current inside OvertiredCalculator.
+       // The tests must use the same calendar/timezone.
+       private let calendar = Calendar.current
 
-    private lazy var now: Date = {
-        calendar.date(
-            bySettingHour: 20,
-            minute: 0,
-            second: 0,
-            of: Date()
-        )!
-    }()
+       private lazy var now: Date = {
+           calendar.date(
+               bySettingHour: 20,
+               minute: 0,
+               second: 0,
+               of: Date()
+           )!
+       }()
 
-    // MARK: - Setup
+       // MARK: - Setup
 
     override func setUp() {
         super.setUp()
 
-        profileProvider = DefaultAgeBasedSleepProfileProvider()
+        defaults = UserDefaults(
+            suiteName: "NightPredictionAgentTests"
+        )!
 
-        // OvertiredCalculator does NOT accept a calendar parameter.
-        overtiredCalculator = OvertiredCalculator(
-            profileProvider: profileProvider
+        defaults.removePersistentDomain(
+            forName: "NightPredictionAgentTests"
         )
 
-        agent = DefaultNightPredictionAgent(
-            profileProvider: profileProvider,
-            overtiredCalculator: overtiredCalculator,
-            calendar: calendar
+        profileProvider = DefaultAgeBasedSleepProfileProvider(
+            defaults: defaults
         )
-    }
 
-    override func tearDown() {
-        agent = nil
-        overtiredCalculator = nil
-        profileProvider = nil
+           // OvertiredCalculator does NOT accept a calendar parameter.
+           overtiredCalculator = OvertiredCalculator(
+               profileProvider: profileProvider
+           )
 
-        super.tearDown()
-    }
+           agent = DefaultNightPredictionAgent(
+               profileProvider: profileProvider,
+               overtiredCalculator: overtiredCalculator,
+               calendar: calendar
+           )
+       }
+
+       override func tearDown() {
+           defaults.removePersistentDomain(
+               forName: "NightPredictionAgentTests"
+           )
+
+           agent = nil
+           overtiredCalculator = nil
+           profileProvider = nil
+           defaults = nil
+
+           super.tearDown()
+       }
 
     // MARK: - Helpers
 
