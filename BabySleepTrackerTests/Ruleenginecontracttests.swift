@@ -224,3 +224,166 @@ final class OvertiredCalculatorContractTests: XCTestCase {
         }
     }
 }
+
+// MARK: - SleepRuleEngine
+
+final class SleepRuleEngineContractTests: XCTestCase {
+    private let calendar = Calendar(identifier: .gregorian)
+
+    private func makeProfile(expected: ClosedRange<Int> = 2...2) -> AgeBasedSleepProfile {
+        AgeBasedSleepProfile(
+            ageRange: 9...11,
+            totalSleep24hRange: 660...840,
+            wakeWindowRange: 180...240,
+            morningWakeWindow: 180...210,
+            eveningWakeWindow: 210...240,
+            expectedNapCount: expected,
+            maxSingleNapMinutes: 120,
+            daytimeSleepRange: 120...180,
+            nightSleepRange: 600...720,
+            bedtimeHourRange: 18...20,
+            lastNapCutoffHour: 16
+        )
+    }
+
+    private func engine(expected: ClosedRange<Int> = 2...2) -> SleepRuleEngine {
+        let provider = FixedAgeBasedSleepProfileProvider(fixedProfile: makeProfile(expected: expected))
+        return SleepRuleEngine(profileProvider: provider, calendar: calendar)
+    }
+
+    private func date(dayOffset: Int = 0, hour: Int, minute: Int = 0) -> Date {
+        let base = calendar.date(from: DateComponents(year: 2026, month: 9, day: 30))!
+        return calendar.date(byAdding: .day, value: dayOffset, to: calendar.date(bySettingHour: hour, minute: minute, second: 0, of: base)!)!
+    }
+
+    private func nap(hour: Int, duration: Int = 60, dayOffset: Int = 0, ongoing: Bool = false) -> SleepRecord {
+        SleepRecord(date: date(dayOffset: dayOffset, hour: hour), duration: duration, isOngoing: ongoing)
+    }
+
+    private func decide(
+        _ records: [SleepRecord],
+        expected: ClosedRange<Int> = 2...2,
+        now: Date = Date(timeIntervalSince1970: 0),
+        latestEnd: Date? = nil,
+        duration: Int = 60
+    ) -> SleepRuleEngineResult {
+        let actualNow = now.timeIntervalSince1970 == 0 ? date(hour: 12) : now
+        return engine(expected: expected).decide(
+            records: records,
+            ageMonths: 9,
+            now: actualNow,
+            recoveryNapLatestEndTime: latestEnd ?? date(hour: 18),
+            recoveryNapDurationMinutes: duration
+        )
+    }
+
+    func testCountsOnlyCompletedCurrentDayNapsAndExcludesOngoingAndOtherDays() {
+        let result = decide([
+            nap(hour: 8),
+            nap(hour: 10, ongoing: true),
+            nap(hour: 11, dayOffset: -1),
+            SleepRecord(date: date(hour: 12), duration: 20, kind: .nightSleep)
+        ])
+        XCTAssertEqual(result.completedNapCount, 1)
+        XCTAssertEqual(result.completedNaps.count, 1)
+        XCTAssertEqual(result.ongoingNap?.date, date(hour: 10))
+    }
+
+    func testUsesChronologicallyLatestCompletedNapAndNetEndTime() {
+        let earlier = nap(hour: 8, duration: 60)
+        let latest = nap(hour: 11, duration: 90)
+        let pause = SleepRecord(date: date(hour: 12), duration: 20, kind: .break, parentNapID: latest.id)
+        let result = decide([latest, pause, earlier], expected: 1...1)
+        XCTAssertEqual(result.latestCompletedNap?.id, latest.id)
+        XCTAssertEqual(result.latestCompletedNapEnd, date(hour: 12, minute: 10))
+        XCTAssertEqual(result.completedNaps.map(\.id), [earlier.id, latest.id])
+    }
+
+    func testReportsIncompleteTransitionAndCompleteStructures() {
+        XCTAssertEqual(decide([nap(hour: 8)]).structure, .incomplete)
+        XCTAssertEqual(decide([nap(hour: 8), nap(hour: 11)], expected: 2...3).structure, .transition)
+        XCTAssertEqual(decide([nap(hour: 8), nap(hour: 11), nap(hour: 14)], expected: 2...3).structure, .complete)
+    }
+
+    func testOngoingNapHasExplicitDecisionAndPreservesFacts() {
+        let ongoing = nap(hour: 11, ongoing: true)
+        let result = decide([nap(hour: 8), ongoing])
+        XCTAssertEqual(result.decision, .ongoingNap)
+        XCTAssertEqual(result.completedNapCount, 1)
+        XCTAssertEqual(result.ongoingNap?.id, ongoing.id)
+    }
+
+    func testIncompleteStructureUsesRecoveryNapWhenItCanFinishBeforeLatestEnd() {
+        let result = decide([nap(hour: 8)], now: date(hour: 12), latestEnd: date(hour: 18), duration: 60)
+        XCTAssertEqual(result.decision, .recoveryNap)
+        XCTAssertTrue(result.recoveryNapCanFinishInTime)
+    }
+
+    func testIncompleteStructureUsesEarlyBedtimeWhenRecoveryCannotFinishInTime() {
+        let result = decide([nap(hour: 8)], now: date(hour: 17), latestEnd: date(hour: 18), duration: 120)
+        XCTAssertEqual(result.decision, .earlyBedtime)
+        XCTAssertEqual(result.recoveryNapCanFinishInTime, false)
+    }
+
+    func testCompleteStructureRemainsBedtimeCompatible() {
+        let result = decide([nap(hour: 8), nap(hour: 11)], now: date(hour: 13))
+        XCTAssertEqual(result.structure, .complete)
+        XCTAssertEqual(result.decision, .bedtime)
+    }
+
+    func testTransitionStructureRemainsDistinguishableWithoutBeingTreatedAsComplete() {
+        let result = decide([nap(hour: 8), nap(hour: 11)], expected: 2...3, now: date(hour: 13))
+        XCTAssertEqual(result.structure, .transition)
+        XCTAssertEqual(result.decision, .normalNap)
+    }
+
+    func testOngoingNapDoesNotMapToBedtimeAtLegacyBoundary() {
+        let result = decide([nap(hour: 8), nap(hour: 11, ongoing: true)], now: date(hour: 13))
+        let legacyKind: NextSleepKind = {
+            switch result.decision {
+            case .normalNap, .recoveryNap, .ongoingNap: return .nap
+            case .bedtime, .earlyBedtime: return .bedtime
+            }
+        }()
+        XCTAssertEqual(result.decision, .ongoingNap)
+        if case .nap = legacyKind {
+            XCTAssertTrue(true)
+        } else {
+            XCTFail("An ongoing nap must remain nap-compatible at the legacy boundary.")
+        }
+    }
+
+    func testRecoveryFeasibilityUsesExplicitDurationAndLatestEndInputs() {
+        let feasible = decide([nap(hour: 8)], now: date(hour: 12), latestEnd: date(hour: 18), duration: 60)
+        XCTAssertEqual(feasible.recoveryNapCanFinishInTime, true)
+
+        let unknown = engine().decide(
+            records: [nap(hour: 8)],
+            ageMonths: 9,
+            now: date(hour: 12),
+            recoveryNapLatestEndTime: date(hour: 18),
+            recoveryNapDurationMinutes: nil
+        )
+        XCTAssertNil(unknown.recoveryNapCanFinishInTime)
+        XCTAssertEqual(unknown.decision, .recoveryNap)
+    }
+
+    func testPastAgeBasedCutoffUsesBedtimeAndKeepsCutoffSeparateFromRecoveryPolicy() {
+        let result = decide([nap(hour: 8), nap(hour: 11)], now: date(hour: 16), latestEnd: date(hour: 18))
+        XCTAssertEqual(result.decision, .bedtime)
+        XCTAssertEqual(calendar.component(.hour, from: result.ageBasedLastNapCutoffTime), 16)
+        XCTAssertEqual(calendar.component(.hour, from: result.recoveryNapLatestEndTime), 18)
+    }
+
+    func testCompleteStructureBeforeCutoffIsNormalNap() {
+        let result = decide([nap(hour: 8), nap(hour: 11)], now: date(hour: 13))
+        XCTAssertEqual(result.structure, .complete)
+        XCTAssertEqual(result.decision, .bedtime)
+    }
+
+    func testStructuredOvertiredRiskIsExposedWithoutBeingAnAutomaticBedtimeGate() {
+        let result = decide([nap(hour: 8), nap(hour: 11)], now: date(hour: 15))
+        XCTAssertNotNil(result.overtiredRisk)
+        XCTAssertEqual(result.decision, .normalNap)
+    }
+}

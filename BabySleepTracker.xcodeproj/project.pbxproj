@@ -45,6 +45,7 @@
 		FA7232E12FDCCB1D00647487 /* NightPredictionAgent.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA7232E02FDCCB1D00647487 /* NightPredictionAgent.swift */; };
 		FA7232E32FDCCC6500647487 /* Date+Extensions.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA7232E22FDCCC6500647487 /* Date+Extensions.swift */; };
 		FA7232E52FDCCD6000647487 /* SleepCoachOrchestrator.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA7232E42FDCCD6000647487 /* SleepCoachOrchestrator.swift */; };
+		FA7232E82FDCCD6000647487 /* SleepRuleEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA7232E72FDCCD6000647487 /* SleepRuleEngine.swift */; };
 		FA7232E72FDD8D6D00647487 /* SleepCoachLLMAgent.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA7232E62FDD8D6D00647487 /* SleepCoachLLMAgent.swift */; };
 		FA7232EA2FDD8F2B00647487 /* APIConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA7232E92FDD8F2B00647487 /* APIConfig.swift */; };
 		FA75A60D2FE60671008CA09C /* DailyWakeRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA75A60C2FE60671008CA09C /* DailyWakeRecord.swift */; };
@@ -142,6 +143,7 @@
 		FA7232E02FDCCB1D00647487 /* NightPredictionAgent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NightPredictionAgent.swift; sourceTree = "<group>"; };
 		FA7232E22FDCCC6500647487 /* Date+Extensions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Date+Extensions.swift"; sourceTree = "<group>"; };
 		FA7232E42FDCCD6000647487 /* SleepCoachOrchestrator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepCoachOrchestrator.swift; sourceTree = "<group>"; };
+		FA7232E72FDCCD6000647487 /* SleepRuleEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepRuleEngine.swift; sourceTree = "<group>"; };
 		FA7232E62FDD8D6D00647487 /* SleepCoachLLMAgent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepCoachLLMAgent.swift; sourceTree = "<group>"; };
 		FA7232E92FDD8F2B00647487 /* APIConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIConfig.swift; sourceTree = "<group>"; };
 		FA75A60C2FE60671008CA09C /* DailyWakeRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DailyWakeRecord.swift; sourceTree = "<group>"; };
@@ -404,6 +406,7 @@
 				FAEF107B2F530D3100E76FD4 /* SleepStateCalculator.swift */,
 				FA7232E62FDD8D6D00647487 /* SleepCoachLLMAgent.swift */,
 				FA7232E42FDCCD6000647487 /* SleepCoachOrchestrator.swift */,
+				FA7232E72FDCCD6000647487 /* SleepRuleEngine.swift */,
 				FA9DB0A62FD49EB9000B9211 /* AuthFlow.swift */,
 				FA5488CA2FAEB831002BC18B /* SleepAPI.swift */,
 				FAEF104C2F4E208000E76FD4 /* SleepStore.swift */,
@@ -607,6 +610,7 @@
 				FAEF10702F530D3100E76FD4 /* SleepRecordRow.swift in Sources */,
 				FA75A60D2FE60671008CA09C /* DailyWakeRecord.swift in Sources */,
 				FA7232E52FDCCD6000647487 /* SleepCoachOrchestrator.swift in Sources */,
+				FA7232E82FDCCD6000647487 /* SleepRuleEngine.swift in Sources */,
 				FA91C5E02FDB46270089E1EE /* SleepMemoryStore.swift in Sources */,
 				FAEF10442F4E207F00E76FD4 /* BabySleepTrackerApp.swift in Sources */,
 				FA7232DF2FDCC8EC00647487 /* DaytimePredictionAgent.swift in Sources */,

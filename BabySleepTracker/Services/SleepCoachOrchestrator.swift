@@ -242,16 +242,25 @@ final class SleepCoachOrchestrator: ObservableObject {
             now:          now
         )
 
-        // 7. nextSleepKind
-        let todayDayNapsCount = todayRecs.filter { $0.kind == .dayNap }.count
-        let profile           = profileProvider.profile(forAgeMonths: ageMonths)
-        let expectedNaps      = profile.expectedNapCount
-
+        // 7. nextSleepKind — preserve the legacy snapshot field while using
+        // the focused deterministic nap-structure decision layer.
+        let recoveryLatestEnd = Calendar.current.date(bySettingHour: 18, minute: 0, second: 0, of: now) ?? now
+        let ruleResult = SleepRuleEngine(
+            profileProvider: profileProvider,
+            overtiredCalculator: overtiredCalc
+        ).decide(
+            records: todayRecs,
+            ageMonths: ageMonths,
+            now: now,
+            recoveryNapLatestEndTime: recoveryLatestEnd,
+            recoveryNapDurationMinutes: nil
+        )
         let nextSleepKind: NextSleepKind = {
-            let cutoff = overtiredCalc.lastNapCutoffTime(ageMonths: ageMonths, on: now)
-            guard now < cutoff else { return .bedtime }
-            if todayDayNapsCount >= expectedNaps.upperBound { return .bedtime }
-            return .nap
+            switch ruleResult.decision {
+            case .normalNap, .recoveryNap: return .nap
+            case .bedtime, .earlyBedtime: return .bedtime
+            case .ongoingNap: return .nap
+            }
         }()
 
         // 8. Nap transition
