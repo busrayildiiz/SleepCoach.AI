@@ -14,6 +14,16 @@ enum SleepNapStructure: Equatable {
     case complete
 }
 
+enum SleepRuleDecisionReason: Equatable {
+    case ongoingNapInProgress
+    case pastNapCutoff
+    case completeNapStructure
+    case recoveryNapFeasible
+    case recoveryNapNotFeasible
+    case recoveryFeasibilityUnknown
+    case transitionNapStructure
+}
+
 struct SleepRuleEngineResult {
     let decision: SleepRuleDecision
     let structure: SleepNapStructure
@@ -29,6 +39,7 @@ struct SleepRuleEngineResult {
     let recoveryNapDurationMinutes: Int?
     let recoveryNapCanFinishInTime: Bool?
     let overtiredRisk: OvertiredRisk?
+    let decisionReason: SleepRuleDecisionReason
 }
 
 final class SleepRuleEngine {
@@ -78,16 +89,30 @@ final class SleepRuleEngine {
         }
 
         let decision: SleepRuleDecision
+        let decisionReason: SleepRuleDecisionReason
         if ongoing != nil {
             decision = .ongoingNap
+            decisionReason = .ongoingNapInProgress
         } else if now >= cutoff {
             decision = structure == .incomplete ? .earlyBedtime : .bedtime
+            decisionReason = .pastNapCutoff
         } else if structure == .complete {
             decision = .bedtime
+            decisionReason = .completeNapStructure
         } else if structure == .incomplete {
-            decision = feasible == false ? .earlyBedtime : .recoveryNap
+            if feasible == false {
+                decision = .earlyBedtime
+                decisionReason = .recoveryNapNotFeasible
+            } else if feasible == true {
+                decision = .recoveryNap
+                decisionReason = .recoveryNapFeasible
+            } else {
+                decision = .recoveryNap
+                decisionReason = .recoveryFeasibilityUnknown
+            }
         } else {
             decision = .normalNap
+            decisionReason = .transitionNapStructure
         }
 
         return SleepRuleEngineResult(
@@ -104,7 +129,8 @@ final class SleepRuleEngine {
             recoveryNapLatestEndTime: recoveryNapLatestEndTime,
             recoveryNapDurationMinutes: recoveryNapDurationMinutes,
             recoveryNapCanFinishInTime: feasible,
-            overtiredRisk: risk
+            overtiredRisk: risk,
+            decisionReason: decisionReason
         )
     }
 }

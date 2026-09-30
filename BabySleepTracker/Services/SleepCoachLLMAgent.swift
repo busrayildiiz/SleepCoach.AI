@@ -89,7 +89,7 @@ final class DefaultSleepCoachLLMAgent: SleepCoachLLMAgentProtocol {
 
     // MARK: - Prompt Builder
 
-    private func buildPrompt(
+    func buildPrompt(
         snapshot: OrchestratedSnapshot,
         records:  [SleepRecord],
         trigger:  LLMTrigger
@@ -125,6 +125,8 @@ final class DefaultSleepCoachLLMAgent: SleepCoachLLMAgentProtocol {
         case .strong:   transitionNote = "Strong transition signals — \(snapshot.transition.recommendation)"
         }
 
+        let deterministicNapFacts = deterministicNapFactsContext(snapshot.deterministicNapStructure, formatter: formatter)
+
         return """
         You are an expert baby sleep coach AI. Analyze the data below and respond ONLY with a JSON object.
 
@@ -144,6 +146,8 @@ final class DefaultSleepCoachLLMAgent: SleepCoachLLMAgentProtocol {
         - Today's total sleep: \(snapshot.todayTotalMinutes) minutes
         - Daily sleep status: \(snapshot.sleepStatus.label)
         - Nap transition: \(transitionNote)
+        - Deterministic nap-structure facts (authoritative; explain these facts and do not recalculate or override the decision):
+        \(deterministicNapFacts)
 
         DATA QUALITY REPORT:
         \(buildDataQualitySection(snapshot.dataQualityReport))
@@ -163,6 +167,30 @@ final class DefaultSleepCoachLLMAgent: SleepCoachLLMAgentProtocol {
           "alert": null or "1 sentence if there is something urgent",
           "confidence_note": "1 sentence about prediction reliability, based on the summarized data quality and without mentioning raw scores"
         }
+        """
+    }
+
+    private func deterministicNapFactsContext(
+        _ facts: DeterministicNapStructureFacts?,
+        formatter: DateFormatter
+    ) -> String {
+        guard let facts else { return "- Unavailable for this snapshot" }
+
+        let latestEnd = facts.latestCompletedNapEnd.map(formatter.string(from:)) ?? "nil"
+        let risk = facts.overtiredRisk.map { String(reflecting: $0) } ?? "nil"
+        let feasible = facts.recoveryNapCanFinishInTime.map(String.init) ?? "unknown"
+
+        return """
+        - Structure: \(String(reflecting: facts.structure))
+        - Expected nap count: \(facts.expectedNapCount.lowerBound)...\(facts.expectedNapCount.upperBound)
+        - Completed nap count: \(facts.completedNapCount)
+        - Ongoing nap present: \(facts.hasOngoingNap)
+        - Latest completed nap end: \(latestEnd)
+        - Age-based nap cutoff: \(formatter.string(from: facts.ageBasedNapCutoff))
+        - Overtired risk: \(risk)
+        - Authoritative decision: \(String(describing: facts.decision))
+        - Decision reason: \(String(describing: facts.decisionReason))
+        - Recovery nap feasible: \(feasible)
         """
     }
 

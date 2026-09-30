@@ -218,7 +218,7 @@ final class SleepCoachOrchestratorTests: XCTestCase {
 
     func testNextSleepKindIsBedtimeWhenExpectedNapCountIsReached() {
         let calendar = Calendar.current
-        let today = calendar.startOfDay(for: Date())
+        let today = calendar.startOfDay(for: now)
         let currentDayNow = calendar.date(byAdding: .hour, value: 10, to: today)!
         let firstNap = SleepRecord(
             date: calendar.date(byAdding: .hour, value: 6, to: today)!,
@@ -240,6 +240,58 @@ final class SleepCoachOrchestratorTests: XCTestCase {
             orchestrator.snapshot?.nextSleepKind,
             .bedtime
         )
+    }
+
+    func testDeterministicNapFactsReachSnapshotAndLLMContext() async throws {
+        let requestStarted = expectation(description: "LLM receives the generated snapshot")
+        llmAgent.onTrigger = { _ in requestStarted.fulfill() }
+
+        let firstNap = SleepRecord(date: now.addingHours(-4), duration: 60, kind: .dayNap)
+        let secondNap = SleepRecord(date: now.addingHours(-2), duration: 60, kind: .dayNap)
+        saveRecords([firstNap, secondNap])
+
+        orchestrator.generate(now: now)
+        await fulfillment(of: [requestStarted], timeout: 1)
+
+        let snapshot: OrchestratedSnapshot = try XCTUnwrap(orchestrator.snapshot)
+        let facts = try XCTUnwrap(snapshot.deterministicNapStructure)
+        let llmSnapshot: OrchestratedSnapshot = try XCTUnwrap(llmAgent.receivedSnapshots.last)
+        let llmFacts = try XCTUnwrap(llmSnapshot.deterministicNapStructure)
+
+        XCTAssertEqual(facts.structure, .complete)
+        XCTAssertEqual(facts.expectedNapCount, 2...2)
+        XCTAssertEqual(facts.completedNapCount, 2)
+        XCTAssertFalse(facts.hasOngoingNap)
+        XCTAssertEqual(facts.latestCompletedNapEnd, now.addingHours(-1))
+        XCTAssertEqual(facts.ageBasedNapCutoff, Calendar.current.date(bySettingHour: 16, minute: 0, second: 0, of: now))
+        XCTAssertEqual(facts.decision, .bedtime)
+        XCTAssertEqual(facts.decisionReason, .completeNapStructure)
+        XCTAssertNotNil(facts.overtiredRisk)
+        XCTAssertNil(facts.recoveryNapCanFinishInTime)
+
+        XCTAssertEqual(llmFacts.completedNapCount, facts.completedNapCount)
+        XCTAssertEqual(llmFacts.decision, facts.decision)
+        XCTAssertEqual(llmFacts.decisionReason, facts.decisionReason)
+    }
+
+    func testLLMPromptReceivesAuthoritativeDeterministicNapFacts() throws {
+        let firstNap = SleepRecord(date: now.addingHours(-4), duration: 60, kind: .dayNap)
+        let secondNap = SleepRecord(date: now.addingHours(-2), duration: 60, kind: .dayNap)
+        saveRecords([firstNap, secondNap])
+
+        orchestrator.generate(now: now)
+        let snapshot = try XCTUnwrap(orchestrator.snapshot)
+        let prompt = DefaultSleepCoachLLMAgent().buildPrompt(
+            snapshot: snapshot,
+            records: [firstNap, secondNap],
+            trigger: .manualRefresh
+        )
+
+        XCTAssertTrue(prompt.contains("Deterministic nap-structure facts (authoritative"))
+        XCTAssertTrue(prompt.contains("Authoritative decision: bedtime"))
+        XCTAssertTrue(prompt.contains("Decision reason: completeNapStructure"))
+        XCTAssertTrue(prompt.contains("Completed nap count: 2"))
+        XCTAssertTrue(prompt.contains("do not recalculate or override the decision"))
     }
 
     func testNextSleepKindIsBedtimeAfterNapCutoff() {
@@ -727,6 +779,7 @@ private final class MockLLMAgent: SleepCoachLLMAgentProtocol {
     var onTrigger: ((LLMTrigger) -> Void)?
 
     private(set) var receivedTriggers: [LLMTrigger] = []
+    private(set) var receivedSnapshots: [OrchestratedSnapshot] = []
 
     func generateInsight(
         snapshot: OrchestratedSnapshot,
@@ -735,6 +788,7 @@ private final class MockLLMAgent: SleepCoachLLMAgentProtocol {
     ) async -> LLMCoachResponse? {
 
         receivedTriggers.append(trigger)
+        receivedSnapshots.append(snapshot)
         onTrigger?(trigger)
         return response
     }

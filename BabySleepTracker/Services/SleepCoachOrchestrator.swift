@@ -18,6 +18,19 @@ enum NextSleepKind {
     case nap
     case bedtime
 }
+
+struct DeterministicNapStructureFacts {
+    let structure: SleepNapStructure
+    let expectedNapCount: ClosedRange<Int>
+    let completedNapCount: Int
+    let hasOngoingNap: Bool
+    let latestCompletedNapEnd: Date?
+    let ageBasedNapCutoff: Date
+    let overtiredRisk: OvertiredRisk?
+    let decision: SleepRuleDecision
+    let recoveryNapCanFinishInTime: Bool?
+    let decisionReason: SleepRuleDecisionReason
+}
 enum DataQuality: Equatable {
     case poor
     case fair
@@ -66,7 +79,41 @@ struct OrchestratedSnapshot {
        let todayTotalMinutes:  Int
        let sleepStatus:        DailySleepStatus
        let nextSleepKind:      NextSleepKind
+       let deterministicNapStructure: DeterministicNapStructureFacts?
 
+       init(
+           generatedAt: Date,
+           babyName: String,
+           ageMonths: Int,
+           phase: CoachPhase,
+           readiness: PhaseReadinessReport,
+           pattern: BabyPattern?,
+           daytime: DaytimePredictionAgent,
+           night: NightPredictionAgent,
+           transition: NapTransitionAssessment,
+           insights: SleepInsightBundle,
+           dataQualityReport: DataQualityReport,
+           todayTotalMinutes: Int,
+           sleepStatus: DailySleepStatus,
+           nextSleepKind: NextSleepKind,
+           deterministicNapStructure: DeterministicNapStructureFacts? = nil
+       ) {
+           self.generatedAt = generatedAt
+           self.babyName = babyName
+           self.ageMonths = ageMonths
+           self.phase = phase
+           self.readiness = readiness
+           self.pattern = pattern
+           self.daytime = daytime
+           self.night = night
+           self.transition = transition
+           self.insights = insights
+           self.dataQualityReport = dataQualityReport
+           self.todayTotalMinutes = todayTotalMinutes
+           self.sleepStatus = sleepStatus
+           self.nextSleepKind = nextSleepKind
+           self.deterministicNapStructure = deterministicNapStructure
+       }
 
 }
 
@@ -171,7 +218,7 @@ final class SleepCoachOrchestrator: ObservableObject {
 
         // 2. Temel metrikler
         let breaks    = records.filter { $0.kind == .break }
-        let todayRecs = records.filter { Calendar.current.isDateInToday($0.date) }
+        let todayRecs = records.filter { Calendar.current.isDate($0.date, inSameDayAs: now) }
 
         let trackedDays = countTrackedDays(
             records:     records,
@@ -262,6 +309,18 @@ final class SleepCoachOrchestrator: ObservableObject {
             case .ongoingNap: return .nap
             }
         }()
+        let deterministicNapStructure = DeterministicNapStructureFacts(
+            structure: ruleResult.structure,
+            expectedNapCount: ruleResult.expectedNapCount,
+            completedNapCount: ruleResult.completedNapCount,
+            hasOngoingNap: ruleResult.ongoingNap != nil,
+            latestCompletedNapEnd: ruleResult.latestCompletedNapEnd,
+            ageBasedNapCutoff: ruleResult.ageBasedLastNapCutoffTime,
+            overtiredRisk: ruleResult.overtiredRisk,
+            decision: ruleResult.decision,
+            recoveryNapCanFinishInTime: ruleResult.recoveryNapCanFinishInTime,
+            decisionReason: ruleResult.decisionReason
+        )
 
         // 8. Nap transition
         let transition = transitionAgent.assess(
@@ -306,7 +365,8 @@ final class SleepCoachOrchestrator: ObservableObject {
             dataQualityReport: dataQualityReport,
             todayTotalMinutes: todayTotal,
             sleepStatus:       sleepStatus,
-            nextSleepKind:     nextSleepKind
+            nextSleepKind:     nextSleepKind,
+            deterministicNapStructure: deterministicNapStructure
         )
         let previousSnapshot = snapshot
         self.snapshot = result
@@ -1046,8 +1106,74 @@ final class SleepCoachOrchestrator: ObservableObject {
             "quality=\(String(reflecting: snapshot.dataQualityReport))",
             "todayTotalMinutes=\(snapshot.todayTotalMinutes)",
             "sleepStatus=\(String(reflecting: snapshot.sleepStatus))",
-            "nextSleepKind=\(String(reflecting: snapshot.nextSleepKind))"
+            "nextSleepKind=\(String(reflecting: snapshot.nextSleepKind))",
+            "deterministicNapStructure=\(canonicalDeterministicNapStructure(snapshot.deterministicNapStructure))"
         ].joined(separator: "|")
+    }
+
+    private func canonicalDeterministicNapStructure(
+        _ facts: DeterministicNapStructureFacts?
+    ) -> String {
+        guard let facts else { return "nil" }
+
+        return [
+            "structure=\(canonical(facts.structure))",
+            "expectedLower=\(facts.expectedNapCount.lowerBound)",
+            "expectedUpper=\(facts.expectedNapCount.upperBound)",
+            "completed=\(facts.completedNapCount)",
+            "ongoing=\(facts.hasOngoingNap ? 1 : 0)",
+            "latestEnd=\(canonical(facts.latestCompletedNapEnd))",
+            "cutoff=\(facts.ageBasedNapCutoff.timeIntervalSince1970)",
+            "overtiredRisk=\(canonical(facts.overtiredRisk))",
+            "decision=\(canonical(facts.decision))",
+            "reason=\(canonical(facts.decisionReason))",
+            "recoveryFeasible=\(facts.recoveryNapCanFinishInTime.map { $0 ? "true" : "false" } ?? "nil")"
+        ].joined(separator: ",")
+    }
+
+    private func canonical(_ date: Date?) -> String {
+        date.map { String($0.timeIntervalSince1970) } ?? "nil"
+    }
+
+    private func canonical(_ structure: SleepNapStructure) -> String {
+        switch structure {
+        case .incomplete: return "incomplete"
+        case .transition: return "transition"
+        case .complete: return "complete"
+        }
+    }
+
+    private func canonical(_ decision: SleepRuleDecision) -> String {
+        switch decision {
+        case .normalNap: return "normalNap"
+        case .recoveryNap: return "recoveryNap"
+        case .bedtime: return "bedtime"
+        case .earlyBedtime: return "earlyBedtime"
+        case .ongoingNap: return "ongoingNap"
+        }
+    }
+
+    private func canonical(_ reason: SleepRuleDecisionReason) -> String {
+        switch reason {
+        case .ongoingNapInProgress: return "ongoingNapInProgress"
+        case .pastNapCutoff: return "pastNapCutoff"
+        case .completeNapStructure: return "completeNapStructure"
+        case .recoveryNapFeasible: return "recoveryNapFeasible"
+        case .recoveryNapNotFeasible: return "recoveryNapNotFeasible"
+        case .recoveryFeasibilityUnknown: return "recoveryFeasibilityUnknown"
+        case .transitionNapStructure: return "transitionNapStructure"
+        }
+    }
+
+    private func canonical(_ risk: OvertiredRisk?) -> String {
+        guard let risk else { return "nil" }
+        switch risk {
+        case .healthy: return "healthy"
+        case .slightlyTired: return "slightlyTired"
+        case .moderate: return "moderate"
+        case .significant: return "significant"
+        case .criticallyTired: return "criticallyTired"
+        }
     }
 
     // Manuel refresh — kullanıcı istediğinde

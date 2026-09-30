@@ -316,7 +316,7 @@ final class SleepRuleEngineContractTests: XCTestCase {
     func testIncompleteStructureUsesRecoveryNapWhenItCanFinishBeforeLatestEnd() {
         let result = decide([nap(hour: 8)], now: date(hour: 12), latestEnd: date(hour: 18), duration: 60)
         XCTAssertEqual(result.decision, .recoveryNap)
-        XCTAssertTrue(result.recoveryNapCanFinishInTime)
+        XCTAssertEqual(result.recoveryNapCanFinishInTime, true)
     }
 
     func testIncompleteStructureUsesEarlyBedtimeWhenRecoveryCannotFinishInTime() {
@@ -329,6 +329,43 @@ final class SleepRuleEngineContractTests: XCTestCase {
         let result = decide([nap(hour: 8), nap(hour: 11)], now: date(hour: 13))
         XCTAssertEqual(result.structure, .complete)
         XCTAssertEqual(result.decision, .bedtime)
+        XCTAssertEqual(result.decisionReason, .completeNapStructure)
+    }
+
+    func testDecisionReason_ongoingNapInProgress() {
+        let result = decide([nap(hour: 8), nap(hour: 11, ongoing: true)], now: date(hour: 12))
+        XCTAssertEqual(result.decisionReason, .ongoingNapInProgress)
+    }
+
+    func testDecisionReason_pastNapCutoff() {
+        let result = decide([nap(hour: 8), nap(hour: 11)], now: date(hour: 17))
+        XCTAssertEqual(result.decisionReason, .pastNapCutoff)
+    }
+
+    func testDecisionReason_recoveryNapFeasible() {
+        let result = decide([nap(hour: 8)], now: date(hour: 12), latestEnd: date(hour: 18), duration: 60)
+        XCTAssertEqual(result.decisionReason, .recoveryNapFeasible)
+    }
+
+    func testDecisionReason_recoveryNapNotFeasible() {
+        let result = decide([nap(hour: 8)], now: date(hour: 17), latestEnd: date(hour: 18), duration: 120)
+        XCTAssertEqual(result.decisionReason, .recoveryNapNotFeasible)
+    }
+
+    func testDecisionReason_recoveryFeasibilityUnknown() {
+        let result = engine().decide(
+            records: [nap(hour: 8)],
+            ageMonths: 9,
+            now: date(hour: 12),
+            recoveryNapLatestEndTime: date(hour: 18),
+            recoveryNapDurationMinutes: nil
+        )
+        XCTAssertEqual(result.decisionReason, .recoveryFeasibilityUnknown)
+    }
+
+    func testDecisionReason_transitionNapStructure() {
+        let result = decide([nap(hour: 8), nap(hour: 11)], expected: 2...3, now: date(hour: 12))
+        XCTAssertEqual(result.decisionReason, .transitionNapStructure)
     }
 
     func testTransitionStructureRemainsDistinguishableWithoutBeingTreatedAsComplete() {
