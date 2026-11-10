@@ -33,17 +33,7 @@ struct InsightsView: View {
                 VStack(spacing: 12) {
                     headerSection
                     tabPicker
-                    if let snapshot = orchestrator.snapshot {
-                        Text("Sleep Day: " + TimeFormat.minutes(snapshot.todayTotalMinutes)
-                             + (snapshot.sleepDayIsProvisional ? " · provisional" : " · finalized")
-                             + " | Rolling 24h: " + TimeFormat.minutes(snapshot.rolling24hMinutes)
-                             + (snapshot.rolling24hIsProvisional ? " · provisional" : ""))
-                            .font(.caption)
-                        if !snapshot.subtotalsAreReliable {
-                            Text("Overlapping records make daytime, night, or Sleep Day subtotals unreliable. Review the original records.")
-                                .font(.caption).foregroundStyle(.orange)
-                        }
-                    }
+                    sleepDaySummary
 
                     if selectedTab == .overview {
                         coachHeroCard
@@ -69,6 +59,24 @@ struct InsightsView: View {
             .onReceive(NotificationCenter.default.publisher(for: .sleepRecordsDidChange)) { _ in refresh() }
             .onReceive(NotificationCenter.default.publisher(for: .dailyWakeRecordsDidChange)) { _ in refresh() }
             .environment(\.locale, Locale(identifier: "en_US"))
+        }
+    }
+
+    @ViewBuilder
+    private var sleepDaySummary: some View {
+        if let snapshot = orchestrator.snapshot {
+            let sleepDayMinutes = TimeFormat.minutes(snapshot.todayTotalMinutes)
+            let sleepDayStatus = snapshot.sleepDayIsProvisional ? " · provisional" : " · finalized"
+            let rollingMinutes = TimeFormat.minutes(snapshot.rolling24hMinutes)
+            let rollingStatus = snapshot.rolling24hIsProvisional ? " · provisional" : ""
+            let summary: String = "Sleep Day: \(sleepDayMinutes)\(sleepDayStatus) | Rolling 24h: \(rollingMinutes)\(rollingStatus)"
+
+            Text(summary)
+                .font(.caption)
+            if !snapshot.subtotalsAreReliable {
+                Text("Overlapping records make daytime, night, or Sleep Day subtotals unreliable. Review the original records.")
+                    .font(.caption).foregroundStyle(.orange)
+            }
         }
     }
 
