@@ -169,7 +169,7 @@ final class NightPredictionAgentTests: XCTestCase {
 
     // MARK: - Learning Period
 
-    func testDoesNotUseNapsBeforeFourteenTrackedDays() {
+    func testUsesCompletedNapForRuleBasedBedtimeDuringLearning() {
 
         let firstNap = makeNap(
             hour: 10,
@@ -193,22 +193,22 @@ final class NightPredictionAgentTests: XCTestCase {
             now: now
         )
 
-        // Even though two naps exist,
-        // personalized bedtime is unavailable before 14 days.
+        // Observed nap timing is a rule-engine input, not a learned-pattern gate.
+        // Last nap ends at 16:00; 120 daytime minutes leave no deficit adjustment.
 
         XCTAssertEqual(
             result.optimalBedtimeStart,
-            makeDate(hour: 18, minute: 30)
+            makeDate(hour: 19, minute: 30)
         )
 
         XCTAssertEqual(
             result.optimalBedtimeEnd,
-            makeDate(hour: 19, minute: 30)
+            makeDate(hour: 20, minute: 0)
         )
 
         XCTAssertTrue(
             result.reasoning.contains {
-                $0.contains("Not enough naps completed yet")
+                $0.contains("Last nap ended at")
             }
         )
     }
@@ -267,7 +267,7 @@ final class NightPredictionAgentTests: XCTestCase {
 
     // MARK: - Minimum Nap Count
 
-    func testDoesNotUseLastNapWhenMinimumNapCountIsNotReached() {
+    func testUsesOneCompletedNapWithoutRequiringExpectedNapCount() {
 
         let onlyNap = makeNap(
             hour: 15,
@@ -285,23 +285,22 @@ final class NightPredictionAgentTests: XCTestCase {
             now: now
         )
 
-        // 9 months requires minimum 2 naps.
-        // Only 1 completed nap exists.
-        // Therefore fixed bedtime is used.
+        // One observed end is sufficient even though the profile expects two naps.
+        // 16:00 + 210 min - (120 - 60)/3 = 19:10; latest remains 20:00.
 
         XCTAssertEqual(
             result.optimalBedtimeStart,
-            makeDate(hour: 18, minute: 30)
+            makeDate(hour: 19, minute: 10)
         )
 
         XCTAssertEqual(
             result.optimalBedtimeEnd,
-            makeDate(hour: 19, minute: 30)
+            makeDate(hour: 20, minute: 0)
         )
 
         XCTAssertTrue(
             result.reasoning.contains {
-                $0.contains("Not enough naps completed yet")
+                $0.contains("Last nap ended at")
             }
         )
     }
@@ -311,12 +310,12 @@ final class NightPredictionAgentTests: XCTestCase {
     func testDoesNotUseOngoingNapAsCompletedNap() {
 
         let completedNap = makeNap(
-            hour: 10,
+            hour: 15,
             duration: 60
         )
 
         let ongoingNap = makeNap(
-            hour: 15,
+            hour: 18,
             duration: 60,
             ongoing: true
         )
@@ -333,23 +332,25 @@ final class NightPredictionAgentTests: XCTestCase {
             now: now
         )
 
-        // Only one completed nap exists.
-        // Minimum = 2.
-        // Therefore fixed bedtime must be used.
+        // Use the completed nap's 16:00 end, not the ongoing nap's stored
+        // placeholder duration or its live 20:00 endpoint. Elapsed ongoing
+        // sleep contributes to the provisional daytime total (60 + 120 = 180).
+        XCTAssertNil(ongoingNap.observedEnd)
+        XCTAssertEqual(result.daytimeSleepStatus, .onTrack)
 
         XCTAssertEqual(
             result.optimalBedtimeStart,
-            makeDate(hour: 18, minute: 30)
+            makeDate(hour: 19, minute: 30)
         )
 
         XCTAssertEqual(
             result.optimalBedtimeEnd,
-            makeDate(hour: 19, minute: 30)
+            makeDate(hour: 20, minute: 0)
         )
 
         XCTAssertTrue(
             result.reasoning.contains {
-                $0.contains("Not enough naps completed yet")
+                $0.contains("Last nap ended at")
             }
         )
     }

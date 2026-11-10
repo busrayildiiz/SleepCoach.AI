@@ -447,20 +447,24 @@ final class SleepCoachOrchestratorTests: XCTestCase {
     }
 
     func testIncreasedTodaySleepTriggersShortNapLLMCall() async {
-        let currentDay = Date()
+        let currentDay = now
         let triggerReceived = expectation(description: "Short nap trigger received")
         llmAgent.onTrigger = { trigger in
             if case .shortNapDetected = trigger {
                 triggerReceived.fulfill()
             }
         }
-        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "llm_lastGenerated")
+        UserDefaults.standard.set(currentDay.timeIntervalSince1970, forKey: "llm_lastGenerated")
 
         orchestrator.generate(now: currentDay)
+        XCTAssertEqual(orchestrator.snapshot?.todayTotalMinutes, 0)
         saveRecords([
-            SleepRecord(date: currentDay, duration: 30, kind: .dayNap)
+            // A completed nap must end by the injected reference, not start at it.
+            SleepRecord(date: currentDay.addingTimeInterval(-30 * 60), duration: 30,
+                        kind: .dayNap, createdAt: currentDay)
         ])
         orchestrator.generate(now: currentDay)
+        XCTAssertEqual(orchestrator.snapshot?.todayTotalMinutes, 30)
         await fulfillment(of: [triggerReceived], timeout: 1)
 
         XCTAssertEqual(llmAgent.receivedTriggers.count, 1)
@@ -1039,7 +1043,7 @@ final class SleepCoachOrchestratorLLMLifecycleTests: XCTestCase {
     }
 
     func testAutomaticGenerationUsesMatchingSnapshotAndRecords() async throws {
-        let currentDay = Date()
+        let currentDay = now
         let requestStarted = expectation(description: "Automatic LLM request started")
         let requestCompleted = expectation(description: "Automatic LLM request completed")
         llmAgent.onRequest = { _ in requestStarted.fulfill() }
@@ -1047,7 +1051,9 @@ final class SleepCoachOrchestratorLLMLifecycleTests: XCTestCase {
 
         UserDefaults.standard.set(currentDay.timeIntervalSince1970, forKey: "llm_lastGenerated")
         orchestrator.generate(now: currentDay)
-        let stateBRecord = SleepRecord(date: currentDay, duration: 30, kind: .dayNap)
+        // Keep the completed session entirely before the injected calculation time.
+        let stateBRecord = SleepRecord(date: currentDay.addingTimeInterval(-30 * 60), duration: 30,
+                                       kind: .dayNap, createdAt: currentDay)
         saveRecords([stateBRecord])
 
         orchestrator.generate(now: currentDay)
