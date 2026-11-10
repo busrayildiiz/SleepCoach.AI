@@ -1,0 +1,84 @@
+name: iOS CI
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Show selected Xcode
+        run: xcodebuild -version
+
+      - name: Select a compatible iPhone simulator
+        id: simulator
+        run: |
+          export SIMULATOR_SDK_VERSION="$(xcrun --sdk iphonesimulator --show-sdk-version)"
+          xcrun simctl list devices available --json | python3 -c '
+          import json, os, sys
+
+          runtime = "com.apple.CoreSimulator.SimRuntime.iOS-" + os.environ["SIMULATOR_SDK_VERSION"].replace(".", "-")
+          devices = json.load(sys.stdin)["devices"].get(runtime, [])
+          device = next((d for d in devices if d.get("isAvailable") and d["name"].startswith("iPhone")), None)
+          if device is None:
+              sys.exit("No available iPhone simulator for " + runtime)
+          print("Selected " + device["name"] + " (" + device["udid"] + ") on " + runtime)
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write("udid=" + device["udid"] + "\n")
+          '
+
+      - name: Resolve Swift packages
+        run: >-
+          xcodebuild -resolvePackageDependencies
+          -project BabySleepTracker.xcodeproj
+          -scheme BabySleepTracker
+          -derivedDataPath "$RUNNER_TEMP/DerivedData"
+
+      - name: Build and run XCTest
+        env:
+          SIMULATOR_UDID: ${{ steps.simulator.outputs.udid }}
+        run: >-
+          xcodebuild test
+          -project BabySleepTracker.xcodeproj
+          -scheme BabySleepTracker
+          -configuration Debug
+          -sdk iphonesimulator
+          -destination "platform=iOS Simulator,id=$SIMULATOR_UDID"
+          -derivedDataPath "$RUNNER_TEMP/DerivedData"
+          -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult"
+          CODE_SIGN_STYLE=Manual
+          CODE_SIGN_IDENTITY=-
+          CODE_SIGNING_ALLOWED=YES
+          CODE_SIGNING_REQUIRED=NO
+          AD_HOC_CODE_SIGNING_ALLOWED=YES
+          DEVELOPMENT_TEAM=
+          PROVISIONING_PROFILE_SPECIFIER=
+
+      - name: Upload failed test results
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-test-results
+          path: ${{ runner.temp }}/TestResults.xcresult
+          if-no-files-found: warn
+          retention-days: 7
