@@ -209,13 +209,6 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
-		FA04E409302908F000EFF932 /* rules */ = {
-			isa = PBXGroup;
-			children = (
-			);
-			path = rules;
-			sourceTree = "<group>";
-		};
 		FA5488D12FAEB964002BC18B /* BabySleepTrackerTests */ = {
 			isa = PBXGroup;
 			children = (
@@ -323,7 +316,6 @@
 		FAEF10422F4E207F00E76FD4 /* BabySleepTracker */ = {
 			isa = PBXGroup;
 			children = (
-				FA04E409302908F000EFF932 /* rules */,
 				FAB4BB052FE2059000702F49 /* Info.plist */,
 				FAEF10432F4E207F00E76FD4 /* BabySleepTrackerApp.swift */,
 				FA7232E82FDD8F1E00647487 /* Config */,
