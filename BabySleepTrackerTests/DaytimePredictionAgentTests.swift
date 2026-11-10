@@ -96,7 +96,7 @@ final class DaytimePredictionAgentTests: XCTestCase {
         })
     }
 
-    func testSubtractsBreakFromLastNapWhenCalculatingAnchor() {
+    func testBreakDoesNotMoveActualNapEndAnchorEarlier() {
         let napDate = day(hour: 9, minute: 0)
 
         let nap = SleepRecord(
@@ -122,8 +122,8 @@ final class DaytimePredictionAgentTests: XCTestCase {
             now: now
         )
 
-        // Net sleep = 120 - 30 = 90 minutes.
-        let expectedAnchor = napDate.addingTimeInterval(90 * 60)
+        // Wake windows start at the actual interval end, not start + net sleep.
+        let expectedAnchor = napDate.addingTimeInterval(120 * 60)
         let expectedNextNap = expectedAnchor.addingTimeInterval(210 * 60)
 
         XCTAssertEqual(

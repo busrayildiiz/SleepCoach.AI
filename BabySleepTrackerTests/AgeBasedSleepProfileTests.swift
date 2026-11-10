@@ -169,7 +169,7 @@ final class AgeBasedSleepProfileTests: XCTestCase {
 
     // MARK: - UserDefaults Behavior
 
-    func test_profile_whenBirthDateExists_currentlyUsesBirthDateInsteadOfProvidedAge() {
+    func test_profile_whenBirthDateExists_usesExplicitAgeForHistoricalCalculations() {
         let birthDate = makeDate(
             year: 2025,
             month: 8,
@@ -183,7 +183,7 @@ final class AgeBasedSleepProfileTests: XCTestCase {
 
         let profile = sut.profile(forAgeMonths: 4)
 
-        XCTAssertEqual(profile.ageRange, 5...6)
+        XCTAssertEqual(profile.ageRange, 4...4)
     }
 
     // MARK: - Helpers

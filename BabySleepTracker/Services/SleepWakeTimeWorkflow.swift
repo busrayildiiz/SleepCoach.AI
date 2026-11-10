@@ -54,11 +54,12 @@ struct SleepWakeTimeWorkflow {
             let closed = SleepRecord(
                 id: ongoing.id,
                 date: ongoing.date,
-                duration: min(duration, 12 * 60),
+                duration: duration,
                 kind: ongoing.kind,
                 parentNapID: ongoing.parentNapID,
                 isOngoing: false,
-                createdAt: ongoing.createdAt
+                createdAt: ongoing.createdAt,
+                endDate: wakeTime
             )
             closedNightRecord = closed
             if let index = updatedSleepRecords.firstIndex(where: { $0.id == closed.id }) {

@@ -30,7 +30,7 @@ struct AddRecordView: View {
         if let record = editingRecord {
             _selectedDate      = State(initialValue: Calendar.current.startOfDay(for: record.date))
             _startTime         = State(initialValue: record.date)
-            _endTime           = State(initialValue: record.date.addingTimeInterval(TimeInterval(record.duration * 60)))
+            _endTime           = State(initialValue: record.observedEnd ?? record.date)
             _isOngoing         = State(initialValue: record.isOngoing)
             _endManuallyEdited = State(initialValue: true)
             vm.kind = record.kind
@@ -492,7 +492,8 @@ struct AddRecordView: View {
             kind: vm.kind,
             parentNapID: editingRecord?.parentNapID,
             isOngoing: isOngoing,
-            createdAt: editingRecord?.createdAt ?? Date()
+            createdAt: editingRecord?.createdAt ?? Date(),
+            endDate: isOngoing ? nil : endDateTime
         )
         onSave(record)
         dismiss()
@@ -505,37 +506,21 @@ struct AddRecordView: View {
             var merged = DateComponents()
             merged.year = d.year; merged.month = d.month; merged.day = d.day
             merged.hour = t.hour; merged.minute = t.minute
+            merged.second = cal.component(.second, from: time)
+            merged.nanosecond = cal.component(.nanosecond, from: time)
             return cal.date(from: merged) ?? date
         }
 
         private var startDateTime: Date {
-            let start = combine(date: selectedDate, time: startTime)
-            guard shouldTreatNightStartAsPreviousEvening(start) else { return start }
-            return Calendar.current.date(byAdding: .day, value: -1, to: start) ?? start
-        }
-
-        private func shouldTreatNightStartAsPreviousEvening(_ start: Date) -> Bool {
-            guard vm.kind == .nightSleep else { return false }
-            guard Calendar.current.isDateInToday(selectedDate) else { return false }
-            guard start > Date() else { return false }
-
-            let startHour = Calendar.current.component(.hour, from: start)
-            guard startHour >= 12 else { return false }
-
-            let wakeHour = UserDefaults.standard.object(forKey: "typicalWakeHour") as? Double ?? 7.0
-            let wakeMinute = UserDefaults.standard.object(forKey: "typicalWakeMinute") as? Double ?? 0.0
-            let today = Calendar.current.startOfDay(for: Date())
-            let typicalWake = Calendar.current.date(
-                bySettingHour: Int(wakeHour),
-                minute: Int(wakeMinute),
-                second: 0,
-                of: today
-            ) ?? today.addingTimeInterval(7 * 60 * 60)
-
-            return Date() < typicalWake
+            if let editingRecord, selectedDate == Calendar.current.startOfDay(for: editingRecord.date), startTime == editingRecord.date {
+                return editingRecord.date
+            }
+            return combine(date: selectedDate, time: startTime)
         }
 
         private var endDateTime: Date {
+            if let editingRecord, let end = editingRecord.observedEnd,
+               selectedDate == Calendar.current.startOfDay(for: editingRecord.date), endTime == end { return end }
             var end = combine(date: selectedDate, time: endTime)
             if end < startDateTime {
                 end = Calendar.current.date(byAdding: .day, value: 1, to: end) ?? end

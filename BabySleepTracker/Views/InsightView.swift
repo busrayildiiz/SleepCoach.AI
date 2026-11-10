@@ -33,6 +33,17 @@ struct InsightsView: View {
                 VStack(spacing: 12) {
                     headerSection
                     tabPicker
+                    if let snapshot = orchestrator.snapshot {
+                        Text("Sleep Day: " + TimeFormat.minutes(snapshot.todayTotalMinutes)
+                             + (snapshot.sleepDayIsProvisional ? " · provisional" : " · finalized")
+                             + " | Rolling 24h: " + TimeFormat.minutes(snapshot.rolling24hMinutes)
+                             + (snapshot.rolling24hIsProvisional ? " · provisional" : ""))
+                            .font(.caption)
+                        if !snapshot.subtotalsAreReliable {
+                            Text("Overlapping records make daytime, night, or Sleep Day subtotals unreliable. Review the original records.")
+                                .font(.caption).foregroundStyle(.orange)
+                        }
+                    }
 
                     if selectedTab == .overview {
                         coachHeroCard
@@ -778,7 +789,8 @@ struct InsightsView: View {
         guard let data = UserDefaults.standard.data(forKey: "sleepRecords"),
               let decoded = try? JSONDecoder().decode([SleepRecord].self, from: data)
         else { return [] }
-        return decoded.filter { Calendar.current.isDateInToday($0.date) }
+        let now = orchestrator.snapshot?.generatedAt ?? Date()
+        return SleepAccounting(records: decoded, now: now, calendar: .current).records(on: now)
     }
 
     private func loadWakeRecordsForBreakdown() -> [DailyWakeRecord] {
@@ -922,18 +934,17 @@ struct InsightsView: View {
 
         let profile = DefaultAgeBasedSleepProfileProvider().profile(forAgeMonths: snapshot.ageMonths)
         let calendar = Calendar.current
-        let now = Date()
+        let now = snapshot.generatedAt
         let today = calendar.startOfDay(for: now)
 
         let records = loadTodayRecordsForBreakdown()
-        let breaks = records.filter { $0.kind == .break }
         let dayNaps = records.filter { $0.kind == .dayNap && !$0.isOngoing }.sorted { $0.date < $1.date }
 
         guard dayNaps.count >= profile.expectedNapCount.lowerBound,
               let actualLastNap = dayNaps.last
         else { return nil }
 
-        let actualLastNapEnd = actualLastNap.date.addingMinutes(actualLastNap.duration)
+        let actualLastNapEnd = actualLastNap.observedEnd ?? actualLastNap.date
 
         let typicalWakeHour = UserDefaults.standard.object(forKey: "typicalWakeHour") as? Double ?? 7.0
         let typicalWakeMinute = UserDefaults.standard.object(forKey: "typicalWakeMinute") as? Double ?? 0.0
@@ -962,7 +973,7 @@ struct InsightsView: View {
         let napTimingDelta = Int(actualLastNapEnd.timeIntervalSince(expectedLastNapEndAdjusted) / 60)
 
         // Faktör 3: Gündüz uyku açığı telafisi — OvertiredCalculator.bedtimeWindow ile birebir aynı formül
-        let totalDaytime = dayNaps.reduce(0) { $0 + $1.totalMinutes(breaks: breaks) }
+        let totalDaytime = SleepAccounting.netMinutes(records: records, now: now, kind: .dayNap)
         let daytimeDeficit = max(0, profile.daytimeSleepRange.lowerBound - totalDaytime)
         let adjustment = daytimeDeficit / 3
         let deficitDelta = -adjustment

@@ -13,6 +13,7 @@ struct HistoryView: View {
     }
 
     @State private var records: [SleepRecord] = []
+    @State private var calculationDate = Date()
     @State private var selectedRange: HistoryRange = .day
     @State private var referenceDate: Date = Date()
     @State private var selectedDate: Date = Date()
@@ -56,7 +57,7 @@ struct HistoryView: View {
     // MARK: - Selected day data
 
     private var selectedDayRecords: [SleepRecord] {
-        records.filter { calendar.isDate($0.date, inSameDayAs: selectedDate) }
+        SleepAccounting(records: records, now: calculationDate, calendar: calendar).records(on: selectedDate)
     }
 
     private var selectedDayNaps: [SleepRecord] {
@@ -88,7 +89,7 @@ struct HistoryView: View {
 
         private var timelineRecords: [SleepRecord] {
             records.filter { record in
-                let end = record.date.addingTimeInterval(TimeInterval(record.effectiveDuration * 60))
+                let end = record.observedEnd ?? calculationDate
                 return end > timelineWindowStart && record.date < timelineWindowEnd
             }
         }
@@ -98,15 +99,16 @@ struct HistoryView: View {
         private var timelineBreakSegments: [SleepRecord] { timelineRecords.filter { $0.kind == .break } }
 
         private var timelineTotalSleepMinutes: Int {
-            let breaks = timelineRecords.filter { $0.kind == .break }
-            return timelineRecords.filter { $0.kind != .break }.reduce(0) { $0 + $1.totalMinutes(breaks: breaks) }
+            SleepAccounting.netMinutes(records: records, now: calculationDate,
+                window: DateInterval(start: timelineWindowStart, end: timelineWindowEnd))
         }
 
         private var timelineNapCount: Int { timelineNapSegments.count }
 
         private var timelineLongestStretchMinutes: Int {
-            let breaks = timelineRecords.filter { $0.kind == .break }
-            return timelineRecords.filter { $0.kind != .break }.map { $0.totalMinutes(breaks: breaks) }.max() ?? 0
+            Int((SleepAccounting.netIntervals(records: records, now: calculationDate,
+                window: DateInterval(start: timelineWindowStart, end: timelineWindowEnd))
+                .map(\.duration).max() ?? 0) / 60)
         }
 
         private var timelineDateLabel: String {
@@ -230,7 +232,7 @@ struct HistoryView: View {
                 }
 
                 HStack(spacing: 0) {
-                    timelineStat(icon: "sparkles", iconColor: HistoryColor.purple, label: "Total sleep", value: TimeFormat.minutes(timelineTotalSleepMinutes), valueColor: HistoryColor.purple)
+                    timelineStat(icon: "sparkles", iconColor: HistoryColor.purple, label: "Window sleep", value: TimeFormat.minutes(timelineTotalSleepMinutes) + (timelineRecords.contains { $0.kind != .break && ($0.isOngoing || $0.observedEnd == nil) } ? " · provisional" : ""), valueColor: HistoryColor.purple)
                     Divider().frame(height: 30)
                     timelineStat(icon: nil, iconColor: HistoryColor.green, label: "Naps", value: "\(timelineNapCount)", valueColor: HistoryColor.green)
                     Divider().frame(height: 30)
@@ -279,7 +281,7 @@ struct HistoryView: View {
         /// Ongoing kayıt için "canlı bitiş" — bugünse Date(), değilse kayıtlı effectiveDuration
         private func liveEnd(for record: SleepRecord, now: Date) -> Date {
             guard record.isOngoing else {
-                return record.date.addingTimeInterval(TimeInterval(record.duration * 60))
+                return record.observedEnd ?? record.date
             }
             return min(now, timelineWindowEnd)
         }
@@ -382,7 +384,7 @@ struct HistoryView: View {
 
     private var yesterdayNetSleep: Int {
         guard let yesterday = calendar.date(byAdding: .day, value: -1, to: selectedDate) else { return 0 }
-        let recs = records.filter { calendar.isDate($0.date, inSameDayAs: yesterday) }
+        let recs = SleepAccounting(records: records, now: calculationDate, calendar: calendar).records(on: yesterday)
         return totalMinutes(for: recs)
     }
 
@@ -402,7 +404,7 @@ struct HistoryView: View {
         dayFormatter.locale = Locale(identifier: "en_US")
         dayFormatter.dateFormat = "EEE"
         return weekDays.map { day in
-            let recs = records.filter { calendar.isDate($0.date, inSameDayAs: day) }
+            let recs = SleepAccounting(records: records, now: calculationDate, calendar: calendar).records(on: day)
             return DailySleep(
                 date: day,
                 label: dayFormatter.string(from: day),
@@ -411,7 +413,12 @@ struct HistoryView: View {
         }
     }
 
-    private var weekTotal: Int { weekChartData.map { $0.minutes }.reduce(0, +) }
+    private var weekTotal: Int {
+        let ids = Set(records.filter { record in
+            record.kind != .break && weekDays.contains { calendar.isDate(record.date, inSameDayAs: $0) }
+        }.map(\.id))
+        return SleepAccounting.netMinutes(records: records, now: calculationDate, sleepIDs: ids)
+    }
 
     private var chartMax: Int {
         let maxVal = weekChartData.map { $0.minutes }.max() ?? 60
@@ -421,9 +428,9 @@ struct HistoryView: View {
     // MARK: - Helpers
 
     private func totalMinutes(for items: [SleepRecord]) -> Int {
-        let naps = items.filter { $0.kind != .break }
-        let breaks = items.filter { $0.kind == .break }
-        return naps.reduce(0) { $0 + $1.totalMinutes(breaks: breaks) }
+        let sleeps = items.filter { $0.kind != .break }
+        let ids = Set(sleeps.map(\.id))
+        return SleepAccounting.netMinutes(records: records, now: calculationDate, sleepIDs: ids)
     }
 
     private func hasRecords(on day: Date) -> Bool {
@@ -438,9 +445,11 @@ struct HistoryView: View {
     }
 
     private var dayMessage: String {
-        if selectedDayNetSleep == 0 { return "No sleep recorded for this day." }
-        if selectedDayNetSleep >= 60 * 2 { return "Great nap day! \(babyName) was happy and rested well." }
-        return "Short sleep day. Consider adding more nap time."
+        let summary = SleepAccounting(records: records, now: calculationDate, calendar: calendar).sleepDay(on: selectedDate)
+        if !summary.subtotalsAreReliable { return "Overlapping records make Sleep Day subtotals unreliable. Review the original records." }
+        return summary.isProvisional
+            ? "Sleep Day total is provisional until its recorded night sleep is completed."
+            : "Sleep Day total includes naps and the night sleep starting on this day."
     }
 
     // MARK: - Body
@@ -491,7 +500,8 @@ struct HistoryView: View {
             }
             .background(HistoryColor.background)
             .navigationBarHidden(true)
-            .onAppear { loadRecords() }
+            .onAppear { calculationDate = Date(); loadRecords() }
+            .onReceive(nowTimer) { calculationDate = $0 }
             .onReceive(NotificationCenter.default.publisher(for: .sleepRecordsDidChange)) { _ in
                 loadRecords()
             }
@@ -729,7 +739,7 @@ struct HistoryView: View {
                 icon: "moon.fill",
                 iconColor: .indigo,
                 iconBg: Color.indigo.opacity(0.12),
-                label: "Net Sleep",
+                label: "Sleep Day",
                 value: selectedDayNetSleep > 0 ? TimeFormat.minutes(selectedDayNetSleep) : "–"
             )
             Divider().frame(height: 44)

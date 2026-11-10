@@ -49,7 +49,7 @@ struct DayDetailView: View {
         return todayWake.wakeTime
     }
 
-    private var isToday: Bool { cal.isDateInToday(day) }
+    private var isToday: Bool { cal.isDate(day, inSameDayAs: now) }
 
     // MARK: - Body
 
@@ -57,6 +57,9 @@ struct DayDetailView: View {
         NavigationStack {
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 12) {
+                    let summary = SleepAccounting(records: records, now: now, calendar: cal).sleepDay(on: day)
+                    Text("Sleep Day: " + TimeFormat.minutes(summary.totalMinutes) + (!summary.subtotalsAreReliable ? " · unreliable" : (summary.isProvisional ? " · provisional" : " · finalized")))
+                        .font(.subheadline)
                     allCards
                 }
                 .padding(.horizontal, 16)

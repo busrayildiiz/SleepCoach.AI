@@ -30,10 +30,11 @@ struct BedtimeWindow {
 
 final class OvertiredCalculator {
 
-    private let calendar = Calendar.current
+    private let calendar: Calendar
     private let profileProvider: AgeBasedSleepProfileProviding
 
-    init(profileProvider: AgeBasedSleepProfileProviding = DefaultAgeBasedSleepProfileProvider()) {
+    init(profileProvider: AgeBasedSleepProfileProviding = DefaultAgeBasedSleepProfileProvider(), calendar: Calendar = .current) {
+        self.calendar = calendar
         self.profileProvider = profileProvider
     }
 
@@ -207,6 +208,13 @@ final class OvertiredCalculator {
         } else {
             return .onTrack
         }
+    }
+
+    func daytimeSleepStatus(totalMinutes: Int, ageMonths: Int) -> DailySleepStatus {
+        let range = profileProvider.profile(forAgeMonths: ageMonths).daytimeSleepRange
+        if totalMinutes < range.lowerBound { return .below(deficitMinutes: range.lowerBound - totalMinutes) }
+        if totalMinutes > range.upperBound { return .above(excessMinutes: totalMinutes - range.upperBound) }
+        return .onTrack
     }
 
     // MARK: - Private Helpers

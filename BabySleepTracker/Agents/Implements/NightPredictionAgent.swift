@@ -18,6 +18,7 @@ struct NightPredictionAgent {
     let daytimeSleepStatus:       DailySleepStatus
     let confidence:               Int
     let reasoning:                [String]
+    var daytimeSubtotalIsReliable: Bool = true
 }
 
 // MARK: - Protocol
@@ -43,11 +44,11 @@ final class DefaultNightPredictionAgent: NightPredictionAgentProtocol {
 
     init(
         profileProvider:     AgeBasedSleepProfileProviding = DefaultAgeBasedSleepProfileProvider(),
-        overtiredCalculator: OvertiredCalculator = OvertiredCalculator(),
+        overtiredCalculator: OvertiredCalculator? = nil,
         calendar:            Calendar = .current
     ) {
         self.profileProvider     = profileProvider
-        self.overtiredCalculator = overtiredCalculator
+        self.overtiredCalculator = overtiredCalculator ?? OvertiredCalculator(profileProvider: profileProvider, calendar: calendar)
         self.calendar            = calendar
     }
 
@@ -63,7 +64,6 @@ final class DefaultNightPredictionAgent: NightPredictionAgentProtocol {
     ) -> NightPredictionAgent {
 
         let profile = profileProvider.profile(forAgeMonths: ageMonths)
-        let breaks  = todayRecords.filter { $0.kind == .break }
         let dayNaps = todayRecords
             .filter { $0.kind == .dayNap }
             .sorted { $0.date < $1.date }
@@ -74,21 +74,19 @@ final class DefaultNightPredictionAgent: NightPredictionAgentProtocol {
         // transition days or short-nap days and falls back to a generic
         // typical-bedtime guess instead — which is strictly worse than
         // using what we actually observed.
-        let completedNapCount = dayNaps.filter { !$0.isOngoing }.count
+        let completedNapCount = dayNaps.filter { $0.observedEnd.map { $0 <= now } == true }.count
 
         let lastNapEnd: Date?
         if completedNapCount >= 1 {
-            lastNapEnd = dayNaps.last(where: { !$0.isOngoing }).map { nap in
-                calendar.date(byAdding: .minute, value: nap.duration, to: nap.date) ?? nap.date
+            lastNapEnd = dayNaps.last(where: { $0.observedEnd.map { $0 <= now } == true }).map { nap in
+                nap.observedEnd ?? nap.date
             }
         } else {
             lastNapEnd = nil
         }
 
         // Toplam gündüz uykusu
-        let totalDaytime = dayNaps
-            .map { $0.totalMinutes(breaks: breaks) }
-            .reduce(0, +)
+        let totalDaytime = SleepAccounting.netMinutes(records: todayRecords, now: now, kind: .dayNap)
 
         // Bedtime window hesabı
         let bedtimeWindow: BedtimeWindow
@@ -110,7 +108,7 @@ final class DefaultNightPredictionAgent: NightPredictionAgentProtocol {
 
         let expectedNight = expectedNightSleep(profile: profile, pattern: pattern)
 
-        let sleepStatus = overtiredCalculator.dailySleepStatus(
+        let sleepStatus = overtiredCalculator.daytimeSleepStatus(
             totalMinutes: totalDaytime,
             ageMonths:    ageMonths
         )
@@ -139,7 +137,8 @@ final class DefaultNightPredictionAgent: NightPredictionAgentProtocol {
             lastNapCutoffTime:         cutoff,
             daytimeSleepStatus:        sleepStatus,
             confidence:                confidence,
-            reasoning:                 reasoning
+            reasoning:                 reasoning,
+            daytimeSubtotalIsReliable: !SleepAccounting(records: todayRecords, now: now, calendar: calendar).conflicts(affecting: dayNaps).classification
         )
     }
 

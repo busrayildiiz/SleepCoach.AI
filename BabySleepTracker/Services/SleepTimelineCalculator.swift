@@ -21,6 +21,7 @@ struct SleepTimelineCalculator {
     let defaultWakeTime: Date
     let now: Date
     let profileProvider: AgeBasedSleepProfileProviding
+    var calendar: Calendar = .current
 
     func calculate() -> [SleepTimelineItem] {
         let naps = records.filter { $0.kind == .dayNap }.sorted { $0.date < $1.date }
@@ -31,10 +32,10 @@ struct SleepTimelineCalculator {
 
         for (index, nap) in naps.enumerated() {
             guard items.count < 4 else { return items }
-            let end = nap.date.addingTimeInterval(TimeInterval(nap.duration * 60))
-            let active = nap.isOngoing || (nap.date <= now && end > now)
+            let end = nap.observedEnd ?? now
+            let active = nap.date <= now && (nap.isOngoing || end > now)
             let state: SleepTimelineItem.VisualState = active ? .active : (end <= now ? .completed : .upcoming)
-            items.append(SleepTimelineItem(kind: .nap(index: index + 1), time: nap.date, durationMinutes: nap.isOngoing ? nil : nap.totalMinutes(breaks: records.filter { $0.kind == .break }), isOngoing: nap.isOngoing, visualState: state, isActive: active, isFuture: nap.date > now, awakeBeforeMinutes: max(0, Int(nap.date.timeIntervalSince(anchorEnd) / 60))))
+            items.append(SleepTimelineItem(kind: .nap(index: index + 1), time: nap.date, durationMinutes: nap.isOngoing ? nil : nap.totalMinutes(breaks: records.filter { $0.kind == .break }, at: now), isOngoing: nap.isOngoing, visualState: state, isActive: active, isFuture: nap.date > now, awakeBeforeMinutes: max(0, Int(nap.date.timeIntervalSince(anchorEnd) / 60))))
             anchorEnd = end
         }
 
@@ -88,8 +89,8 @@ struct SleepTimelineCalculator {
     private func bedtime(after anchorEnd: Date, expectedNapCount: Int) -> Date {
         if let value = snapshot?.night.optimalBedtimeStart { return value }
         let proposed = anchorEnd.addingTimeInterval(TimeInterval(wakeWindow(index: expectedNapCount + 1) * 60))
-        let hour = Calendar.current.component(.hour, from: proposed)
+        let hour = calendar.component(.hour, from: proposed)
         guard hour < profile.bedtimeHourRange.lowerBound || hour > profile.bedtimeHourRange.upperBound else { return proposed }
-        return Calendar.current.date(bySettingHour: min(max(hour, profile.bedtimeHourRange.lowerBound), profile.bedtimeHourRange.upperBound), minute: Calendar.current.component(.minute, from: proposed), second: 0, of: proposed) ?? proposed
+        return calendar.date(bySettingHour: min(max(hour, profile.bedtimeHourRange.lowerBound), profile.bedtimeHourRange.upperBound), minute: calendar.component(.minute, from: proposed), second: 0, of: proposed) ?? proposed
     }
 }

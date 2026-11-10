@@ -87,25 +87,25 @@ final class SleepRecordTests: XCTestCase {
 
     // MARK: - totalMinutes
 
-    func testTotalMinutesSubtractsBreaksBelongingToTheSleepRecord() {
+    func testTotalMinutesSubtractsUnionOfOverlappingParentBreaks() {
         let recordID = UUID()
 
         let sleep = SleepRecord(
             id: recordID,
-            date: Date(),
+            date: Date(timeIntervalSince1970: 1_000),
             duration: 120,
             kind: .dayNap
         )
 
         let break1 = SleepRecord(
-            date: Date(),
+            date: Date(timeIntervalSince1970: 1_000),
             duration: 10,
             kind: .break,
             parentNapID: recordID
         )
 
         let break2 = SleepRecord(
-            date: Date(),
+            date: Date(timeIntervalSince1970: 1_000),
             duration: 15,
             kind: .break,
             parentNapID: recordID
@@ -113,7 +113,7 @@ final class SleepRecordTests: XCTestCase {
 
         let result = sleep.totalMinutes(breaks: [break1, break2])
 
-        XCTAssertEqual(result, 95)
+        XCTAssertEqual(result, 105)
     }
 
     func testTotalMinutesIgnoresBreaksBelongingToAnotherSleepRecord() {
@@ -122,20 +122,20 @@ final class SleepRecordTests: XCTestCase {
 
         let sleep = SleepRecord(
             id: recordID,
-            date: Date(),
+            date: Date(timeIntervalSince1970: 1_000),
             duration: 120,
             kind: .dayNap
         )
 
         let ownBreak = SleepRecord(
-            date: Date(),
+            date: Date(timeIntervalSince1970: 1_000),
             duration: 20,
             kind: .break,
             parentNapID: recordID
         )
 
         let unrelatedBreak = SleepRecord(
-            date: Date(),
+            date: Date(timeIntervalSince1970: 1_000),
             duration: 50,
             kind: .break,
             parentNapID: otherRecordID
@@ -153,20 +153,20 @@ final class SleepRecordTests: XCTestCase {
 
         let sleep = SleepRecord(
             id: recordID,
-            date: Date(),
+            date: Date(timeIntervalSince1970: 1_000),
             duration: 120,
             kind: .dayNap
         )
 
         let anotherNap = SleepRecord(
-            date: Date(),
+            date: Date(timeIntervalSince1970: 1_000),
             duration: 40,
             kind: .dayNap,
             parentNapID: recordID
         )
 
         let nightSleep = SleepRecord(
-            date: Date(),
+            date: Date(timeIntervalSince1970: 1_000),
             duration: 60,
             kind: .nightSleep,
             parentNapID: recordID
@@ -184,13 +184,13 @@ final class SleepRecordTests: XCTestCase {
 
         let sleep = SleepRecord(
             id: recordID,
-            date: Date(),
+            date: Date(timeIntervalSince1970: 1_000),
             duration: 20,
             kind: .dayNap
         )
 
         let breakRecord = SleepRecord(
-            date: Date(),
+            date: Date(timeIntervalSince1970: 1_000),
             duration: 30,
             kind: .break,
             parentNapID: recordID

@@ -34,9 +34,8 @@ struct SleepListSheetRouter: View {
             )
 
         case .dayDetail(let selected):
-            let dayRecords = records
-                .filter { Calendar.current.isDate($0.date, inSameDayAs: selected.day) }
-                .sorted { $0.date < $1.date }
+            let dayRecords = SleepAccounting(records: records, now: Date(), calendar: .current)
+                .records(on: selected.day).sorted { $0.date < $1.date }
             DayDetailView(
                 day: selected.day,
                 records: dayRecords,

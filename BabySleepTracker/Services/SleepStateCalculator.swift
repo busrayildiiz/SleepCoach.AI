@@ -23,7 +23,7 @@ struct SleepStateCalculator {
     let recommendedWakeWindowMinutes: Int
 
     func calculate() -> SleepStateCalculation {
-        let active = normalizedActiveSleepRecord(activeRecord)
+        let active = activeRecord
         let inferred = inferredNightSleepRecord(activeSleepRecord: active)
         return SleepStateCalculation(activeSleepRecord: active, inferredNightSleepStart: inferredNightSleepStart, inferredNightSleepRecord: inferred)
     }
@@ -53,19 +53,9 @@ struct SleepStateCalculator {
 
     private var activeRecord: SleepRecord? {
         records
-            .filter { $0.kind != .break && $0.isOngoing }
+            .filter { $0.kind != .break && $0.isOngoing && $0.date <= now }
             .sorted { $0.date > $1.date }
             .first
-    }
-
-    private func normalizedActiveSleepRecord(_ record: SleepRecord?) -> SleepRecord? {
-        guard let record else { return nil }
-        guard record.kind == .nightSleep,
-              record.date > now,
-              hasPassedTypicalWakeTime == false else { return record }
-        guard calendar.isDate(record.date, inSameDayAs: now) else { return record }
-        guard let adjustedDate = calendar.date(byAdding: .day, value: -1, to: record.date) else { return record }
-        return SleepRecord(id: record.id, date: adjustedDate, duration: record.duration, kind: record.kind, parentNapID: record.parentNapID, isOngoing: record.isOngoing, createdAt: record.createdAt)
     }
 
     private func inferredNightSleepRecord(activeSleepRecord: SleepRecord?) -> SleepRecord? {

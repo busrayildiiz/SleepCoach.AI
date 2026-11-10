@@ -60,10 +60,11 @@ final class SleepStateCalculatorTests: XCTestCase {
         XCTAssertNil(calculator(records: [], now: wake).calculate().inferredNightSleepRecord)
     }
 
-    func testFutureTodayNightRecordBeforeWakeIsNormalizedToPreviousDay() {
+    func testFutureNightIsNotMovedToPreviousDayOrTreatedAsActive() {
         let futureNight = record(hour: 18, kind: .nightSleep, ongoing: true)
         let result = calculator(records: [futureNight], hour: 6).calculate()
-        XCTAssertEqual(result.activeSleepRecord?.date, calendar.date(byAdding: .day, value: -1, to: futureNight.date))
+        XCTAssertNil(result.activeSleepRecord)
+        XCTAssertEqual(futureNight.date, record(hour: 18, kind: .nightSleep, ongoing: true).date)
     }
 
     func testExpectedWakeUsesTypicalWakeFallbackWhenThereIsNoSleep() {

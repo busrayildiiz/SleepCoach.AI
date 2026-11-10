@@ -68,15 +68,16 @@ final class SleepWakeTimeWorkflowTests: XCTestCase {
         XCTAssertEqual(result.updatedSleepRecords.map(\.id), [nap.id, completed.id, future.id])
     }
 
-    func testClampsDurationToOneAnd720Minutes() throws {
+    func testPreservesConfirmedEndBeyondTwelveHours() throws {
         let short = record(at: now.addingTimeInterval(-30), kind: .nightSleep, ongoing: true)
         XCTAssertEqual(workflow(selected: now, sleepRecords: [short]).execute().closedNightRecord?.duration, 1)
 
         let long = record(at: now.addingTimeInterval(-13 * 3600), kind: .nightSleep, ongoing: true)
         let result = workflow(selected: now, sleepRecords: [long]).execute()
-        XCTAssertEqual(result.closedNightRecord?.duration, 720)
+        XCTAssertEqual(result.closedNightRecord?.duration, 780)
+        XCTAssertEqual(result.closedNightRecord?.observedEnd, now)
         let data = try XCTUnwrap(defaults.data(forKey: "sleepRecords"))
-        XCTAssertEqual(try JSONDecoder().decode([SleepRecord].self, from: data).first?.duration, 720)
+        XCTAssertEqual(try JSONDecoder().decode([SleepRecord].self, from: data).first?.duration, 780)
     }
 
     private func workflow(selected: Date, wakeRecords: [DailyWakeRecord] = [], sleepRecords: [SleepRecord] = []) -> SleepWakeTimeWorkflow {
