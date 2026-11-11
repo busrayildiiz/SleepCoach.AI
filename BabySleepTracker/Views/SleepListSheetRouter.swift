@@ -5,10 +5,9 @@ struct SleepListSheetRouter: View {
     let records: [SleepRecord]
     let todayWakeTime: Date?
     let defaultWakeTime: Date
-    let onRecordUpsert: (SleepRecord) -> Void
-    let onBreakSaved: (SleepRecord) -> Void
+    let onRecordUpsert: (SleepRecord) -> Bool
+    let onBreakSaved: (SleepRecord) -> Bool
     let onDeleteRecords: (Set<UUID>) -> Void
-    let onSelectSheet: (SleepListView.ActiveSheet) -> Void
     let onWakeTimeSave: (Date) -> Void
 
     var body: some View {
@@ -21,17 +20,14 @@ struct SleepListSheetRouter: View {
                 onSave: onRecordUpsert
             )
 
-        case .addBreak(let napID, let date, let napDuration):
-            let existing = records.filter {
-                $0.parentNapID == napID && $0.kind == .break
+        case .addBreak(let parentID):
+            if let parent = records.first(where: { $0.id == parentID && $0.kind != .break }) {
+                AddBreakView(parent: parent,
+                             existingBreaks: records.filter { $0.parentNapID == parent.id && $0.kind == .break },
+                             onSave: onBreakSaved)
+            } else {
+                Text("This sleep session is no longer available.")
             }
-            AddBreakView(
-                defaultDate: date,
-                targetNapID: napID,
-                napDuration: napDuration,
-                existingBreaks: existing,
-                onSave: onBreakSaved
-            )
 
         case .dayDetail(let selected):
             let dayRecords = SleepAccounting(records: records, now: Date(), calendar: .current)
@@ -40,12 +36,7 @@ struct SleepListSheetRouter: View {
                 day: selected.day,
                 records: dayRecords,
                 onDelete: onDeleteRecords,
-                onAddSleep: { day in
-                    onSelectSheet(.addSleep(editing: nil, defaultDate: day))
-                },
-                onEditNap: { nap in
-                    onSelectSheet(.addSleep(editing: nap, defaultDate: nap.date))
-                },
+                onRecordUpsert: onRecordUpsert,
                 onBreakSaved: onBreakSaved
             )
 

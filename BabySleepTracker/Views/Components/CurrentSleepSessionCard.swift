@@ -5,6 +5,7 @@ struct CurrentSleepSessionCard: View {
     let expectedWakeTime: Date
     let nextSleepTime: Date?
     let isEstimated: Bool
+    var onAddBreak: (() -> Void)? = nil
 
     @State private var pulse = false
     @State private var starOpacity1: Double = 0.3
@@ -126,6 +127,16 @@ struct CurrentSleepSessionCard: View {
                     .background(t.divider)
                     .padding(.horizontal, 16)
                 bottomRow(t)
+                if let onAddBreak, ongoingNight != nil, !isEstimated {
+                    Button(action: onAddBreak) {
+                        Label("Add Awake Break", systemImage: "plus")
+                            .font(.subheadline.weight(.semibold))
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                    }
+                    .foregroundStyle(t.accent)
+                    .accessibilityIdentifier("sleep.current.addBreak")
+                }
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
