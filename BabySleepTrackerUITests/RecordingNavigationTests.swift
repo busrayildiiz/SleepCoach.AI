@@ -24,18 +24,27 @@ final class RecordingNavigationTests: XCTestCase {
         XCTAssertTrue(element.isHittable)
     }
 
+    private func waitForDismissal(of navigationBar: XCUIElement,
+                                  file: StaticString = #filePath, line: UInt = #line) {
+        let disappeared = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"), object: navigationBar
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [disappeared], timeout: 5), .completed,
+                       "Recording sheet did not close within 5 seconds.", file: file, line: line)
+    }
+
     func testAddNapCancelThenSaveDismissesAndPersists() {
         let app = launch()
         app.buttons["recording.addSleep"].tap()
         XCTAssertTrue(app.navigationBars["Add Nap"].waitForExistence(timeout: 5))
         app.buttons["recording.cancel"].tap()
-        XCTAssertFalse(app.navigationBars["Add Nap"].exists)
+        waitForDismissal(of: app.navigationBars["Add Nap"])
         app.buttons["recording.addSleep"].tap()
         let save = app.buttons["recording.save"]
         reveal(save, in: app)
         save.tap()
+        waitForDismissal(of: app.navigationBars["Add Nap"])
         XCTAssertTrue(app.buttons["recording.addSleep"].waitForExistence(timeout: 5))
-        XCTAssertFalse(app.navigationBars["Add Nap"].exists)
         let day = app.buttons["sleep.dayRecords.0"]
         reveal(day, in: app)
         day.tap()
@@ -57,11 +66,13 @@ final class RecordingNavigationTests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Add Awake Break"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.navigationBars["Edit Nap"].exists)
         app.buttons["recording.cancel"].tap()
+        waitForDismissal(of: app.navigationBars["Add Awake Break"])
         XCTAssertTrue(addBreak.waitForExistence(timeout: 5))
         addBreak.tap()
         let save = app.buttons["recording.save"]
         reveal(save, in: app)
         save.tap()
+        waitForDismissal(of: app.navigationBars["Add Awake Break"])
         let netSleep = app.staticTexts["sleep.netSleep.\(parentID)"]
         XCTAssertTrue(netSleep.waitForExistence(timeout: 5))
         XCTAssertEqual(netSleep.label, "55m")
