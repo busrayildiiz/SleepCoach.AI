@@ -53,19 +53,8 @@ struct ContentView: View {
         }
     }
 
-    private func saveRecordFromTabBar(_ newRecord: SleepRecord) {
-        var savedRecords: [SleepRecord] = []
-        if let data = UserDefaults.standard.data(forKey: "sleepRecords"),
-           let decoded = try? JSONDecoder().decode([SleepRecord].self, from: data) {
-            savedRecords = decoded
-        }
-
-        savedRecords.append(newRecord)
-
-        if let encoded = try? JSONEncoder().encode(savedRecords) {
-            UserDefaults.standard.set(encoded, forKey: "sleepRecords")
-            NotificationCenter.default.post(name: .sleepRecordsDidChange, object: nil)
-        }
+    private func saveRecordFromTabBar(_ newRecord: SleepRecord) -> Bool {
+        SleepRecordPersistence().saveRecording(newRecord)
     }
 
     // MARK: - Custom Tab Bar
@@ -97,6 +86,8 @@ struct ContentView: View {
             }
             .frame(maxWidth: .infinity)
             .offset(y: -14)
+            .accessibilityLabel("Add Sleep")
+            .accessibilityIdentifier("recording.addSleep")
 
             tabItem(icon: "brain.head.profile", label: "AI Coach", tab: .insights)
             tabItem(icon: "gearshape", label: "Settings", tab: .settings)

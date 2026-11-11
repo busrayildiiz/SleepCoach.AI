@@ -37,7 +37,7 @@ struct SleepListView: View {
 
     enum ActiveSheet: Identifiable {
         case addSleep(editing: SleepRecord?, defaultDate: Date)
-        case addBreak(napID: UUID, date: Date, napDuration: Int)
+        case addBreak(parentID: UUID)
         case dayDetail(SelectedDay)
         case wakeTime
 
@@ -45,7 +45,7 @@ struct SleepListView: View {
             switch self {
             case .addSleep(let editing, let date):
                 return "addSleep-\(editing?.id.uuidString ?? "new")-\(date.timeIntervalSince1970)"
-            case .addBreak(let id, _, _):
+            case .addBreak(let id):
                 return "addBreak-\(id)"
             case .dayDetail(let day):
                 return "dayDetail-\(day.id)"
@@ -112,13 +112,10 @@ struct SleepListView: View {
 
     // MARK: - Persistence
 
-    private func upsert(_ record: SleepRecord) {
-        if let index = records.firstIndex(where: { $0.id == record.id }) {
-            records[index] = record
-        } else {
-            records.append(record)
-        }
-        saveRecords()
+    private func upsert(_ record: SleepRecord) -> Bool {
+        guard sleepRecordPersistence.saveRecording(record) else { return false }
+        loadRecords()
+        return true
     }
     private func saveRecords() {
         sleepRecordPersistence.save(records)
@@ -168,7 +165,7 @@ struct SleepListView: View {
     }
 
     private var todayRecords: [SleepRecord] {
-        records.filter { Calendar.current.isDateInToday($0.date) }
+        SleepAccounting(records: records, now: Date(), calendar: .current).records(on: Date())
     }
 
     private var todaySleeps: [SleepRecord] {
@@ -211,7 +208,7 @@ struct SleepListView: View {
     }
 
     private var overviewMetrics: SleepOverviewMetrics {
-        SleepOverviewCalculator(records: records).calculate()
+        SleepOverviewCalculator(records: records, now: Date(), calendar: .current, totalSleepReference: orchestrator.snapshot.map { DefaultAgeBasedSleepProfileProvider().profile(forAgeMonths: $0.ageMonths).totalSleep24hRange }).calculate()
     }
 
     private var todayTotal: Int { overviewMetrics.todayTotal }
@@ -383,9 +380,8 @@ struct SleepListView: View {
     }
 
     private func totalMinutes(for items: [SleepRecord]) -> Int {
-        let naps = items.filter { $0.kind != .break }
-        let breaks = items.filter { $0.kind == .break }
-        return naps.reduce(0) { $0 + $1.totalMinutes(breaks: breaks) }
+        let ids = Set(items.filter { $0.kind != .break }.map(\.id))
+        return SleepAccounting.netMinutes(records: records, now: Date(), sleepIDs: ids)
     }
 
     private func deleteDay(_ day: Date) {
@@ -441,15 +437,11 @@ struct SleepListView: View {
                 todayWakeTime: todayWakeRecord?.wakeTime,
                 defaultWakeTime: defaultWakeTime,
                 onRecordUpsert: upsert,
-                onBreakSaved: { newBreak in
-                    records.append(newBreak)
-                    saveRecords()
-                },
+                onBreakSaved: upsert,
                 onDeleteRecords: { ids in
                     records.removeAll { ids.contains($0.id) }
                     saveRecords()
                 },
-                onSelectSheet: { activeSheet = $0 },
                 onWakeTimeSave: saveWakeTime
             )
         }
@@ -635,15 +627,17 @@ struct SleepListView: View {
                         )
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Today’s sleep records")
+                .accessibilityIdentifier("sleep.todayRecords")
             }
 
             HStack(spacing: 10) {
                 summaryCell(
                     icon: "moon.fill",
                     iconColor: Color(red: 0.55, green: 0.48, blue: 0.96),
-                    title: "Sleep",
+                    title: !overviewMetrics.subtotalsAreReliable ? "Sleep Day · unreliable" : (overviewMetrics.sleepDayIsProvisional ? "Sleep Day · provisional" : "Sleep Day"),
                     value: todayTotal > 0 ? "\(todayTotal / 60)h \(todayTotal % 60)m" : "0m",
-                    badge: goalBadgeText,
+                    badge: "24h: \(TimeFormat.minutes(overviewMetrics.rolling24hMinutes))" + (overviewMetrics.rolling24hIsProvisional ? " · provisional" : ""),
                     badgeColor: goalBadgeColor
                 )
 
@@ -688,7 +682,7 @@ struct SleepListView: View {
                 .frame(height: 7)
 
                 HStack {
-                    Text("\(Int(todayGoalProgress * 100))% of daily goal")
+                    Text("\(Int(todayGoalProgress * 100))% of 24h minimum reference")
                         .font(.system(size: 10, weight: .medium))
                         .foregroundStyle(Color(.secondaryLabel))
                     Spacer()
@@ -721,6 +715,7 @@ struct SleepListView: View {
                                 premiumDayRow(group: group, rank: index)
                             }
                             .buttonStyle(CardPressButtonStyle())
+                            .accessibilityIdentifier("sleep.dayRecords.\(index)")
                             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                                 Button(role: .destructive) { deleteDay(group.day) } label: {
                                     Label("Delete", systemImage: "trash")
@@ -838,14 +833,14 @@ struct SleepListView: View {
     }
 
     private var goalBadgeText: String {
-        let pct = Int(min(Double(todayTotal) / 840.0 * 100, 100))
+        let pct = Int(todayGoalProgress * 100)
         if pct >= 100 { return "Goal reached ✓" }
         if pct >= 70  { return "\(pct)% of goal" }
         return "\(pct)% of goal"
     }
 
     private var goalBadgeColor: Color {
-        let pct = Int(min(Double(todayTotal) / 840.0 * 100, 100))
+        let pct = Int(todayGoalProgress * 100)
         if pct >= 100 { return Color(red: 0.16, green: 0.68, blue: 0.46) }
         if pct >= 70  { return Color(red: 0.45, green: 0.35, blue: 0.92) }
         return Color(.secondaryLabel)
@@ -946,7 +941,10 @@ struct SleepListView: View {
             ongoingNight: ongoingSleep,
             expectedWakeTime: expectedWake,
             nextSleepTime: nextSleepAfterCurrent,
-            isEstimated: isEstimated
+            isEstimated: isEstimated,
+            onAddBreak: ongoingSleep.map { parent in
+                { activeSheet = .addBreak(parentID: parent.id) }
+            }
         )
     }
 
@@ -1874,9 +1872,9 @@ struct SleepListView: View {
     }
 
     private func premiumDayRow(group: (day: Date, items: [SleepRecord]), rank: Int) -> some View {
-        let total = totalMinutes(for: group.items)
+        let summary = SleepAccounting(records: records, now: Date(), calendar: .current).sleepDay(on: group.day)
+        let total = summary.totalMinutes
         let sessions = group.items.filter { $0.kind != .break }.count
-        let progress = min(Double(total) / 840.0, 1.0)
 
         return HStack(spacing: 14) {
             ZStack {
@@ -1911,31 +1909,22 @@ struct SleepListView: View {
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(Color.sleepMuted)
 
-                GeometryReader { geo in
-                    ZStack(alignment: .leading) {
-                        Capsule()
-                            .fill(dayAccent(for: rank).opacity(0.10))
-                        Capsule()
-                            .fill(dayAccent(for: rank).opacity(0.70))
-                            .frame(width: max(6, geo.size.width * progress))
-                    }
-                }
-                .frame(height: 5)
+
             }
 
             Spacer(minLength: 8)
 
             VStack(alignment: .trailing, spacing: 3) {
-                Text(TimeFormat.minutes(total))
+                Text(TimeFormat.minutes(total) + (!summary.subtotalsAreReliable ? " · unreliable" : (summary.isProvisional ? " · provisional" : "")))
                     .font(.system(size: 15, weight: .bold, design: .rounded))
                     .foregroundStyle(Color.sleepInk)
                     .monospacedDigit()
                     .lineLimit(1)
                     .minimumScaleFactor(0.75)
 
-                Text(dayQualityLabel(total))
+                Text(!summary.subtotalsAreReliable ? "Review records" : (summary.isProvisional ? "Provisional" : "Finalized"))
                     .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(dayQualityColor(total))
+                    .foregroundStyle(Color.sleepMuted)
                     .lineLimit(1)
 
                 Image(systemName: "chevron.right")
@@ -1966,19 +1955,7 @@ struct SleepListView: View {
         return "calendar"
     }
 
-    private func dayQualityLabel(_ minutes: Int) -> String {
-        if minutes >= 840 { return "Goal" }
-        if minutes >= 600 { return "Steady" }
-        if minutes > 0 { return "Light" }
-        return "Empty"
-    }
 
-    private func dayQualityColor(_ minutes: Int) -> Color {
-        if minutes >= 840 { return Color(red: 0.16, green: 0.68, blue: 0.46) }
-        if minutes >= 600 { return Color(red: 0.45, green: 0.35, blue: 0.92) }
-        if minutes > 0 { return Color(red: 1.0, green: 0.68, blue: 0.12) }
-        return Color(.secondaryLabel)
-    }
 }
 
 // MARK: - Decorative Views

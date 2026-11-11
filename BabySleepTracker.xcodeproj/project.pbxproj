@@ -90,6 +90,10 @@
 		FAEF107A2F530D3100E76FD4 /* DailyWakeRecordPersistence.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAEF10792F530D3100E76FD4 /* DailyWakeRecordPersistence.swift */; };
 		FAEF107C2F530D3100E76FD4 /* SleepStateCalculator.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAEF107B2F530D3100E76FD4 /* SleepStateCalculator.swift */; };
 		FAEF107E2F530D3100E76FD4 /* SleepListSheetRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAEF107D2F530D3100E76FD4 /* SleepListSheetRouter.swift */; };
+		AC1000000000000000000002 /* SleepRecordingFlow.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC1000000000000000000001 /* SleepRecordingFlow.swift */; };
+		AC1000000000000000000004 /* RecordingFormComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC1000000000000000000003 /* RecordingFormComponents.swift */; };
+		AC1000000000000000000006 /* SleepRecordingFlowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC1000000000000000000005 /* SleepRecordingFlowTests.swift */; };
+		AC100000000000000000000B /* RecordingNavigationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC100000000000000000000A; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -100,6 +104,7 @@
 			remoteGlobalIDString = FAEF103F2F4E207F00E76FD4;
 			remoteInfo = BabySleepTracker;
 		};
+		AC1000000000000000000015 /* UI Test App Proxy */ = {isa = PBXContainerItemProxy; containerPortal = FAEF10382F4E207F00E76FD4; proxyType = 1; remoteGlobalIDString = FAEF103F2F4E207F00E76FD4; remoteInfo = BabySleepTracker; };
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
@@ -188,6 +193,11 @@
 		FAEF10792F530D3100E76FD4 /* DailyWakeRecordPersistence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DailyWakeRecordPersistence.swift; sourceTree = "<group>"; };
 		FAEF107B2F530D3100E76FD4 /* SleepStateCalculator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepStateCalculator.swift; sourceTree = "<group>"; };
 		FAEF107D2F530D3100E76FD4 /* SleepListSheetRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepListSheetRouter.swift; sourceTree = "<group>"; };
+		AC1000000000000000000001 /* SleepRecordingFlow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepRecordingFlow.swift; sourceTree = "<group>"; };
+		AC1000000000000000000003 /* RecordingFormComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingFormComponents.swift; sourceTree = "<group>"; };
+		AC1000000000000000000005 /* SleepRecordingFlowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepRecordingFlowTests.swift; sourceTree = "<group>"; };
+		AC100000000000000000000A /* RecordingNavigationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingNavigationTests.swift; sourceTree = "<group>"; };
+		AC100000000000000000000C /* BabySleepTrackerUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BabySleepTrackerUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -206,12 +216,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		AC1000000000000000000010 /* UI Test Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
 		FA5488D12FAEB964002BC18B /* BabySleepTrackerTests */ = {
 			isa = PBXGroup;
 			children = (
+				AC1000000000000000000005 /* SleepRecordingFlowTests.swift */,
 				FA294726304667BD00BE2E20 /* SleepWakeTimeWorkflowTests.swift */,
 				FA5488D22FAEB964002BC18B /* BabySleepTrackerTests.swift */,
 				FA5488D92FAEB98D002BC18B /* AddRecorViewModelTests.swift */,
@@ -297,6 +309,7 @@
 		FAEF10372F4E207F00E76FD4 = {
 			isa = PBXGroup;
 			children = (
+				AC100000000000000000000D /* BabySleepTrackerUITests */,
 				FAB4BB002FE204A200702F49 /* APIConfig.xcconfig */,
 				FAEF10422F4E207F00E76FD4 /* BabySleepTracker */,
 				FA5488D12FAEB964002BC18B /* BabySleepTrackerTests */,
@@ -307,6 +320,7 @@
 		FAEF10412F4E207F00E76FD4 /* Products */ = {
 			isa = PBXGroup;
 			children = (
+				AC100000000000000000000C /* BabySleepTrackerUITests.xctest */,
 				FAEF10402F4E207F00E76FD4 /* BabySleepTracker.app */,
 				FA5488D02FAEB964002BC18B /* BabySleepTrackerTests.xctest */,
 			);
@@ -355,6 +369,7 @@
 		FAEF105F2F4E26B100E76FD4 /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				AC1000000000000000000003 /* RecordingFormComponents.swift */,
 				FA9DB0A82FD49ED4000B9211 /* CreateAccountView.swift */,
 				FAB4BAFB2FE11F9700702F49 /* ProfileEditSheet.swift */,
 				FA9DB0A42FD49E91000B9211 /* LandingView.swift */,
@@ -388,6 +403,7 @@
 		FAEF10612F4E26CE00E76FD4 /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				AC1000000000000000000001 /* SleepRecordingFlow.swift */,
 				FA2947243046678A00BE2E20 /* SleepWakeTimeWorkflow.swift */,
 				FAEF10732F530D3100E76FD4 /* SleepTimelineCalculator.swift */,
 				FAEF10752F530D3100E76FD4 /* SleepRecordPersistence.swift */,
@@ -412,6 +428,7 @@
 			path = Utils;
 			sourceTree = "<group>";
 		};
+		AC100000000000000000000D /* BabySleepTrackerUITests */ = {isa = PBXGroup; children = (AC100000000000000000000A,); path = BabySleepTrackerUITests; sourceTree = "<group>"; };
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -453,6 +470,17 @@
 			productReference = FAEF10402F4E207F00E76FD4 /* BabySleepTracker.app */;
 			productType = "com.apple.product-type.application";
 		};
+		AC100000000000000000000E /* BabySleepTrackerUITests */ = {
+            isa = PBXNativeTarget;
+            buildConfigurationList = AC1000000000000000000012;
+            buildPhases = (AC100000000000000000000F, AC1000000000000000000010, AC1000000000000000000011,);
+            buildRules = ();
+            dependencies = (AC1000000000000000000016,);
+            name = BabySleepTrackerUITests;
+            productName = BabySleepTrackerUITests;
+            productReference = AC100000000000000000000C;
+            productType = "com.apple.product-type.bundle.ui-testing";
+        };
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -463,6 +491,7 @@
 				LastSwiftUpdateCheck = 1420;
 				LastUpgradeCheck = 1420;
 				TargetAttributes = {
+                    AC100000000000000000000E = { CreatedOnToolsVersion = 16.4; TestTargetID = FAEF103F2F4E207F00E76FD4; };
 					FA5488CF2FAEB964002BC18B = {
 						CreatedOnToolsVersion = 14.2;
 						TestTargetID = FAEF103F2F4E207F00E76FD4;
@@ -488,6 +517,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
+                AC100000000000000000000E /* BabySleepTrackerUITests */,
 				FAEF103F2F4E207F00E76FD4 /* BabySleepTracker */,
 				FA5488CF2FAEB964002BC18B /* BabySleepTrackerTests */,
 			);
@@ -512,6 +542,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		AC1000000000000000000011 /* UI Test Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -519,6 +550,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AC1000000000000000000006 /* SleepRecordingFlowTests.swift in Sources */,
 				FA04E41D30325A6900EFF932 /* TimeFormatTests.swift in Sources */,
 				FA04E41B303258E800EFF932 /* SegmentKindTests.swift in Sources */,
 				FA04E4133032501500EFF932 /* DayDetailViewModelTests.swift in Sources */,
@@ -554,6 +586,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AC1000000000000000000004 /* RecordingFormComponents.swift in Sources */,
+				AC1000000000000000000002 /* SleepRecordingFlow.swift in Sources */,
 				FAEF106A2F4E5D0100E76FD4 /* DayDetailViewModel.swift in Sources */,
 				FA7232EA2FDD8F2B00647487 /* APIConfig.swift in Sources */,
 				FA9DB0A52FD49E91000B9211 /* LandingView.swift in Sources */,
@@ -608,6 +642,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		AC100000000000000000000F /* UI Test Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (AC100000000000000000000B,); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -616,6 +651,7 @@
 			target = FAEF103F2F4E207F00E76FD4 /* BabySleepTracker */;
 			targetProxy = FA5488D42FAEB964002BC18B /* PBXContainerItemProxy */;
 		};
+		AC1000000000000000000016 /* UI Test App Dependency */ = {isa = PBXTargetDependency; target = FAEF103F2F4E207F00E76FD4; targetProxy = AC1000000000000000000015; };
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
@@ -835,6 +871,34 @@
 			};
 			name = Release;
 		};
+		AC1000000000000000000013 /* UI Tests Debug */ = {
+            isa = XCBuildConfiguration;
+            buildSettings = {
+                CODE_SIGN_STYLE = Automatic;
+                GENERATE_INFOPLIST_FILE = YES;
+                IPHONEOS_DEPLOYMENT_TARGET = 16.2;
+                PRODUCT_BUNDLE_IDENTIFIER = com.BabySleepTrackerUITests;
+                PRODUCT_NAME = "$(TARGET_NAME)";
+                SWIFT_VERSION = 5.0;
+                TARGETED_DEVICE_FAMILY = "1,2";
+                TEST_TARGET_NAME = BabySleepTracker;
+            };
+            name = Debug;
+        };
+		AC1000000000000000000014 /* UI Tests Release */ = {
+            isa = XCBuildConfiguration;
+            buildSettings = {
+                CODE_SIGN_STYLE = Automatic;
+                GENERATE_INFOPLIST_FILE = YES;
+                IPHONEOS_DEPLOYMENT_TARGET = 16.2;
+                PRODUCT_BUNDLE_IDENTIFIER = com.BabySleepTrackerUITests;
+                PRODUCT_NAME = "$(TARGET_NAME)";
+                SWIFT_VERSION = 5.0;
+                TARGETED_DEVICE_FAMILY = "1,2";
+                TEST_TARGET_NAME = BabySleepTracker;
+            };
+            name = Release;
+        };
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -865,6 +929,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
+		AC1000000000000000000012 /* UI Test Configurations */ = {isa = XCConfigurationList; buildConfigurations = (AC1000000000000000000013, AC1000000000000000000014,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */

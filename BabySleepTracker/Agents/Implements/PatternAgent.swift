@@ -37,7 +37,9 @@ struct BabyPattern {
 
 final class PatternAgent: PatternAgentProtocol {
 
-    private let calendar = Calendar.current
+    private let calendar: Calendar
+
+    init(calendar: Calendar = .current) { self.calendar = calendar }
 
     func analyze(
         records: [SleepRecord],
@@ -47,15 +49,15 @@ final class PatternAgent: PatternAgentProtocol {
     ) -> BabyPattern {
 
         let breaks  = records.filter { $0.kind == .break }
-        let dayNaps = records.filter { $0.kind == .dayNap }.sorted { $0.date < $1.date }
-        let nights  = records.filter { $0.kind == .nightSleep }.sorted { $0.date < $1.date }
+        let dayNaps = records.filter { $0.kind == .dayNap && $0.observedEnd.map { $0 <= now } == true }.sorted { $0.date < $1.date }
+        let nights  = records.filter { $0.kind == .nightSleep && $0.observedEnd.map { $0 <= now } == true }.sorted { $0.date < $1.date }
 
         let sampleSize  = trackedDayCount(records: records, wakeRecords: wakeRecords)
 
         let wakeWindows    = extractWakeWindows(dayNaps: dayNaps, wakeRecords: wakeRecords)
         let avgWakeWindow  = median(wakeWindows)
 
-        let napDurations   = dayNaps.map { $0.totalMinutes(breaks: breaks) }.filter { $0 > 0 }
+        let napDurations   = dayNaps.map { $0.totalMinutes(breaks: breaks, at: $0.observedEnd ?? $0.date) }.filter { $0 > 0 }
         let avgNapDuration = average(napDurations)
 
         let (bestHour, bestExtra) = bestNapHour(
@@ -66,7 +68,7 @@ final class PatternAgent: PatternAgentProtocol {
 
         let napCount = averageNapCount(dayNaps: dayNaps)
 
-        let nightDurations = nights.map { $0.totalMinutes(breaks: breaks) }.filter { $0 > 0 }
+        let nightDurations = nights.map { $0.totalMinutes(breaks: breaks, at: $0.observedEnd ?? $0.date) }.filter { $0 > 0 }
         let avgNight       = average(nightDurations)
 
         let bedtimeShift = estimateBedtimeShift(
@@ -127,11 +129,7 @@ final class PatternAgent: PatternAgentProtocol {
 
             let anchor: Date?
             if let prev = previousNap {
-                anchor = calendar.date(
-                    byAdding: .minute,
-                    value: prev.duration,
-                    to: prev.date
-                )
+                anchor = prev.observedEnd
             } else {
                 anchor = wakeRecords.first {
                     calendar.isDate($0.day, inSameDayAs: dayStart) &&
@@ -161,7 +159,7 @@ final class PatternAgent: PatternAgentProtocol {
             calendar.component(.hour, from: $0.date)
         }
         let hourAverages = byHour.mapValues { naps -> Int in
-            let durations = naps.map { $0.totalMinutes(breaks: breaks) }
+            let durations = naps.map { $0.totalMinutes(breaks: breaks, at: $0.observedEnd ?? $0.date) }
             return durations.reduce(0, +) / max(durations.count, 1)
         }
         guard let best = hourAverages.max(by: { $0.value < $1.value }) else {
@@ -201,9 +199,8 @@ final class PatternAgent: PatternAgentProtocol {
             }
             guard !napsThisDay.isEmpty else { continue }
 
-            let totalDaySleep = napsThisDay
-                .map { $0.totalMinutes(breaks: breaks) }
-                .reduce(0, +)
+            let totalDaySleep = SleepAccounting.netMinutes(records: napsThisDay + breaks,
+                now: night.observedEnd ?? night.date)
 
             let bedtimeMinute =
                 calendar.component(.hour,   from: night.date) * 60 +
@@ -236,11 +233,11 @@ final class PatternAgent: PatternAgentProtocol {
 
         let thisWeek = dayNaps
             .filter { $0.date >= thisStart && $0.date < now }
-            .map { $0.totalMinutes(breaks: breaks) }
+            .map { $0.totalMinutes(breaks: breaks, at: $0.observedEnd ?? $0.date) }
 
         let lastWeek = dayNaps
             .filter { $0.date >= lastStart && $0.date < thisStart }
-            .map { $0.totalMinutes(breaks: breaks) }
+            .map { $0.totalMinutes(breaks: breaks, at: $0.observedEnd ?? $0.date) }
 
         guard let thisAvg = average(thisWeek),
               let lastAvg = average(lastWeek)

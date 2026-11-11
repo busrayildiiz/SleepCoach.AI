@@ -44,43 +44,18 @@ protocol AgeBasedSleepProfileProviding {
 
 final class DefaultAgeBasedSleepProfileProvider: AgeBasedSleepProfileProviding {
 
-    // Injectable so tests can use an isolated UserDefaults suite instead of
-    // sharing `.standard` with every other test in the target — that
-    // sharing is what caused order-dependent test failures (one test's
-    // stored birth date leaking into another test's assertion).
-    private let defaults: UserDefaults
-
-    init(defaults: UserDefaults = .standard) {
-        self.defaults = defaults
-    }
+    // Keep the initializer label source-compatible; lookup itself has no storage/clock dependency.
+    init(defaults _: UserDefaults = .standard) {}
 
     // MARK: - Profile Lookup
         
         func profile(forAgeMonths age: Int) -> AgeBasedSleepProfile {
 
-            let birthDate: Date?
-            if let saved = defaults.object(forKey: "babyBirthDate") as? Date {
-                birthDate = saved
-            } else if let seconds = defaults.object(forKey: "babyBirthDate") as? Double {
-                birthDate = Date(timeIntervalSince1970: seconds)
-            } else {
-                birthDate = nil
-            }
-            
-            // Eğer doğum tarihi yoksa dışarıdan gelen fallback parametreyi kullan veya en son profili dön
-            guard let babyBirthDate = birthDate else {
-                let match = Self.profiles.first { $0.ageRange.contains(age) }
-                return match ?? Self.profiles.last!
-            }
-            
-            let calendar = Calendar.current
-            let components = calendar.dateComponents([.month], from: babyBirthDate, to: Date())
-            let calculatedAgeMonths = components.month ?? 0
-            
-            let match = Self.profiles.first { $0.ageRange.contains(calculatedAgeMonths) }
-            return match ?? Self.profiles.last!
+            // Age is calculated by the caller at its injected reference date.
+            // Never replace historical age with the baby's age on the wall clock.
+            return Self.profiles.first { $0.ageRange.contains(age) } ?? Self.profiles.last!
         }
-        
+
         func wakeWindowCenter(forAgeMonths age: Int) -> Int {
 
             let p = profile(forAgeMonths: age)

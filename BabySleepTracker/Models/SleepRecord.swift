@@ -13,6 +13,8 @@ struct SleepRecord: Identifiable, Codable {
     let parentNapID: UUID?
     let isOngoing: Bool
     let createdAt: Date
+    /// Exact user-entered end; legacy records retain their duration-based end.
+    let endDate: Date?
 
     init(
         id: UUID = UUID(),
@@ -21,7 +23,8 @@ struct SleepRecord: Identifiable, Codable {
         kind: SleepKind = .dayNap,
         parentNapID: UUID? = nil,
         isOngoing: Bool = false,
-        createdAt: Date = Date()
+        createdAt: Date = Date(),
+        endDate: Date? = nil
     ) {
         self.id = id
         self.date = date
@@ -30,11 +33,12 @@ struct SleepRecord: Identifiable, Codable {
         self.parentNapID = parentNapID
         self.isOngoing = isOngoing
         self.createdAt = createdAt
+        self.endDate = endDate
     }
 
     // Eski kayıtlarda isOngoing/createdAt alanı yok — geriye dönük uyumluluk için
     enum CodingKeys: String, CodingKey {
-        case id, date, duration, kind, parentNapID, isOngoing, createdAt
+        case id, date, duration, kind, parentNapID, isOngoing, createdAt, endDate
     }
 
     init(from decoder: Decoder) throws {
@@ -46,18 +50,29 @@ struct SleepRecord: Identifiable, Codable {
         parentNapID = try c.decodeIfPresent(UUID.self, forKey: .parentNapID)
         isOngoing   = try c.decodeIfPresent(Bool.self, forKey: .isOngoing) ?? false
         createdAt   = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? date
+        endDate     = try c.decodeIfPresent(Date.self, forKey: .endDate)
     }
 
     /// Devam eden uyku için canlı süre, bitmiş uyku için kayıtlı süre
     var effectiveDuration: Int {
-        isOngoing ? max(0, Int(Date().timeIntervalSince(date) / 60)) : duration
+        isOngoing ? max(0, Int(Date().timeIntervalSince(date) / 60)) : max(0, Int((observedEnd ?? date).timeIntervalSince(date) / 60))
     }
 
+    /// Nil means there is no observed end, not that the session ended at a typical time.
+    var observedEnd: Date? {
+        guard !isOngoing else { return nil }
+        if let endDate { return endDate > date ? endDate : nil }
+        guard duration > 0 else { return nil }
+        return date.addingTimeInterval(Double(duration) * 60)
+    }
+
+    func totalMinutes(breaks: [SleepRecord], at referenceDate: Date) -> Int {
+        SleepAccounting.netMinutes(records: [self] + breaks.filter { $0.kind == .break }, now: referenceDate)
+    }
+
+    // UI compatibility. Domain calculators must pass their reference date explicitly.
     func totalMinutes(breaks: [SleepRecord]) -> Int {
-        let totalBreak = breaks
-            .filter { $0.parentNapID == self.id && $0.kind == .break }
-            .reduce(0) { $0 + $1.duration }
-        return max(0, effectiveDuration - totalBreak)
+        totalMinutes(breaks: breaks, at: observedEnd ?? Date())
     }
 
     var formattedDuration: String {

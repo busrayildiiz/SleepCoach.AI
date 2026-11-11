@@ -58,7 +58,7 @@ final class PatternAgentContractTests: XCTestCase {
     func test_dataQuality_scalesWithTrackedDayCount() {
         func pattern(days: Int) -> BabyPattern {
             let records = (0..<days).map { nap($0, hour: 12, duration: 60) }
-            return sut.analyze(records: records, wakeRecords: [], ageMonths: 9, now: base)
+            return sut.analyze(records: records, wakeRecords: [], ageMonths: 9, now: day(30, hour: 12))
         }
 
         XCTAssertEqual(pattern(days: 2).dataQuality, .poor)
@@ -80,7 +80,7 @@ final class PatternAgentContractTests: XCTestCase {
             DailyWakeRecord(day: day(3, hour: 7), wakeTime: day(3, hour: 7)),  // new day
         ]
 
-        let pattern = sut.analyze(records: records, wakeRecords: wakeRecords, ageMonths: 9, now: base)
+        let pattern = sut.analyze(records: records, wakeRecords: wakeRecords, ageMonths: 9, now: day(30, hour: 12))
 
         XCTAssertEqual(pattern.sampleSize, 4)
     }
@@ -94,7 +94,7 @@ final class PatternAgentContractTests: XCTestCase {
             nap(1, hour: 9,  duration: 120),
         ]
 
-        let pattern = sut.analyze(records: records, wakeRecords: [], ageMonths: 9, now: base)
+        let pattern = sut.analyze(records: records, wakeRecords: [], ageMonths: 9, now: day(30, hour: 12))
 
         XCTAssertEqual(pattern.averageNapDurationMinutes, 90) // (60+90+120)/3
     }
@@ -108,7 +108,7 @@ final class PatternAgentContractTests: XCTestCase {
             parentNapID: napRecord.id
         )
 
-        let pattern = sut.analyze(records: [napRecord, breakRecord], wakeRecords: [], ageMonths: 9, now: base)
+        let pattern = sut.analyze(records: [napRecord, breakRecord], wakeRecords: [], ageMonths: 9, now: day(30, hour: 12))
 
         // 90 minute nap minus a 20 minute break inside it = 70 effective minutes.
         XCTAssertEqual(pattern.averageNapDurationMinutes, 70)
@@ -122,7 +122,7 @@ final class PatternAgentContractTests: XCTestCase {
             nap(1, hour: 13, duration: 90),
         ]
 
-        let pattern = sut.analyze(records: records, wakeRecords: [], ageMonths: 9, now: base)
+        let pattern = sut.analyze(records: records, wakeRecords: [], ageMonths: 9, now: day(30, hour: 12))
 
         XCTAssertEqual(pattern.bestFirstNapHour, 13)
         // overall average is (60+90)/2 = 75; best hour's 90 is 15 above that.
@@ -138,7 +138,7 @@ final class PatternAgentContractTests: XCTestCase {
             nap(1, hour: 9,  duration: 60), // day 1: 1 nap
         ]
 
-        let pattern = sut.analyze(records: records, wakeRecords: [], ageMonths: 9, now: base)
+        let pattern = sut.analyze(records: records, wakeRecords: [], ageMonths: 9, now: day(30, hour: 12))
 
         XCTAssertEqual(pattern.napCountPerDay, 1.5)
     }
@@ -167,7 +167,7 @@ final class PatternAgentContractTests: XCTestCase {
             night(3, hour: 19, minute: 30),
         ]
 
-        let pattern = sut.analyze(records: records, wakeRecords: [], ageMonths: 9, now: base)
+        let pattern = sut.analyze(records: records, wakeRecords: [], ageMonths: 9, now: day(30, hour: 12))
 
         // longAvg = (20:30 + 20:00)/2 = 20:15 = 1215 min-of-day
         // normalAvg = (19:00 + 19:30)/2 = 19:15 = 1155 min-of-day
@@ -187,7 +187,7 @@ final class PatternAgentContractTests: XCTestCase {
             night(1, hour: 20, minute: 0), // normal day, but later bedtime
         ]
 
-        let pattern = sut.analyze(records: records, wakeRecords: [], ageMonths: 9, now: base)
+        let pattern = sut.analyze(records: records, wakeRecords: [], ageMonths: 9, now: day(30, hour: 12))
 
         XCTAssertEqual(pattern.estimatedBedtimeShiftMinutes, 0)
     }
@@ -203,7 +203,7 @@ final class PatternAgentContractTests: XCTestCase {
             nap(4, hour: 12, duration: 90),
             nap(5, hour: 12, duration: 90),
         ]
-        let pattern = sut.analyze(records: records, wakeRecords: [], ageMonths: 9, now: base)
+        let pattern = sut.analyze(records: records, wakeRecords: [], ageMonths: 9, now: day(30, hour: 12))
         XCTAssertEqual(pattern.napDurationTrend, .increasing)
     }
 
@@ -216,7 +216,7 @@ final class PatternAgentContractTests: XCTestCase {
             nap(4, hour: 12, duration: 60),
             nap(5, hour: 12, duration: 60),
         ]
-        let pattern = sut.analyze(records: records, wakeRecords: [], ageMonths: 9, now: base)
+        let pattern = sut.analyze(records: records, wakeRecords: [], ageMonths: 9, now: day(30, hour: 12))
         XCTAssertEqual(pattern.napDurationTrend, .decreasing)
     }
 
@@ -229,7 +229,7 @@ final class PatternAgentContractTests: XCTestCase {
             nap(4, hour: 12, duration: 75),
             nap(5, hour: 12, duration: 75),
         ]
-        let pattern = sut.analyze(records: records, wakeRecords: [], ageMonths: 9, now: base)
+        let pattern = sut.analyze(records: records, wakeRecords: [], ageMonths: 9, now: day(30, hour: 12))
         XCTAssertEqual(pattern.napDurationTrend, .stable)
     }
 
@@ -239,7 +239,7 @@ final class PatternAgentContractTests: XCTestCase {
             nap(1, hour: 12, duration: 90),
             nap(2, hour: 12, duration: 120),
         ]
-        let pattern = sut.analyze(records: records, wakeRecords: [], ageMonths: 9, now: base)
+        let pattern = sut.analyze(records: records, wakeRecords: [], ageMonths: 9, now: day(30, hour: 12))
         XCTAssertEqual(pattern.napDurationTrend, .insufficient)
     }
 

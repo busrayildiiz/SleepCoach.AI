@@ -62,7 +62,7 @@ final class DefaultDaytimePredictionAgent: DaytimePredictionAgentProtocol {
         let breaks   = todayRecords.filter { $0.kind == .break }
 
         let todayNaps = todayRecords
-            .filter { $0.kind == .dayNap && !$0.isOngoing }
+            .filter { $0.kind == .dayNap && $0.observedEnd.map { $0 <= now } == true }
             .sorted { $0.date < $1.date }
 
         let ongoingNap = todayRecords.first { $0.kind == .dayNap && $0.isOngoing }
@@ -152,9 +152,7 @@ final class DefaultDaytimePredictionAgent: DaytimePredictionAgentProtocol {
 
         // Tamamlanmış son napın net bitiş saati
         if let lastNap = todayNaps.last {
-            let net      = lastNap.totalMinutes(breaks: breaks)
-            let duration = net > 0 ? net : lastNap.duration
-            return (lastNap.date.addingMinutes(duration), true)
+            return (lastNap.observedEnd ?? lastNap.date, true)
         }
 
         // Bugünün wake record'u — en son girileni kullan

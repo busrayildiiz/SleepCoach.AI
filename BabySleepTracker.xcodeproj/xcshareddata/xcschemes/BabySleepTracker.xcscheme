@@ -40,6 +40,15 @@
                ReferencedContainer = "container:BabySleepTracker.xcodeproj">
             </BuildableReference>
          </TestableReference>
+         <TestableReference skipped = "NO" parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "AC100000000000000000000E"
+               BuildableName = "BabySleepTrackerUITests.xctest"
+               BlueprintName = "BabySleepTrackerUITests"
+               ReferencedContainer = "container:BabySleepTracker.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
    </TestAction>
    <LaunchAction

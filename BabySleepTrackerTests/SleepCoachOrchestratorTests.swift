@@ -135,6 +135,33 @@ final class SleepCoachOrchestratorTests: XCTestCase {
         )
     }
 
+    func testHistoricalSnapshotSeparatesSleepDayAndRolling24hWithoutMutatingRecords() throws {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: now)
+        let night = SleepRecord(date: today.addingTimeInterval(-4 * 3600), duration: 660, kind: .nightSleep)
+        let nap = SleepRecord(date: today.addingTimeInterval(8 * 3600), duration: 60)
+        saveRecords([night, nap])
+        let before = UserDefaults.standard.data(forKey: "sleepRecords")
+        orchestrator.generate(now: now)
+        let result = try XCTUnwrap(orchestrator.snapshot)
+        XCTAssertEqual(result.todayTotalMinutes, 60)
+        XCTAssertEqual(result.rolling24hMinutes, 720)
+        XCTAssertEqual(result.daytimeMinutes, 60)
+        XCTAssertTrue(result.sleepDayIsProvisional)
+        XCTAssertEqual(UserDefaults.standard.data(forKey: "sleepRecords"), before)
+    }
+
+    func testConflictingClassificationsProduceQualityWarning() throws {
+        let nap = SleepRecord(date: now.addingTimeInterval(-120 * 60), duration: 90)
+        let night = SleepRecord(date: now.addingTimeInterval(-90 * 60), duration: 90, kind: .nightSleep)
+        saveRecords([nap, night])
+        orchestrator.generate(now: now)
+        let result = try XCTUnwrap(orchestrator.snapshot)
+        XCTAssertFalse(result.subtotalsAreReliable)
+        XCTAssertEqual(result.todayTotalMinutes, 120)
+        XCTAssertTrue(result.dataQualityReport.warnings.contains { $0.contains("Overlapping nap and night") })
+    }
+
     // MARK: - Too Young Routing
 
     func testTooYoungPhaseSkipsPatternAnalysis() {
@@ -168,7 +195,7 @@ final class SleepCoachOrchestratorTests: XCTestCase {
         XCTAssertNotNil(orchestrator.snapshot?.pattern)
     }
 
-    func testClosingStaleRecordPostsOneSleepRecordsNotification() throws {
+    func testGeneratingWithStaleOngoingRecordDoesNotRewriteOrNotify() throws {
         let staleRecord = SleepRecord(
             date: now.addingTimeInterval(-2 * 24 * 60 * 60),
             duration: 0,
@@ -189,12 +216,14 @@ final class SleepCoachOrchestratorTests: XCTestCase {
 
         orchestrator.generate(now: now)
 
-        XCTAssertEqual(notificationCount, 1)
+        XCTAssertEqual(notificationCount, 0)
         let storedRecords = try loadStoredRecords()
         let storedRecord = try XCTUnwrap(storedRecords.first)
         XCTAssertEqual(storedRecord.id, staleRecord.id)
-        XCTAssertFalse(storedRecord.isOngoing)
-        XCTAssertGreaterThan(storedRecord.duration, 0)
+        XCTAssertTrue(storedRecord.isOngoing)
+        XCTAssertEqual(storedRecord.duration, 0)
+        XCTAssertNil(storedRecord.observedEnd)
+        XCTAssertEqual(storedRecord.date, staleRecord.date)
     }
 
     // MARK: - nextSleepKind
@@ -262,7 +291,7 @@ final class SleepCoachOrchestratorTests: XCTestCase {
 
     // MARK: - Stale Ongoing Records
 
-    func testYesterdayOngoingNightSleepIsClosedAfterTypicalWakeTime() throws {
+    func testYesterdayNightRemainsOngoingAfterTypicalWakeTime() throws {
         let calendar = Calendar.current
 
         let yesterday = calendar.date(
@@ -306,12 +335,10 @@ final class SleepCoachOrchestratorTests: XCTestCase {
             storedRecords.first
         )
 
-        XCTAssertFalse(closedRecord.isOngoing)
-        XCTAssertGreaterThan(closedRecord.duration, 0)
-        XCTAssertLessThanOrEqual(
-            closedRecord.duration,
-            12 * 60
-        )
+        XCTAssertTrue(closedRecord.isOngoing)
+        XCTAssertEqual(closedRecord.duration, 0)
+        XCTAssertNil(closedRecord.observedEnd)
+        XCTAssertEqual(closedRecord.date, start)
     }
 
     // MARK: - Data Quality
@@ -420,20 +447,24 @@ final class SleepCoachOrchestratorTests: XCTestCase {
     }
 
     func testIncreasedTodaySleepTriggersShortNapLLMCall() async {
-        let currentDay = Date()
+        let currentDay = now
         let triggerReceived = expectation(description: "Short nap trigger received")
         llmAgent.onTrigger = { trigger in
             if case .shortNapDetected = trigger {
                 triggerReceived.fulfill()
             }
         }
-        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "llm_lastGenerated")
+        UserDefaults.standard.set(currentDay.timeIntervalSince1970, forKey: "llm_lastGenerated")
 
         orchestrator.generate(now: currentDay)
+        XCTAssertEqual(orchestrator.snapshot?.todayTotalMinutes, 0)
         saveRecords([
-            SleepRecord(date: currentDay, duration: 30, kind: .dayNap)
+            // A completed nap must end by the injected reference, not start at it.
+            SleepRecord(date: currentDay.addingTimeInterval(-30 * 60), duration: 30,
+                        kind: .dayNap, createdAt: currentDay)
         ])
         orchestrator.generate(now: currentDay)
+        XCTAssertEqual(orchestrator.snapshot?.todayTotalMinutes, 30)
         await fulfillment(of: [triggerReceived], timeout: 1)
 
         XCTAssertEqual(llmAgent.receivedTriggers.count, 1)
@@ -1012,7 +1043,7 @@ final class SleepCoachOrchestratorLLMLifecycleTests: XCTestCase {
     }
 
     func testAutomaticGenerationUsesMatchingSnapshotAndRecords() async throws {
-        let currentDay = Date()
+        let currentDay = now
         let requestStarted = expectation(description: "Automatic LLM request started")
         let requestCompleted = expectation(description: "Automatic LLM request completed")
         llmAgent.onRequest = { _ in requestStarted.fulfill() }
@@ -1020,7 +1051,9 @@ final class SleepCoachOrchestratorLLMLifecycleTests: XCTestCase {
 
         UserDefaults.standard.set(currentDay.timeIntervalSince1970, forKey: "llm_lastGenerated")
         orchestrator.generate(now: currentDay)
-        let stateBRecord = SleepRecord(date: currentDay, duration: 30, kind: .dayNap)
+        // Keep the completed session entirely before the injected calculation time.
+        let stateBRecord = SleepRecord(date: currentDay.addingTimeInterval(-30 * 60), duration: 30,
+                                       kind: .dayNap, createdAt: currentDay)
         saveRecords([stateBRecord])
 
         orchestrator.generate(now: currentDay)

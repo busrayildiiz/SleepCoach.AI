@@ -197,18 +197,31 @@ final class OvertiredCalculatorContractTests: XCTestCase {
     }
 
     func test_bedtimeWindow_whenDaytimeSleepIsShort_shouldMoveIdealBedtimeEarlier() {
-        let lastNapEnd = Date()
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let reference = calendar.date(from: DateComponents(year: 2026, month: 9, day: 1, hour: 16))!
+        let lastNapEnd = calendar.date(bySettingHour: 15, minute: 0, second: 0, of: reference)!
+        let calculator = OvertiredCalculator(
+            profileProvider: FixedAgeBasedSleepProfileProvider(fixedProfile: nineMonthProfile),
+            calendar: calendar
+        )
         // daytimeSleepRange lower bound is 120 -> deficit of 60 min -> adjustment of 60/3 = 20 min earlier.
-        let shortDayWindow = sut.bedtimeWindow(
+        let shortDayWindow = calculator.bedtimeWindow(
             lastNapEndTime: lastNapEnd,
             totalDaytimeSleepMinutes: 60,
-            ageMonths: 9
+            ageMonths: 9,
+            now: reference
         )
-        let fullDayWindow = sut.bedtimeWindow(
+        let fullDayWindow = calculator.bedtimeWindow(
             lastNapEndTime: lastNapEnd,
             totalDaytimeSleepMinutes: 150,
-            ageMonths: 9
+            ageMonths: 9,
+            now: reference
         )
+        // Both results are inside the clamp bounds, so the deficit adjustment is observable.
+        XCTAssertEqual(fullDayWindow.ideal, calendar.date(bySettingHour: 18, minute: 45, second: 0, of: reference))
+        XCTAssertEqual(shortDayWindow.ideal, calendar.date(bySettingHour: 18, minute: 25, second: 0, of: reference))
+        XCTAssertEqual(fullDayWindow.ideal.timeIntervalSince(shortDayWindow.ideal), 20 * 60)
         XCTAssertLessThan(
             shortDayWindow.ideal,
             fullDayWindow.ideal,

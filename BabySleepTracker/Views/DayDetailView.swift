@@ -7,16 +7,14 @@ enum AddMode {
 
 struct DayDetailView: View {
     let day: Date
-    var records: [SleepRecord]
+    @State var records: [SleepRecord]
 
     let onDelete: (_ ids: Set<UUID>) -> Void
-    let onAddSleep: (_ day: Date) -> Void
-    let onEditNap: (_ nap: SleepRecord) -> Void
-    let onBreakSaved: (_ newBreak: SleepRecord) -> Void
+    let onRecordUpsert: (SleepRecord) -> Bool
+    let onBreakSaved: (_ newBreak: SleepRecord) -> Bool
 
     @State private var showAddMenu = false
-    @State private var showAddBreak = false
-    @State private var breakTargetNap: SleepRecord? = nil
+    @State private var recordingSheet: RecordingSheet?
     @State private var contextNap: SleepRecord? = nil
     @State private var showNapActions = false
     @StateObject private var orchestrator = SleepCoachOrchestrator.shared
@@ -49,7 +47,7 @@ struct DayDetailView: View {
         return todayWake.wakeTime
     }
 
-    private var isToday: Bool { cal.isDateInToday(day) }
+    private var isToday: Bool { cal.isDate(day, inSameDayAs: now) }
 
     // MARK: - Body
 
@@ -57,6 +55,9 @@ struct DayDetailView: View {
         NavigationStack {
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 12) {
+                    let summary = SleepAccounting(records: records, now: now, calendar: cal).sleepDay(on: day)
+                    Text("Sleep Day: " + TimeFormat.minutes(summary.totalMinutes) + (!summary.subtotalsAreReliable ? " · unreliable" : (summary.isProvisional ? " · provisional" : " · finalized")))
+                        .font(.subheadline)
                     allCards
                 }
                 .padding(.horizontal, 16)
@@ -77,7 +78,7 @@ struct DayDetailView: View {
                 }
             }
             .confirmationDialog("Add", isPresented: $showAddMenu, titleVisibility: .hidden) {
-                Button("Add Nap") { onAddSleep(day) }
+                Button("Add Nap") { recordingSheet = .sleep(editing: nil, date: day) }
                 Button("Cancel", role: .cancel) { }
             }
             .confirmationDialog(
@@ -86,26 +87,30 @@ struct DayDetailView: View {
                 titleVisibility: .visible
             ) {
                 Button("Edit") {
-                    if let nap = contextNap { onEditNap(nap) }
+                    if let nap = contextNap { recordingSheet = .sleep(editing: nap, date: nap.date) }
                 }
-                Button("Add Wake Period") {
-                    breakTargetNap = contextNap
-                    showAddBreak = true
+                Button("Add Awake Break") {
+                    if let parent = contextNap { recordingSheet = .awakeBreak(parent) }
                 }
                 Button("Delete", role: .destructive) {
                     if let nap = contextNap { onDelete([nap.id]) }
                 }
                 Button("Cancel", role: .cancel) { contextNap = nil }
             }
-            .sheet(isPresented: $showAddBreak) {
-                if let nap = breakTargetNap {
-                    AddBreakView(
-                        defaultDate: nap.date,
-                        targetNapID: nap.id,
-                        napDuration: nap.duration,
-                        existingBreaks: breaks.filter { $0.parentNapID == nap.id },
-                        onSave: { newBreak in onBreakSaved(newBreak) }
-                    )
+            .sheet(item: $recordingSheet) { destination in
+                switch destination {
+                case .sleep(let editing, let date):
+                    AddRecordView(defaultDate: date, editingRecord: editing,
+                                  vm: AddRecordViewModel(), onSave: onRecordUpsert)
+                case .awakeBreak(let parent):
+                    AddBreakView(parent: parent,
+                                 existingBreaks: breaks.filter { $0.parentNapID == parent.id },
+                                 onSave: onBreakSaved)
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .sleepRecordsDidChange)) { _ in
+                if let saved = SleepRecordPersistence().load() {
+                    records = SleepAccounting(records: saved, now: Date(), calendar: cal).records(on: day)
                 }
             }
         }
@@ -129,10 +134,10 @@ struct DayDetailView: View {
                 night: night,
                 napBreaks: breaks.filter { $0.parentNapID == night.id },
                 allBreaks: breaks,
-                onAddBreakTap: { breakTargetNap = night; showAddBreak = true },
+                onAddBreakTap: { recordingSheet = .awakeBreak(night) },
+                onEditTap: { recordingSheet = .sleep(editing: night, date: night.date) },
                 onLongPress: { contextNap = night; showNapActions = true }
             )
-            .onTapGesture { onEditNap(night) }
         }
 
         // 2. Gerçek naplar
@@ -143,10 +148,10 @@ struct DayDetailView: View {
                 nap: nap,
                 napBreaks: napBreaks,
                 allBreaks: breaks,
-                onAddBreakTap: { breakTargetNap = nap; showAddBreak = true },
+                onAddBreakTap: { recordingSheet = .awakeBreak(nap) },
+                onEditTap: { recordingSheet = .sleep(editing: nap, date: nap.date) },
                 onLongPress: { contextNap = nap; showNapActions = true }
             )
-            .onTapGesture { onEditNap(nap) }
             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                 Button(role: .destructive) { onDelete([nap.id]) } label: {
                     Label("Delete", systemImage: "trash")
@@ -179,10 +184,10 @@ struct DayDetailView: View {
                 night: night,
                 napBreaks: breaks.filter { $0.parentNapID == night.id },
                 allBreaks: breaks,
-                onAddBreakTap: { breakTargetNap = night; showAddBreak = true },
+                onAddBreakTap: { recordingSheet = .awakeBreak(night) },
+                onEditTap: { recordingSheet = .sleep(editing: night, date: night.date) },
                 onLongPress: { contextNap = night; showNapActions = true }
             )
-            .onTapGesture { onEditNap(night) }
             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                 Button(role: .destructive) { onDelete([night.id]) } label: {
                     Label("Delete", systemImage: "trash")
@@ -421,6 +426,7 @@ struct NightSleepCard: View {
     let napBreaks: [SleepRecord]
     let allBreaks: [SleepRecord]
     let onAddBreakTap: () -> Void
+    let onEditTap: () -> Void
     let onLongPress: () -> Void
 
     @State private var breaksExpanded = false
@@ -494,6 +500,8 @@ struct NightSleepCard: View {
             }
             .padding(16)
             .contentShape(Rectangle())
+            .onTapGesture(perform: onEditTap)
+            .accessibilityAction(named: Text("Edit Sleep"), onEditTap)
             .onLongPressGesture(minimumDuration: 0.4) {
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                 onLongPress()
@@ -546,13 +554,14 @@ struct NightSleepCard: View {
             Button(action: onAddBreakTap) {
                 HStack(spacing: 6) {
                     Image(systemName: "plus").font(.system(size: 13, weight: .semibold))
-                    Text("Add Wake Period").font(.subheadline.weight(.semibold))
+                    Text("Add Awake Break").font(.subheadline.weight(.semibold))
                 }
                 .foregroundStyle(Color(red: 0.75, green: 0.70, blue: 0.95))
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 12)
             }
             .buttonStyle(.plain)
+            .accessibilityIdentifier("sleep.addBreak.\(night.id)")
             .padding(.horizontal, 16)
         }
         .background(
@@ -672,6 +681,7 @@ struct NapDetailCard: View {
     let napBreaks: [SleepRecord]
     let allBreaks: [SleepRecord]
     let onAddBreakTap: () -> Void
+    let onEditTap: () -> Void
     let onLongPress: () -> Void
 
     @State private var breaksExpanded = true
@@ -735,6 +745,8 @@ struct NapDetailCard: View {
             .padding(.top, 14)
             .padding(.bottom, 10)
             .contentShape(Rectangle())
+            .onTapGesture(perform: onEditTap)
+            .accessibilityAction(named: Text("Edit Sleep"), onEditTap)
             .onLongPressGesture(minimumDuration: 0.4) {
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                 onLongPress()
@@ -764,6 +776,7 @@ struct NapDetailCard: View {
                     } else {
                         Text(TimeFormat.minutes(netMinutes))
                             .font(.subheadline.weight(.bold)).foregroundStyle(.primary)
+                            .accessibilityIdentifier("sleep.netSleep.\(nap.id)")
                     }
                     Text("Net Sleep").font(.caption2).foregroundStyle(.secondary)
                 }
@@ -810,13 +823,14 @@ struct NapDetailCard: View {
             Button(action: onAddBreakTap) {
                 HStack(spacing: 6) {
                     Image(systemName: "plus").font(.system(size: 13, weight: .semibold))
-                    Text("Add Wake Period").font(.subheadline.weight(.semibold))
+                    Text("Add Awake Break").font(.subheadline.weight(.semibold))
                 }
                 .foregroundStyle(napTint)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 12)
             }
             .buttonStyle(.plain)
+            .accessibilityIdentifier("sleep.addBreak.\(nap.id)")
             .padding(.horizontal, 14)
         }
         .background(
