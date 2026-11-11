@@ -93,10 +93,13 @@ jobs:
 
       - name: Export simulator screenshots for recording design review
         if: ${{ !cancelled() && github.head_ref == 'feat/recording-experience-redesign' }}
-        run: >-
-          xcrun xcresulttool export attachments
-          --path "$RUNNER_TEMP/TestResults.xcresult"
-          --output-path "$RUNNER_TEMP/RecordingScreenshots"
+        run: |
+          xcrun xcresulttool export attachments \
+            --path "$RUNNER_TEMP/TestResults.xcresult" \
+            --output-path "$RUNNER_TEMP/RecordingScreenshots"
+          xcrun xcresulttool get test-results summary \
+            --path "$RUNNER_TEMP/TestResults.xcresult" \
+            > "$RUNNER_TEMP/RecordingScreenshots/test-summary.json"
 
       - name: Upload recording simulator screenshots
         if: ${{ always() && github.head_ref == 'feat/recording-experience-redesign' }}

@@ -113,13 +113,12 @@ struct RecordingIntervalCard: View {
                 .fixedSize(horizontal: false, vertical: true)
             if let ongoing {
                 Toggle(isOn: ongoing) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("Still Sleeping").font(.subheadline.weight(.semibold))
-                        Text("Leave the end unrecorded until your baby wakes.")
-                            .font(.caption).foregroundStyle(CoachColor.muted)
-                    }
+                    Text("Still Sleeping").font(.subheadline.weight(.semibold))
                 }
                 .accessibilityIdentifier("recording.ongoing")
+                Text("Leave the end unrecorded until your baby wakes.")
+                    .font(.caption).foregroundStyle(CoachColor.muted)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             if dynamicType.isAccessibilitySize {
                 VStack(alignment: .leading, spacing: 16) { endpoints }

@@ -20,8 +20,9 @@ final class RecordingNavigationTests: XCTestCase {
         for _ in 0..<8 {
             if element.exists && element.isHittable {
                 let form = app.collectionViews.containing(.any, identifier: element.identifier).firstMatch
+                let scroll = app.scrollViews.containing(.any, identifier: element.identifier).firstMatch
                 let window = app.windows.firstMatch.frame
-                let viewport = form.exists ? form.frame.intersection(window) : window
+                let viewport = (form.exists ? form.frame : (scroll.exists ? scroll.frame : window)).intersection(window)
                 // A partially visible button can be hittable while its tap center is offscreen.
                 if !element.frame.isEmpty && viewport.contains(element.frame) { return }
             }
@@ -136,12 +137,15 @@ final class RecordingNavigationTests: XCTestCase {
         app.buttons["recording.kind.night"].tap()
         XCTAssertTrue(app.navigationBars["Add Night Sleep"].waitForExistence(timeout: 5))
         let ongoing = app.switches["recording.ongoing"]
+        reveal(ongoing, in: app)
         ongoing.tap()
         XCTAssertFalse(app.buttons["recording.end.edit"].exists)
         XCTAssertTrue(app.descendants(matching: .any)["recording.ongoingNotice"].firstMatch.exists)
         capture("recording-night-accessibility-ongoing", app: app)
+        reveal(ongoing, in: app)
         ongoing.tap()
         XCTAssertTrue(app.buttons["recording.end.edit"].exists)
+        reveal(ongoing, in: app)
         ongoing.tap()
         let save = app.buttons["recording.save"]
         reveal(save, in: app)
