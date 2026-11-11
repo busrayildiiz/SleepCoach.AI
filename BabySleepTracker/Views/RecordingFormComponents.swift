@@ -1,34 +1,272 @@
 import SwiftUI
 
-/// Semantic surfaces and scalable fonts keep all recording forms legible in both appearances.
+// Compatibility for the nap/night screen while it adopts the shared layout.
 enum RecordingStyle {
-    static let accent = Color(uiColor: UIColor { traits in
-        traits.userInterfaceStyle == .dark
-            ? UIColor(red: 0.75, green: 0.67, blue: 1, alpha: 1)
-            : UIColor(red: 0.40, green: 0.29, blue: 0.78, alpha: 1)
-    })
+    static let accent = CoachColor.purpleDeep
 }
 
-struct RecordingDateField: View {
+private struct RecordingCompactHeightKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    var recordingCompactHeight: Bool {
+        get { self[RecordingCompactHeightKey.self] }
+        set { self[RecordingCompactHeightKey.self] = newValue }
+    }
+}
+
+struct RecordingScreen<Content: View>: View {
     let title: String
-    let identifier: String
-    @Binding var date: Date
+    let saveTitle: String
+    let saveEnabled: Bool
+    let onCancel: () -> Void
+    let onSave: () -> Void
+    @ViewBuilder let content: () -> Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(title).font(.subheadline.weight(.semibold))
-            DatePicker("\(title) date", selection: $date, displayedComponents: .date)
-                .labelsHidden()
-                .accessibilityLabel("\(title) date")
-                .accessibilityIdentifier("\(identifier).date")
-            DatePicker("\(title) time", selection: $date, displayedComponents: .hourAndMinute)
-                .labelsHidden()
-                .accessibilityLabel("\(title) time")
-                .accessibilityIdentifier("\(identifier).time")
+        GeometryReader { geometry in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12, content: content)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(16)
+            }
+            .scrollDismissesKeyboard(.interactively)
+            .environment(\.recordingCompactHeight, geometry.size.height < 520)
         }
-        .datePickerStyle(.compact)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.vertical, 4)
+        .background(CoachColor.background)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            RecordingSaveButton(title: saveTitle, enabled: saveEnabled, action: onSave)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .background(CoachColor.background)
+        }
+        .navigationTitle(title)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Cancel", action: onCancel).accessibilityIdentifier("recording.cancel")
+            }
+            ToolbarItem(placement: .principal) {
+                Text(title)
+                    .font(.system(size: 21, weight: .bold, design: .rounded))
+                    .foregroundStyle(CoachColor.ink)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                    .accessibilityAddTraits(.isHeader)
+            }
+        }
+        .tint(CoachColor.purpleDeep)
+    }
+}
+
+struct RecordingCard<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14, content: content)
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(CoachCardBackground())
+            .overlay(CoachCardBorder())
+    }
+}
+
+struct RecordingSectionLabel: View {
+    let title: String
+    @ScaledMetric(relativeTo: .caption2) private var size = 10
+
+    var body: some View {
+        Text(title.uppercased())
+            .font(.system(size: size, weight: .bold))
+            .tracking(0.5)
+            .foregroundStyle(CoachColor.purpleDeep)
+            .accessibilityAddTraits(.isHeader)
+    }
+}
+
+private enum RecordingEndpoint: String, Identifiable {
+    case start, end
+    var id: String { rawValue }
+}
+
+struct RecordingIntervalCard: View {
+    let title: String
+    @Binding var start: Date
+    @Binding var end: Date
+    var ongoing: Binding<Bool>? = nil
+    let feedback: (Date, Date) -> String
+    let validation: (Date, Date) -> String?
+    @Environment(\.dynamicTypeSize) private var dynamicType
+    @State private var endpoint: RecordingEndpoint?
+
+    private var isOngoing: Bool { ongoing?.wrappedValue ?? false }
+
+    private var dateContext: String {
+        let first = start.formatted(date: .abbreviated, time: .omitted)
+        guard !isOngoing, !Calendar.current.isDate(start, inSameDayAs: end) else { return first }
+        return first + " → " + end.formatted(date: .abbreviated, time: .omitted)
+    }
+
+    var body: some View {
+        RecordingCard {
+            RecordingSectionLabel(title: title)
+            Label(dateContext, systemImage: "calendar")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(CoachColor.muted)
+                .fixedSize(horizontal: false, vertical: true)
+            if let ongoing {
+                Toggle(isOn: ongoing) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Still Sleeping").font(.subheadline.weight(.semibold))
+                        Text("Leave the end unrecorded until your baby wakes.")
+                            .font(.caption).foregroundStyle(CoachColor.muted)
+                    }
+                }
+                .accessibilityIdentifier("recording.ongoing")
+            }
+            if dynamicType.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 16) { endpoints }
+            } else {
+                HStack(alignment: .top, spacing: 16) { endpoints }
+            }
+        }
+        .sheet(item: $endpoint) { endpoint in
+            RecordingTimeEditor(
+                title: endpoint == .start ? "Start time" : "End time",
+                identifier: "recording.\(endpoint.rawValue)",
+                initialValue: endpoint == .start ? start : end,
+                feedback: { value in feedback(endpoint == .start ? value : start, endpoint == .end ? value : end) },
+                validation: { value in validation(endpoint == .start ? value : start, endpoint == .end ? value : end) },
+                onDone: { value in
+                    if endpoint == .start { start = value } else { end = value }
+                }
+            )
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+        }
+    }
+
+    @ViewBuilder private var endpoints: some View {
+        RecordingTimeButton(title: "Start", date: start, identifier: "recording.start.edit") { endpoint = .start }
+        if isOngoing {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("END").font(.caption.weight(.bold)).foregroundStyle(CoachColor.muted)
+                Label("Not recorded", systemImage: "moon.zzz.fill")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(CoachColor.purpleDeep)
+                    .accessibilityIdentifier("recording.ongoingNotice")
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            RecordingTimeButton(title: "End", date: end, identifier: "recording.end.edit") { endpoint = .end }
+        }
+    }
+}
+
+private struct RecordingTimeButton: View {
+    let title: String
+    let date: Date
+    let identifier: String
+    let action: () -> Void
+    @ScaledMetric(relativeTo: .title2) private var size = 24
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(title.uppercased()).font(.caption.weight(.bold)).foregroundStyle(CoachColor.muted)
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    Text(date.formatted(date: .omitted, time: .shortened))
+                        .font(.system(size: size, weight: .bold, design: .rounded))
+                        .monospacedDigit()
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                    Image(systemName: "chevron.down").font(.caption2.weight(.semibold))
+                }
+                .foregroundStyle(CoachColor.ink)
+            }
+            .frame(maxWidth: .infinity, minHeight: 56, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(title) time")
+        .accessibilityValue(date.formatted(date: .complete, time: .shortened))
+        .accessibilityHint("Opens the time and date editor")
+        .accessibilityIdentifier(identifier)
+    }
+}
+
+private struct RecordingTimeEditor: View {
+    let title: String
+    let identifier: String
+    let feedback: (Date) -> String
+    let validation: (Date) -> String?
+    let onDone: (Date) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var selection: Date
+
+    init(title: String, identifier: String, initialValue: Date,
+         feedback: @escaping (Date) -> String, validation: @escaping (Date) -> String?,
+         onDone: @escaping (Date) -> Void) {
+        self.title = title
+        self.identifier = identifier
+        self.feedback = feedback
+        self.validation = validation
+        self.onDone = onDone
+        _selection = State(initialValue: initialValue)
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    DatePicker("Date", selection: $selection, displayedComponents: .date)
+                        .datePickerStyle(.compact)
+                        .accessibilityIdentifier("\(identifier).date")
+                    DatePicker(title, selection: $selection, displayedComponents: .hourAndMinute)
+                        .datePickerStyle(.wheel)
+                        .labelsHidden()
+                        .accessibilityLabel(title)
+                        .accessibilityIdentifier("\(identifier).time")
+                        .frame(maxWidth: .infinity)
+                    Text(feedback(selection)).font(.subheadline.weight(.semibold))
+                        .foregroundStyle(CoachColor.purpleDeep)
+                        .accessibilityIdentifier("recording.editor.feedback")
+                    if let message = validation(selection) {
+                        RecordingValidation(message: message)
+                    }
+                }
+                .padding(16)
+            }
+            .background(CoachColor.background)
+            .navigationTitle(title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }.accessibilityIdentifier("recording.time.cancel")
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { onDone(selection); dismiss() }
+                        .fontWeight(.semibold)
+                        .accessibilityIdentifier("recording.time.done")
+                }
+            }
+        }
+        .tint(CoachColor.purpleDeep)
+    }
+}
+
+struct RecordingValidation: View {
+    let message: String
+    var body: some View {
+        Label {
+            Text(message).accessibilityIdentifier("recording.validation")
+        } icon: {
+            Image(systemName: "exclamationmark.circle")
+        }
+            .font(.caption)
+            .foregroundStyle(CoachColor.red)
+            .fixedSize(horizontal: false, vertical: true)
     }
 }
 
@@ -42,13 +280,32 @@ struct RecordingSaveButton: View {
             Text(title)
                 .font(.headline)
                 .multilineTextAlignment(.center)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity, minHeight: 22)
+                .padding(.vertical, 14)
+                .foregroundStyle(enabled ? Color.white : CoachColor.muted)
+                .background(Capsule().fill(enabled ? CoachColor.purpleDeep : CoachColor.purple.opacity(0.12)))
         }
-        .buttonStyle(.borderedProminent)
-        .tint(RecordingStyle.accent)
+        .buttonStyle(.plain)
         .disabled(!enabled)
         .accessibilityIdentifier("recording.save")
-        .listRowBackground(Color.clear)
+    }
+}
+
+// Kept temporarily for the nap/night screen during the first implementation commit.
+struct RecordingDateField: View {
+    let title: String
+    let identifier: String
+    @Binding var date: Date
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title).font(.subheadline.weight(.semibold))
+            DatePicker("\(title) date", selection: $date, displayedComponents: .date)
+                .labelsHidden().accessibilityLabel("\(title) date")
+                .accessibilityIdentifier("\(identifier).date")
+            DatePicker("\(title) time", selection: $date, displayedComponents: .hourAndMinute)
+                .labelsHidden().accessibilityLabel("\(title) time")
+                .accessibilityIdentifier("\(identifier).time")
+        }
+        .datePickerStyle(.compact)
     }
 }
