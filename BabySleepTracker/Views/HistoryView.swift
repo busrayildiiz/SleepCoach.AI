@@ -368,18 +368,12 @@ struct HistoryView: View {
 
         // MARK: - Persist helper (bar tıklama sonrası edit için)
 
-        private func upsertRecord(_ record: SleepRecord) {
-            if let idx = records.firstIndex(where: { $0.id == record.id }) {
-                records[idx] = record
-            } else {
-                records.append(record)
-            }
-            if let encoded = try? JSONEncoder().encode(records) {
-                UserDefaults.standard.set(encoded, forKey: "sleepRecords")
-                NotificationCenter.default.post(name: .sleepRecordsDidChange, object: nil)
-            }
+        private func upsertRecord(_ record: SleepRecord) -> Bool {
+            guard SleepRecordPersistence().saveRecording(record) else { return false }
+            loadRecords()
+            return true
         }
-    
+
     // MARK: - Yesterday comparison
 
     private var yesterdayNetSleep: Int {
@@ -506,13 +500,27 @@ struct HistoryView: View {
                 loadRecords()
             }
             .sheet(item: $selectedTimelineRecord) { record in
-                            AddRecordView(
-                                defaultDate: record.date,
-                                editingRecord: record,
-                                vm: AddRecordViewModel(),
-                                onSave: { updated in upsertRecord(updated) }
-                            )
+                if record.kind == .break {
+                    if let parent = records.first(where: { $0.id == record.parentNapID && $0.kind != .break }) {
+                        AddBreakView(parent: parent, editingBreak: record,
+                                     existingBreaks: records.filter { $0.parentNapID == parent.id && $0.kind == .break },
+                                     onSave: upsertRecord)
+                    } else {
+                        NavigationStack {
+                            Text("The original sleep session is no longer available.")
+                                .padding()
+                                .toolbar {
+                                    ToolbarItem(placement: .cancellationAction) {
+                                        Button("Cancel") { selectedTimelineRecord = nil }
+                                    }
+                                }
                         }
+                    }
+                } else {
+                    AddRecordView(defaultDate: record.date, editingRecord: record,
+                                  vm: AddRecordViewModel(), onSave: upsertRecord)
+                }
+            }
         }
     }
 

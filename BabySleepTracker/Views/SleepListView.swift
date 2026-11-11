@@ -37,7 +37,7 @@ struct SleepListView: View {
 
     enum ActiveSheet: Identifiable {
         case addSleep(editing: SleepRecord?, defaultDate: Date)
-        case addBreak(napID: UUID, date: Date, napDuration: Int)
+        case addBreak(parentID: UUID)
         case dayDetail(SelectedDay)
         case wakeTime
 
@@ -45,7 +45,7 @@ struct SleepListView: View {
             switch self {
             case .addSleep(let editing, let date):
                 return "addSleep-\(editing?.id.uuidString ?? "new")-\(date.timeIntervalSince1970)"
-            case .addBreak(let id, _, _):
+            case .addBreak(let id):
                 return "addBreak-\(id)"
             case .dayDetail(let day):
                 return "dayDetail-\(day.id)"
@@ -112,13 +112,10 @@ struct SleepListView: View {
 
     // MARK: - Persistence
 
-    private func upsert(_ record: SleepRecord) {
-        if let index = records.firstIndex(where: { $0.id == record.id }) {
-            records[index] = record
-        } else {
-            records.append(record)
-        }
-        saveRecords()
+    private func upsert(_ record: SleepRecord) -> Bool {
+        guard sleepRecordPersistence.saveRecording(record) else { return false }
+        loadRecords()
+        return true
     }
     private func saveRecords() {
         sleepRecordPersistence.save(records)
@@ -440,15 +437,11 @@ struct SleepListView: View {
                 todayWakeTime: todayWakeRecord?.wakeTime,
                 defaultWakeTime: defaultWakeTime,
                 onRecordUpsert: upsert,
-                onBreakSaved: { newBreak in
-                    records.append(newBreak)
-                    saveRecords()
-                },
+                onBreakSaved: upsert,
                 onDeleteRecords: { ids in
                     records.removeAll { ids.contains($0.id) }
                     saveRecords()
                 },
-                onSelectSheet: { activeSheet = $0 },
                 onWakeTimeSave: saveWakeTime
             )
         }
@@ -634,6 +627,8 @@ struct SleepListView: View {
                         )
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Today’s sleep records")
+                .accessibilityIdentifier("sleep.todayRecords")
             }
 
             HStack(spacing: 10) {
@@ -720,6 +715,7 @@ struct SleepListView: View {
                                 premiumDayRow(group: group, rank: index)
                             }
                             .buttonStyle(CardPressButtonStyle())
+                            .accessibilityIdentifier("sleep.dayRecords.\(index)")
                             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                                 Button(role: .destructive) { deleteDay(group.day) } label: {
                                     Label("Delete", systemImage: "trash")
@@ -945,7 +941,10 @@ struct SleepListView: View {
             ongoingNight: ongoingSleep,
             expectedWakeTime: expectedWake,
             nextSleepTime: nextSleepAfterCurrent,
-            isEstimated: isEstimated
+            isEstimated: isEstimated,
+            onAddBreak: ongoingSleep.map { parent in
+                { activeSheet = .addBreak(parentID: parent.id) }
+            }
         )
     }
 

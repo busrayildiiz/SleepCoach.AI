@@ -110,7 +110,14 @@ final class SleepCoachOrchestrator: ObservableObject {
     
     // MARK: - Singleton
 
-       static let shared = SleepCoachOrchestrator()
+       static let shared: SleepCoachOrchestrator = {
+           #if DEBUG && targetEnvironment(simulator)
+           if ProcessInfo.processInfo.environment["RECORDING_UI_TESTS"] == "1" {
+               return SleepCoachOrchestrator(llmAgent: RecordingUITestLLMAgent())
+           }
+           #endif
+           return SleepCoachOrchestrator()
+       }()
 
        // MARK: - Init
 
