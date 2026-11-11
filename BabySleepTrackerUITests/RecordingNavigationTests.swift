@@ -29,7 +29,9 @@ final class RecordingNavigationTests: XCTestCase {
         let disappeared = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "exists == false"), object: navigationBar
         )
-        XCTAssertEqual(XCTWaiter.wait(for: [disappeared], timeout: 5), .completed,
+        let result = XCTWaiter.wait(for: [disappeared], timeout: 5)
+        if result != .completed { print(XCUIApplication().debugDescription) }
+        XCTAssertEqual(result, .completed,
                        "Recording sheet did not close within 5 seconds.", file: file, line: line)
     }
 
@@ -42,6 +44,8 @@ final class RecordingNavigationTests: XCTestCase {
         app.buttons["recording.addSleep"].tap()
         let save = app.buttons["recording.save"]
         reveal(save, in: app)
+        XCTAssertTrue(save.isEnabled, app.staticTexts["recording.validation"].exists
+                      ? app.staticTexts["recording.validation"].label : "Save is disabled.")
         save.tap()
         waitForDismissal(of: app.navigationBars["Add Nap"])
         XCTAssertTrue(app.buttons["recording.addSleep"].waitForExistence(timeout: 5))
@@ -71,6 +75,8 @@ final class RecordingNavigationTests: XCTestCase {
         addBreak.tap()
         let save = app.buttons["recording.save"]
         reveal(save, in: app)
+        XCTAssertTrue(save.isEnabled, app.staticTexts["recording.validation"].exists
+                      ? app.staticTexts["recording.validation"].label : "Save is disabled.")
         save.tap()
         waitForDismissal(of: app.navigationBars["Add Awake Break"])
         let netSleep = app.staticTexts["sleep.netSleep.\(parentID)"]
