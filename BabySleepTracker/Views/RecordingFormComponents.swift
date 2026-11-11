@@ -1,10 +1,5 @@
 import SwiftUI
 
-// Compatibility for the nap/night screen while it adopts the shared layout.
-enum RecordingStyle {
-    static let accent = CoachColor.purpleDeep
-}
-
 private struct RecordingCompactHeightKey: EnvironmentKey {
     static let defaultValue = false
 }
@@ -291,21 +286,45 @@ struct RecordingSaveButton: View {
     }
 }
 
-// Kept temporarily for the nap/night screen during the first implementation commit.
-struct RecordingDateField: View {
-    let title: String
-    let identifier: String
-    @Binding var date: Date
+struct RecordingKindPicker: View {
+    @Binding var selection: SleepKind
+    @Environment(\.dynamicTypeSize) private var dynamicType
+    @ScaledMetric(relativeTo: .caption) private var size = 12
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(title).font(.subheadline.weight(.semibold))
-            DatePicker("\(title) date", selection: $date, displayedComponents: .date)
-                .labelsHidden().accessibilityLabel("\(title) date")
-                .accessibilityIdentifier("\(identifier).date")
-            DatePicker("\(title) time", selection: $date, displayedComponents: .hourAndMinute)
-                .labelsHidden().accessibilityLabel("\(title) time")
-                .accessibilityIdentifier("\(identifier).time")
+        Group {
+            if dynamicType.isAccessibilitySize {
+                VStack(spacing: 3) { choices }
+            } else {
+                HStack(spacing: 6) { choices }
+            }
         }
-        .datePickerStyle(.compact)
+        .padding(3)
+        .background(Capsule().fill(Color(.systemBackground)))
+        .overlay(Capsule().stroke(CoachColor.purple.opacity(0.12), lineWidth: 1))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("recording.kind")
+    }
+
+    @ViewBuilder private var choices: some View {
+        choice(.dayNap, title: "Nap", identifier: "recording.kind.nap")
+        choice(.nightSleep, title: "Night Sleep", identifier: "recording.kind.night")
+    }
+
+    private func choice(_ kind: SleepKind, title: String, identifier: String) -> some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.18)) { selection = kind }
+        } label: {
+            Label(title, systemImage: kind.icon)
+                .font(.system(size: size, weight: .bold, design: .rounded))
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .padding(.horizontal, 8)
+                .foregroundStyle(selection == kind ? CoachColor.purpleDeep : CoachColor.muted)
+                .background(Capsule().fill(selection == kind ? CoachColor.purple.opacity(0.12) : Color.clear))
+                .overlay(Capsule().stroke(selection == kind ? CoachColor.purple.opacity(0.18) : Color.clear, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(selection == kind ? .isSelected : [])
+        .accessibilityIdentifier(identifier)
     }
 }

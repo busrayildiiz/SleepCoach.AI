@@ -30,67 +30,30 @@ struct AddRecordView: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section {
-                    Picker("Sleep type", selection: $vm.kind) {
-                        Text("Nap").tag(SleepKind.dayNap)
-                        Text("Night Sleep").tag(SleepKind.nightSleep)
+            RecordingScreen(title: title,
+                            saveTitle: editingRecord == nil ? "Save Sleep" : "Save Changes",
+                            saveEnabled: !submission.isSubmitted && draft.validationMessage(now: Date()) == nil,
+                            onCancel: { dismiss() }, onSave: save) {
+                RecordingKindPicker(selection: $vm.kind)
+                RecordingIntervalCard(title: "Sleep interval", start: $draft.start, end: $draft.end,
+                                      ongoing: $draft.isOngoing, feedback: feedback, validation: validation)
+                SleepRecordingFeedback(draft: draft, editingRecord: editingRecord, breaks: existingBreaks)
+                if let parent = editingRecord {
+                    Button { breakParent = parent } label: {
+                        Label("Add Awake Break", systemImage: "plus")
+                            .font(.subheadline.weight(.semibold))
+                            .padding(.vertical, 8)
                     }
-                    .pickerStyle(.inline)
-                    .accessibilityIdentifier("recording.kind")
-                    Toggle("Still Sleeping", isOn: $draft.isOngoing)
-                        .accessibilityIdentifier("recording.ongoing")
-                } footer: {
-                    Text("Still Sleeping keeps this session open until you explicitly record its end.")
+                    .accessibilityIdentifier("recording.addBreak")
                 }
-                Section("When") {
-                    RecordingDateField(title: "Start", identifier: "recording.start", date: $draft.start)
-                    if !draft.isOngoing {
-                        RecordingDateField(title: "End", identifier: "recording.end", date: $draft.end)
-                    }
-                }
-                Section("Sleep Summary") {
-                    if draft.isOngoing {
-                        Text("Still sleeping · no end recorded")
-                    } else {
-                        Text("Duration: \(TimeFormat.minutes(max(0, Int(draft.end.timeIntervalSince(draft.start) / 60))))")
-                    }
-                    if let parent = editingRecord {
-                        Text("Saved net sleep: \(TimeFormat.minutes(parent.totalMinutes(breaks: existingBreaks)))")
-                            .accessibilityIdentifier("recording.netSleep")
-                        Button("Add Awake Break") { breakParent = parent }
-                            .accessibilityIdentifier("recording.addBreak")
-                    }
-                    if let message = draft.validationMessage(now: Date()) {
-                        Text(message).foregroundStyle(.red)
-                            .accessibilityIdentifier("recording.validation")
-                    }
-                }
-                Section {
-                    RecordingSaveButton(title: editingRecord == nil ? "Save Sleep" : "Save Changes",
-                                        enabled: !submission.isSubmitted && draft.validationMessage(now: Date()) == nil) {
-                        submission.submit(draft.record(kind: vm.kind, editing: editingRecord, now: Date()),
-                                          save: { record in
-                                              let saved = onSave(record)
-                                              saveFailed = !saved
-                                              return saved
-                                          }, dismiss: { dismiss() })
-                    }
+                if let message = draft.validationMessage(now: Date()) {
+                    RecordingValidation(message: message)
                 }
             }
-            .scrollContentBackground(.hidden)
-            .background(Color(.systemGroupedBackground))
-            .navigationTitle(title)
-            .navigationBarTitleDisplayMode(.inline)
             .alert("Could Not Save", isPresented: $saveFailed) {
                 Button("OK", role: .cancel) { }
             } message: {
                 Text("The sleep session may have changed or this interval is already recorded. Your changes are still here; review the record and try again.")
-            }
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }.accessibilityIdentifier("recording.cancel")
-                }
             }
             .onAppear(perform: loadBreaks)
             .onReceive(NotificationCenter.default.publisher(for: .sleepRecordsDidChange)) { _ in loadBreaks() }
@@ -98,12 +61,68 @@ struct AddRecordView: View {
                 AddBreakView(parent: parent, existingBreaks: existingBreaks, onSave: onSave)
             }
         }
-        .tint(RecordingStyle.accent)
+        .tint(CoachColor.purpleDeep)
+    }
+
+    private func preview(start: Date, end: Date) -> SleepRecordingDraft {
+        var preview = draft
+        preview.start = start
+        preview.end = end
+        return preview
+    }
+
+    private func feedback(start: Date, end: Date) -> String {
+        let minutes = max(0, Int((draft.isOngoing ? Date() : end).timeIntervalSince(start) / 60))
+        return "\(draft.isOngoing ? "Elapsed so far" : "Duration"): \(TimeFormat.minutes(minutes))"
+    }
+
+    private func validation(start: Date, end: Date) -> String? {
+        preview(start: start, end: end).validationMessage(now: Date())
+    }
+
+    private func save() {
+        submission.submit(draft.record(kind: vm.kind, editing: editingRecord, now: Date()), save: { record in
+            let saved = onSave(record)
+            saveFailed = !saved
+            return saved
+        }, dismiss: { dismiss() })
     }
 
     private func loadBreaks() {
         existingBreaks = (SleepRecordPersistence().load() ?? []).filter {
             $0.kind == .break && $0.parentNapID == editingRecord?.id
+        }
+    }
+}
+
+private struct SleepRecordingFeedback: View {
+    let draft: SleepRecordingDraft
+    let editingRecord: SleepRecord?
+    let breaks: [SleepRecord]
+    @ScaledMetric(relativeTo: .title2) private var size = 24
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 60)) { context in
+            let end = draft.isOngoing ? context.date : draft.end
+            let minutes = max(0, Int(end.timeIntervalSince(draft.start) / 60))
+            VStack(alignment: .leading, spacing: 6) {
+                RecordingSectionLabel(title: draft.isOngoing ? "Elapsed so far" : "Duration")
+                Text(TimeFormat.minutes(minutes))
+                    .font(.system(size: size, weight: .bold, design: .rounded))
+                    .foregroundStyle(CoachColor.purpleDeep)
+                    .monospacedDigit()
+                    .accessibilityIdentifier("recording.duration")
+                if draft.isOngoing {
+                    Text("Still sleeping · no end recorded")
+                        .font(.caption).foregroundStyle(CoachColor.muted)
+                }
+                if let editingRecord {
+                    Text("Saved net sleep: \(TimeFormat.minutes(editingRecord.totalMinutes(breaks: breaks, at: context.date)))")
+                        .font(.caption).foregroundStyle(CoachColor.muted)
+                        .accessibilityIdentifier("recording.netSleep")
+                }
+            }
+            .padding(.vertical, 8)
         }
     }
 }
