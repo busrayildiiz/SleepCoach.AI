@@ -17,11 +17,16 @@ final class RecordingNavigationTests: XCTestCase {
 
     private func reveal(_ element: XCUIElement, in app: XCUIApplication) {
         for _ in 0..<8 {
-            if element.exists && element.isHittable { return }
+            if element.exists && element.isHittable {
+                let form = app.collectionViews.containing(.any, identifier: element.identifier).firstMatch
+                let window = app.windows.firstMatch.frame
+                let viewport = form.exists ? form.frame.intersection(window) : window
+                // A partially visible button can be hittable while its tap center is offscreen.
+                if !element.frame.isEmpty && viewport.contains(element.frame) { return }
+            }
             app.swipeUp()
         }
-        XCTAssertTrue(element.exists)
-        XCTAssertTrue(element.isHittable)
+        XCTFail("Could not fully reveal the control within eight scroll gestures.")
     }
 
     private func waitForDismissal(of navigationBar: XCUIElement,
