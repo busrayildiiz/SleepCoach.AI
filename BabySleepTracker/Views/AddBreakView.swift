@@ -40,6 +40,7 @@ struct AddBreakView: View {
                 Text("The sleep session may have changed or this interval is already recorded. Your changes are still here; review the record and try again.")
             }
         }
+        .tint(CoachColor.purpleDeep)
     }
 
     private var parentContext: some View {
@@ -57,7 +58,9 @@ struct AddBreakView: View {
 
     private var parentDates: String {
         let start = draft.parent.date.formatted(date: .abbreviated, time: .shortened)
-        guard let end = draft.parent.observedEnd else { return start + " · still sleeping" }
+        guard let end = draft.parent.observedEnd else {
+            return start + (draft.parent.isOngoing ? " · still sleeping" : " · end not recorded")
+        }
         let sameDay = Calendar.current.isDate(draft.parent.date, inSameDayAs: end)
         return start + " → " + end.formatted(date: sameDay ? .omitted : .abbreviated, time: .shortened)
     }

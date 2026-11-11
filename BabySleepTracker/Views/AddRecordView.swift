@@ -46,6 +46,7 @@ struct AddRecordView: View {
                         Label("Add Awake Break", systemImage: "plus")
                             .font(.subheadline.weight(.semibold))
                             .padding(.vertical, 8)
+                            .frame(minHeight: 44, alignment: .leading)
                     }
                     .accessibilityIdentifier("recording.addBreak")
                 }
