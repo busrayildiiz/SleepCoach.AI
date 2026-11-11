@@ -25,10 +25,10 @@ struct AddBreakView: View {
                 parentContext
                 RecordingIntervalCard(title: "Awake interval", start: $draft.start, end: $draft.end,
                                       feedback: feedback, validation: validation)
-                AwakeBreakFeedback(draft: draft, existing: existingBreaks)
                 if let message = draft.validationMessage(existing: existingBreaks, now: Date()) {
                     RecordingValidation(message: message)
                 }
+                AwakeBreakFeedback(draft: draft, existing: existingBreaks)
                 Text("Awake time is subtracted only from this sleep session. Its start and end stay unchanged.")
                     .font(.caption)
                     .foregroundStyle(CoachColor.muted)
@@ -135,11 +135,19 @@ private struct AwakeBreakFeedback: View {
             Text("Awake break · \(TimeFormat.minutes(max(0, Int(draft.end.timeIntervalSince(draft.start) / 60))))")
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(CoachColor.ink)
-            Label("Proposed awake", systemImage: "circle.dashed")
-                .font(.caption).foregroundStyle(CoachColor.muted)
+            Label {
+                Text("Proposed awake").foregroundStyle(CoachColor.muted)
+            } icon: {
+                Image(systemName: "circle.dashed").foregroundStyle(CoachColor.sun)
+            }
+            .font(.caption)
             if existing.contains(where: { $0.parentNapID == draft.parent.id && $0.id != draft.editing?.id }) {
-                Label("Existing awake", systemImage: "circle.fill")
-                    .font(.caption).foregroundStyle(CoachColor.muted)
+                Label {
+                    Text("Existing awake").foregroundStyle(CoachColor.muted)
+                } icon: {
+                    Image(systemName: "circle.fill").foregroundStyle(CoachColor.sun.opacity(0.42))
+                }
+                .font(.caption)
             }
         }
         .fixedSize(horizontal: false, vertical: true)

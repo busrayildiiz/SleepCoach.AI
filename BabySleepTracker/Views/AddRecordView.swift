@@ -37,6 +37,9 @@ struct AddRecordView: View {
                 RecordingKindPicker(selection: $vm.kind)
                 RecordingIntervalCard(title: "Sleep interval", start: $draft.start, end: $draft.end,
                                       ongoing: $draft.isOngoing, feedback: feedback, validation: validation)
+                if let message = draft.validationMessage(now: Date()) {
+                    RecordingValidation(message: message)
+                }
                 SleepRecordingFeedback(draft: draft, editingRecord: editingRecord, breaks: existingBreaks)
                 if let parent = editingRecord {
                     Button { breakParent = parent } label: {
@@ -45,9 +48,6 @@ struct AddRecordView: View {
                             .padding(.vertical, 8)
                     }
                     .accessibilityIdentifier("recording.addBreak")
-                }
-                if let message = draft.validationMessage(now: Date()) {
-                    RecordingValidation(message: message)
                 }
             }
             .alert("Could Not Save", isPresented: $saveFailed) {

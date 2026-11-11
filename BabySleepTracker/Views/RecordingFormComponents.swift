@@ -93,6 +93,7 @@ struct RecordingIntervalCard: View {
     let feedback: (Date, Date) -> String
     let validation: (Date, Date) -> String?
     @Environment(\.dynamicTypeSize) private var dynamicType
+    @Environment(\.recordingCompactHeight) private var compactHeight
     @State private var endpoint: RecordingEndpoint?
 
     private var isOngoing: Bool { ongoing?.wrappedValue ?? false }
@@ -137,7 +138,7 @@ struct RecordingIntervalCard: View {
                     if endpoint == .start { start = value } else { end = value }
                 }
             )
-            .presentationDetents([.medium, .large])
+            .presentationDetents(dynamicType.isAccessibilitySize || compactHeight ? [.large] : [.medium, .large])
             .presentationDragIndicator(.visible)
         }
     }

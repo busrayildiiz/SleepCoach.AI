@@ -13,9 +13,15 @@ concurrency:
 
 jobs:
   build-and-test:
+    name: ${{ matrix.simulator == 'compact' && 'build-and-test (compact)' || 'build-and-test' }}
     runs-on: macos-15
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        simulator: ${{ fromJSON(github.head_ref == 'feat/recording-experience-redesign' && '["standard","compact"]' || '["standard"]') }}
     env:
+      SIMULATOR_CLASS: ${{ matrix.simulator }}
       DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
     defaults:
       run:
@@ -38,7 +44,10 @@ jobs:
 
           runtime = "com.apple.CoreSimulator.SimRuntime.iOS-" + os.environ["SIMULATOR_SDK_VERSION"].replace(".", "-")
           devices = json.load(sys.stdin)["devices"].get(runtime, [])
-          device = next((d for d in devices if d.get("isAvailable") and d["name"].startswith("iPhone")), None)
+          phones = [d for d in devices if d.get("isAvailable") and d["name"].startswith("iPhone")]
+          if os.environ["SIMULATOR_CLASS"] == "compact":
+              phones = [d for d in phones if d["name"] == "iPhone SE (3rd generation)"]
+          device = next(iter(phones), None)
           if device is None:
               sys.exit("No available iPhone simulator for " + runtime)
           print("Selected " + device["name"] + " (" + device["udid"] + ") on " + runtime)
@@ -73,11 +82,27 @@ jobs:
           DEVELOPMENT_TEAM=
           PROVISIONING_PROFILE_SPECIFIER=
 
-      - name: Upload failed test results
-        if: ${{ failure() }}
+      - name: Upload failed test results or recording review bundle
+        if: ${{ failure() || github.head_ref == 'feat/recording-experience-redesign' }}
         uses: actions/upload-artifact@v4
         with:
-          name: ios-test-results
+          name: ${{ matrix.simulator == 'compact' && 'ios-test-results-compact' || 'ios-test-results' }}
           path: ${{ runner.temp }}/TestResults.xcresult
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Export simulator screenshots for recording design review
+        if: ${{ !cancelled() && github.head_ref == 'feat/recording-experience-redesign' }}
+        run: >-
+          xcrun xcresulttool export attachments
+          --path "$RUNNER_TEMP/TestResults.xcresult"
+          --output-path "$RUNNER_TEMP/RecordingScreenshots"
+
+      - name: Upload recording simulator screenshots
+        if: ${{ always() && github.head_ref == 'feat/recording-experience-redesign' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: recording-screenshots-${{ matrix.simulator }}
+          path: ${{ runner.temp }}/RecordingScreenshots
           if-no-files-found: warn
           retention-days: 7
