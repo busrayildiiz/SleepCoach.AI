@@ -47,9 +47,7 @@ struct ContentView: View {
                 defaultDate: Date(),
                 vm: AddRecordViewModel(),
                 onSave: { newRecord in
-                    let saved = saveRecordFromTabBar(newRecord)
-                    if saved { showAddSheet = false }
-                    return saved
+                    saveRecordFromTabBar(newRecord)
                 }
             )
         }
