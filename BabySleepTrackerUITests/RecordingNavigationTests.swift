@@ -4,10 +4,11 @@ import XCTest
 final class RecordingNavigationTests: XCTestCase {
     private let parentID = "11111111-1111-1111-1111-111111111111"
 
-    private func launch(accessibilitySize: Bool = false, appearance: String = "light") -> XCUIApplication {
+    private func launch(accessibilitySize: Bool = false, appearance: String = "light", referenceCapture: Bool = false) -> XCUIApplication {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchEnvironment["RECORDING_UI_TESTS"] = "1"
+        if referenceCapture { app.launchEnvironment["RECORDING_REFERENCE_SCREENSHOTS"] = "1" }
         app.launchArguments += ["-appAppearance", appearance]
         if accessibilitySize {
             app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
@@ -109,6 +110,12 @@ final class RecordingNavigationTests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Add Nap"].waitForExistence(timeout: 5))
         let start = app.buttons["recording.start.edit"]
         let original = try XCTUnwrap(start.value as? String)
+        XCTAssertFalse(app.switches["recording.ongoing"].exists)
+        app.buttons["recording.date.edit"].tap()
+        XCTAssertTrue(app.datePickers["recording.start.date"].waitForExistence(timeout: 5))
+        app.buttons["recording.time.cancel"].tap()
+        waitForDismissal(of: app.navigationBars["Start time"])
+        XCTAssertEqual(start.value as? String, original)
         start.tap()
         let picker = app.datePickers["recording.start.time"]
         XCTAssertTrue(picker.waitForExistence(timeout: 5))
@@ -157,8 +164,8 @@ final class RecordingNavigationTests: XCTestCase {
 
     func testRecordingVisualReviewInLightAndDarkAppearance() {
         for appearance in ["light", "dark"] {
-            let app = launch(appearance: appearance)
-            let day = app.buttons["sleep.dayRecords.0"]
+            let app = launch(appearance: appearance, referenceCapture: true)
+            let day = app.buttons["sleep.dayRecords.1"]
             reveal(day, in: app)
             day.tap()
             let awake = app.buttons["sleep.addBreak.\(parentID)"]
@@ -167,6 +174,11 @@ final class RecordingNavigationTests: XCTestCase {
             XCTAssertTrue(app.navigationBars["Add Awake Break"].waitForExistence(timeout: 5))
             XCTAssertTrue(app.buttons["recording.save"].isHittable)
             capture("recording-awake-\(appearance)", app: app)
+            app.buttons["recording.parent"].tap()
+            XCTAssertTrue(app.navigationBars["Sleep Session"].waitForExistence(timeout: 5))
+            app.buttons["recording.parent.done"].tap()
+            waitForDismissal(of: app.navigationBars["Sleep Session"])
+            XCTAssertTrue(app.navigationBars["Add Awake Break"].exists)
             app.buttons["recording.cancel"].tap()
             waitForDismissal(of: app.navigationBars["Add Awake Break"])
             app.buttons["Done"].tap()
