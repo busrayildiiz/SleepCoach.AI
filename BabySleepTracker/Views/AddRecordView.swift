@@ -139,7 +139,7 @@ private struct SleepRecordingFeedback: View {
     private var durationLabel: some View {
         HStack(spacing: 12) {
             Image(systemName: "clock")
-                .recordingFont(18, weight: .medium)
+                .recordingFont(20, weight: .medium)
                 .frame(width: 28, height: 28)
                 .background(Circle().fill(RecordingColor.accent.opacity(0.06)))
                 .accessibilityHidden(true)

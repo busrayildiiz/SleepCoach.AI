@@ -72,7 +72,7 @@ struct RecordingScreen<Content: View>: View {
     let saveEnabled: Bool
     let onCancel: () -> Void
     let onSave: () -> Void
-    var spacing: CGFloat = 32
+    var spacing: CGFloat = 34
     @ViewBuilder let content: () -> Content
 
     var body: some View {
@@ -81,13 +81,13 @@ struct RecordingScreen<Content: View>: View {
                 VStack(alignment: .leading, spacing: spacing, content: content)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 16)
-                    .padding(.top, 20)
+                    .padding(.top, 28)
                     .padding(.bottom, 20)
             }
             .scrollDismissesKeyboard(.interactively)
             .environment(\.recordingCompactHeight, geometry.size.height < 520)
         }
-        .background(RecordingColor.background)
+        .background(RecordingColor.background.ignoresSafeArea())
         .safeAreaInset(edge: .bottom, spacing: 0) {
             RecordingSaveButton(title: saveTitle, enabled: saveEnabled, action: onSave)
                 .padding(.horizontal, 20)
@@ -97,8 +97,7 @@ struct RecordingScreen<Content: View>: View {
         }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
-        .toolbarBackground(RecordingColor.background, for: .navigationBar)
-        .toolbarBackground(.visible, for: .navigationBar)
+        .toolbarBackground(.hidden, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
                 Button("Cancel", action: onCancel)
@@ -178,7 +177,7 @@ struct RecordingIntervalCard: View {
             if style == .sleep {
                 Button { endpoint = .start } label: {
                     HStack(spacing: 14) {
-                        Image(systemName: "calendar").recordingFont(18, weight: .medium)
+                        Image(systemName: "calendar").recordingFont(20, weight: .medium)
                             .foregroundStyle(RecordingColor.secondary)
                         Text(dateContext).recordingFont(14, weight: .semibold)
                             .foregroundStyle(RecordingColor.ink)
@@ -196,7 +195,7 @@ struct RecordingIntervalCard: View {
                 .accessibilityValue(dateContext)
                 .accessibilityHint("Opens the date and time editor")
                 .accessibilityIdentifier("recording.date.edit")
-                Divider().overlay(RecordingColor.border)
+                Rectangle().fill(RecordingColor.border).frame(height: 1).accessibilityHidden(true)
             }
             if let ongoing {
                 Toggle("Still Sleeping", isOn: ongoing)
@@ -219,7 +218,7 @@ struct RecordingIntervalCard: View {
                 }
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 16)
+            .padding(.vertical, style == .sleep ? 19 : 18)
         }
         .background(RecordingSurface())
         .sheet(item: $endpoint) { endpoint in
@@ -395,7 +394,7 @@ struct RecordingSaveButton: View {
                 .recordingFont(16, weight: .semibold)
                 .multilineTextAlignment(.center)
                 .padding(.vertical, 14)
-                .frame(maxWidth: .infinity, minHeight: 50)
+                .frame(maxWidth: .infinity, minHeight: 52)
                 .foregroundStyle(enabled ? Color.white : RecordingColor.secondary)
                 .background(Capsule().fill(enabled ? RecordingColor.accent : RecordingColor.inset))
         }
@@ -432,8 +431,10 @@ struct RecordingKindPicker: View {
         Button {
             withAnimation(.easeInOut(duration: 0.18)) { selection = kind }
         } label: {
-            Label(title, systemImage: icon)
-                .recordingFont(14, weight: selection == kind ? .semibold : .medium)
+            HStack(spacing: 8) {
+                Image(systemName: icon).recordingFont(20)
+                Text(title).recordingFont(14, weight: selection == kind ? .semibold : .medium)
+            }
                 .frame(maxWidth: .infinity, minHeight: 44)
                 .padding(.horizontal, 4)
                 .foregroundStyle(selection == kind ? RecordingColor.accent : RecordingColor.secondary)

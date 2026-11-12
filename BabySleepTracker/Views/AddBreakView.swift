@@ -77,7 +77,7 @@ struct AddBreakView: View {
                         .recordingFont(15, weight: .semibold)
                         .foregroundStyle(RecordingColor.ink)
                     Text(parentDates)
-                        .recordingFont(12)
+                        .recordingFont(13)
                         .foregroundStyle(RecordingColor.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -86,7 +86,7 @@ struct AddBreakView: View {
                     .foregroundStyle(RecordingColor.secondary)
             }
             .padding(16)
-            .frame(maxWidth: .infinity, minHeight: 72, alignment: .leading)
+            .frame(maxWidth: .infinity, minHeight: 74, alignment: .leading)
             .background(RecordingSurface())
             .contentShape(Rectangle())
         }
@@ -157,7 +157,7 @@ private struct AwakeBreakFeedback: View {
             RecordingCard(padding: 20) {
                 if let presentation, !dynamicType.isAccessibilitySize {
                     ViewThatFits(in: .horizontal) {
-                        ringSummary(presentation, net: net, proposed: proposed != nil, diameter: 140)
+                        ringSummary(presentation, net: net, proposed: proposed != nil, diameter: 144)
                         ringSummary(presentation, net: net, proposed: proposed != nil, diameter: 112)
                     }
                 } else {
@@ -187,9 +187,9 @@ private struct AwakeBreakFeedback: View {
 
     private func summaryValue(_ title: String, minutes: Int, color: Color, identifier: String) -> some View {
         HStack(alignment: .top, spacing: 9) {
-            Circle().fill(color).frame(width: 9, height: 9).padding(.top, 4).accessibilityHidden(true)
+            Circle().fill(color).frame(width: 10, height: 10).padding(.top, 4).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 5) {
-                Text(title).recordingFont(12).foregroundStyle(RecordingColor.secondary)
+                Text(title).recordingFont(13).foregroundStyle(RecordingColor.secondary)
                 Text(RecordingFormat.duration(minutes))
                     .recordingFont(20, weight: .semibold, rounded: true)
                     .foregroundStyle(RecordingColor.ink)

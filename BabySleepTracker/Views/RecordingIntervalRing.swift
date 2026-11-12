@@ -62,7 +62,7 @@ struct RecordingIntervalPresentation {
 
 struct RecordingIntervalRing: View {
     let presentation: RecordingIntervalPresentation
-    var diameter: CGFloat = 140
+    var diameter: CGFloat = 144
 
     var body: some View {
         ZStack {
