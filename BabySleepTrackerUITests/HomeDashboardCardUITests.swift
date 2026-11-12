@@ -60,7 +60,7 @@ final class HomeDashboardCardUITests: XCTestCase {
     func testLikelyNapAndNightVisualFixtures() {
         for (scenario, label) in [("first-nap", "LIKELY FIRST NAP"), ("night", "LIKELY NIGHT SLEEP")] {
             let app = launch(scenario)
-            let summary = app.descendants(matching: .any)["home.sleep.summary"].firstMatch
+            let summary = app.descendants(matching: .any).matching(identifier: "home.sleep.summary").firstMatch
             XCTAssertTrue(summary.waitForExistence(timeout: 5))
             XCTAssertTrue(summary.label.contains(label), summary.label)
             XCTAssertTrue(summary.label.contains("estimated"))
@@ -70,7 +70,7 @@ final class HomeDashboardCardUITests: XCTestCase {
     }
     func testConfirmedSessionPreservesAddBreakNavigation() {
         let app = launch("confirmed")
-        let summary = app.descendants(matching: .any)["home.sleep.summary"].firstMatch
+        let summary = app.descendants(matching: .any).matching(identifier: "home.sleep.summary").firstMatch
         XCTAssertTrue(summary.waitForExistence(timeout: 5))
         XCTAssertTrue(summary.label.contains("LIVE NIGHT SLEEP"))
         screenshot("confirmed-ongoing", app: app)
