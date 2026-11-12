@@ -31,16 +31,22 @@ struct AddRecordView: View {
     var body: some View {
         NavigationStack {
             RecordingScreen(title: title,
-                            saveTitle: editingRecord == nil ? "Save Sleep" : "Save Changes",
+                            saveTitle: editingRecord == nil ? (vm.kind == .nightSleep ? "Save Night Sleep" : "Save Nap") : "Save Changes",
                             saveEnabled: !submission.isSubmitted && draft.validationMessage(now: Date()) == nil,
-                            onCancel: { dismiss() }, onSave: save) {
+                            onCancel: { dismiss() }, onSave: save, spacing: 28) {
                 RecordingKindPicker(selection: $vm.kind)
-                RecordingIntervalCard(title: "Sleep interval", start: $draft.start, end: $draft.end,
-                                      ongoing: $draft.isOngoing, feedback: feedback, validation: validation)
-                if let message = draft.validationMessage(now: Date()) {
-                    RecordingValidation(message: message)
+                    .padding(.horizontal, 2)
+                    .padding(.top, 8)
+                VStack(spacing: 24) {
+                    RecordingIntervalCard(start: $draft.start, end: $draft.end,
+                                          ongoing: vm.kind == .nightSleep || draft.isOngoing ? $draft.isOngoing : nil,
+                                          feedback: feedback, validation: validation)
+                    if let message = draft.validationMessage(now: Date()) {
+                        RecordingValidation(message: message)
+                    }
+                    SleepRecordingFeedback(draft: draft, kind: vm.kind, editingRecord: editingRecord, breaks: existingBreaks)
                 }
-                SleepRecordingFeedback(draft: draft, editingRecord: editingRecord, breaks: existingBreaks)
+                .padding(.horizontal, -4)
                 if let parent = editingRecord {
                     Button { breakParent = parent } label: {
                         Label("Add Awake Break", systemImage: "plus")
@@ -62,7 +68,7 @@ struct AddRecordView: View {
                 AddBreakView(parent: parent, existingBreaks: existingBreaks, onSave: onSave)
             }
         }
-        .tint(CoachColor.purpleDeep)
+        .tint(RecordingColor.accent)
     }
 
     private func preview(start: Date, end: Date) -> SleepRecordingDraft {
@@ -98,32 +104,57 @@ struct AddRecordView: View {
 
 private struct SleepRecordingFeedback: View {
     let draft: SleepRecordingDraft
+    let kind: SleepKind
     let editingRecord: SleepRecord?
     let breaks: [SleepRecord]
-    @ScaledMetric(relativeTo: .title2) private var size = 24
+    @Environment(\.dynamicTypeSize) private var dynamicType
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 60)) { context in
             let end = draft.isOngoing ? context.date : draft.end
             let minutes = max(0, Int(end.timeIntervalSince(draft.start) / 60))
-            VStack(alignment: .leading, spacing: 6) {
-                RecordingSectionLabel(title: draft.isOngoing ? "Elapsed so far" : "Duration")
-                Text(TimeFormat.minutes(minutes))
-                    .font(.system(size: size, weight: .bold, design: .rounded))
-                    .foregroundStyle(CoachColor.purpleDeep)
-                    .monospacedDigit()
-                    .accessibilityIdentifier("recording.duration")
-                if draft.isOngoing {
-                    Text("Still sleeping · no end recorded")
-                        .font(.caption).foregroundStyle(CoachColor.muted)
+            VStack(alignment: .leading, spacing: 12) {
+                Group {
+                    if dynamicType.isAccessibilitySize {
+                        VStack(alignment: .leading, spacing: 10) { durationLabel; value(minutes) }
+                    } else {
+                        HStack(spacing: 12) { durationLabel; Spacer(minLength: 0); value(minutes) }
+                    }
                 }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 12)
+                .frame(maxWidth: .infinity, minHeight: 56, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 16).fill(RecordingColor.inset))
                 if let editingRecord {
-                    Text("Saved net sleep: \(TimeFormat.minutes(editingRecord.totalMinutes(breaks: breaks, at: context.date)))")
-                        .font(.caption).foregroundStyle(CoachColor.muted)
+                    Text("Saved net sleep: \(RecordingFormat.duration(editingRecord.totalMinutes(breaks: breaks, at: context.date)))")
+                        .recordingFont(12).foregroundStyle(RecordingColor.secondary)
                         .accessibilityIdentifier("recording.netSleep")
                 }
             }
-            .padding(.vertical, 8)
+            .padding(10)
+            .background(RecordingSurface())
         }
+    }
+
+    private var durationLabel: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "clock")
+                .recordingFont(18, weight: .medium)
+                .frame(width: 28, height: 28)
+                .background(Circle().fill(RecordingColor.accent.opacity(0.06)))
+                .accessibilityHidden(true)
+            Text(draft.isOngoing ? "Elapsed so far" : (kind == .nightSleep ? "Sleep duration" : "Nap duration"))
+                .recordingFont(14)
+        }
+        .foregroundStyle(RecordingColor.accent)
+    }
+
+    private func value(_ minutes: Int) -> some View {
+        Text(RecordingFormat.duration(minutes))
+            .recordingFont(22, weight: .semibold, rounded: true)
+            .foregroundStyle(RecordingColor.accent)
+            .monospacedDigit()
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityIdentifier("recording.duration")
     }
 }

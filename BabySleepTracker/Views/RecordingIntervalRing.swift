@@ -62,43 +62,42 @@ struct RecordingIntervalPresentation {
 
 struct RecordingIntervalRing: View {
     let presentation: RecordingIntervalPresentation
+    var diameter: CGFloat = 140
 
     var body: some View {
         ZStack {
             ForEach(presentation.segments) { segment in
                 Circle()
                     .trim(from: CGFloat(segment.startFraction), to: CGFloat(segment.endFraction))
-                    .stroke(color(segment.kind), style: StrokeStyle(
-                        lineWidth: 8, lineCap: .butt,
-                        dash: segment.kind == .proposedAwake ? [3, 2] : []
-                    ))
+                    .stroke(style(segment.kind), style: StrokeStyle(lineWidth: 12, lineCap: .butt))
                     .rotationEffect(.degrees(-90))
                     .accessibilityHidden(true)
             }
             VStack(spacing: 3) {
-                Text(TimeFormat.minutes(presentation.netMinutes))
-                    .font(.system(.headline, design: .rounded).bold())
+                Text(RecordingFormat.duration(presentation.netMinutes))
+                    .recordingFont(20, weight: .semibold, rounded: true)
                     .monospacedDigit()
                     .lineLimit(1)
-                    .minimumScaleFactor(0.7)
+                    .minimumScaleFactor(0.65)
                     .accessibilityLabel("Net sleep after saving")
                     .accessibilityValue("\(presentation.netMinutes) minutes")
                     .accessibilityIdentifier("recording.netSleep")
-                Text("Net sleep").font(.caption2).foregroundStyle(CoachColor.muted)
+                Text("Net Sleep").recordingFont(12).foregroundStyle(RecordingColor.secondary)
                     .accessibilityHidden(true)
             }
-            .foregroundStyle(CoachColor.ink)
-            .padding(12)
+            .foregroundStyle(RecordingColor.ink)
+            .padding(15)
         }
-        .padding(5)
-        .frame(width: 104, height: 104)
+        .padding(6)
+        .frame(width: diameter, height: diameter)
     }
 
-    private func color(_ kind: RecordingIntervalPresentation.Kind) -> Color {
+    private func style(_ kind: RecordingIntervalPresentation.Kind) -> AnyShapeStyle {
         switch kind {
-        case .sleep: return CoachColor.purple
-        case .awake: return CoachColor.sun.opacity(0.42)
-        case .proposedAwake: return CoachColor.sun
+        case .sleep:
+            return AnyShapeStyle(AngularGradient(colors: [RecordingColor.accent.opacity(0.55), CoachColor.purple, RecordingColor.accent.opacity(0.85)], center: .center))
+        case .awake: return AnyShapeStyle(CoachColor.sun.opacity(0.5))
+        case .proposedAwake: return AnyShapeStyle(CoachColor.sun)
         }
     }
 }
@@ -111,7 +110,7 @@ struct RecordingIntervalStrip: View {
             ZStack(alignment: .leading) {
                 ForEach(presentation.segments) { segment in
                     Rectangle()
-                        .fill(segment.kind == .sleep ? CoachColor.purple : CoachColor.sun.opacity(0.42))
+                        .fill(segment.kind == .sleep ? RecordingColor.accent : CoachColor.sun.opacity(0.5))
                         .overlay {
                             if segment.kind == .proposedAwake {
                                 Rectangle().strokeBorder(CoachColor.sun, style: StrokeStyle(lineWidth: 2, dash: [3, 2]))

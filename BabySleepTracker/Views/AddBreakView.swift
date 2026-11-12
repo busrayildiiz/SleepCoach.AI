@@ -7,6 +7,7 @@ struct AddBreakView: View {
     @State private var draft: AwakeBreakDraft
     @State private var submission = RecordingSubmission()
     @State private var saveFailed = false
+    @State private var showsParent = false
 
     init(parent: SleepRecord, editingBreak: SleepRecord? = nil, existingBreaks: [SleepRecord] = [], onSave: @escaping (SleepRecord) -> Bool) {
         self.existingBreaks = existingBreaks
@@ -23,16 +24,37 @@ struct AddBreakView: View {
                 onCancel: { dismiss() }, onSave: save
             ) {
                 parentContext
-                RecordingIntervalCard(title: "Awake interval", start: $draft.start, end: $draft.end,
-                                      feedback: feedback, validation: validation)
-                if let message = draft.validationMessage(existing: existingBreaks, now: Date()) {
-                    RecordingValidation(message: message)
+                VStack(alignment: .leading, spacing: 10) {
+                    RecordingSectionLabel(title: "Awake Interval")
+                    RecordingIntervalCard(start: $draft.start, end: $draft.end, style: .awake,
+                                          feedback: feedback, validation: validation)
+                    if let message = draft.validationMessage(existing: existingBreaks, now: Date()) {
+                        RecordingValidation(message: message)
+                    }
                 }
                 AwakeBreakFeedback(draft: draft, existing: existingBreaks)
-                Text("Awake time is subtracted only from this sleep session. Its start and end stay unchanged.")
-                    .font(.caption)
-                    .foregroundStyle(CoachColor.muted)
-                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .sheet(isPresented: $showsParent) {
+                NavigationStack {
+                    ScrollView {
+                        RecordingCard {
+                            Text(parentDates).recordingFont(14).foregroundStyle(RecordingColor.secondary)
+                            Text("Saved net sleep: \(RecordingFormat.duration(draft.parent.totalMinutes(breaks: existingBreaks, at: Date())))")
+                                .recordingFont(15, weight: .semibold)
+                        }
+                        .padding(16)
+                    }
+                    .background(RecordingColor.background)
+                    .navigationTitle("Sleep Session")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { showsParent = false }
+                                .accessibilityIdentifier("recording.parent.done")
+                        }
+                    }
+                }
+                .tint(RecordingColor.accent)
             }
             .alert("Could Not Save", isPresented: $saveFailed) {
                 Button("OK", role: .cancel) { }
@@ -40,29 +62,46 @@ struct AddBreakView: View {
                 Text("The sleep session may have changed or this interval is already recorded. Your changes are still here; review the record and try again.")
             }
         }
-        .tint(CoachColor.purpleDeep)
+        .tint(RecordingColor.accent)
     }
 
     private var parentContext: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Label(draft.parent.kind == .nightSleep ? "Night Sleep" : "Nap", systemImage: draft.parent.kind.icon)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(CoachColor.purpleDeep)
-            Text(parentDates)
-                .font(.caption.weight(.medium))
-                .foregroundStyle(CoachColor.muted)
-                .fixedSize(horizontal: false, vertical: true)
+        Button { showsParent = true } label: {
+            HStack(spacing: 16) {
+                Image(systemName: draft.parent.kind == .nightSleep ? "moon" : "bed.double")
+                    .recordingFont(23, weight: .regular)
+                    .foregroundStyle(RecordingColor.secondary)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(draft.parent.kind == .nightSleep ? "Night Sleep" : "Nap")
+                        .recordingFont(15, weight: .semibold)
+                        .foregroundStyle(RecordingColor.ink)
+                    Text(parentDates)
+                        .recordingFont(12)
+                        .foregroundStyle(RecordingColor.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                Image(systemName: "chevron.right").recordingFont(13, weight: .medium)
+                    .foregroundStyle(RecordingColor.secondary)
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, minHeight: 72, alignment: .leading)
+            .background(RecordingSurface())
+            .contentShape(Rectangle())
         }
-        .padding(.vertical, 4)
+        .buttonStyle(.plain)
+        .accessibilityHint("Shows the parent sleep session")
+        .accessibilityIdentifier("recording.parent")
     }
 
     private var parentDates: String {
-        let start = draft.parent.date.formatted(date: .abbreviated, time: .shortened)
+        let start = RecordingFormat.date(draft.parent.date, year: false) + ", " + draft.parent.date.formatted(date: .omitted, time: .shortened)
         guard let end = draft.parent.observedEnd else {
             return start + (draft.parent.isOngoing ? " · still sleeping" : " · end not recorded")
         }
         let sameDay = Calendar.current.isDate(draft.parent.date, inSameDayAs: end)
-        return start + " → " + end.formatted(date: sameDay ? .omitted : .abbreviated, time: .shortened)
+        return start + " – " + (sameDay ? "" : RecordingFormat.date(end, year: false) + ", ") + end.formatted(date: .omitted, time: .shortened)
     }
 
     private func preview(start: Date, end: Date) -> AwakeBreakDraft {
@@ -98,7 +137,6 @@ private struct AwakeBreakFeedback: View {
     let draft: AwakeBreakDraft
     let existing: [SleepRecord]
     @Environment(\.dynamicTypeSize) private var dynamicType
-    @Environment(\.recordingCompactHeight) private var compactHeight
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 60)) { context in
@@ -114,43 +152,49 @@ private struct AwakeBreakFeedback: View {
         }
         let net = proposed == nil ? draft.parent.totalMinutes(breaks: existing, at: now)
             : draft.netMinutes(existing: existing, now: now)
-        if let presentation, !dynamicType.isAccessibilitySize, !compactHeight {
-            HStack(spacing: 16) {
-                RecordingIntervalRing(presentation: presentation)
-                details
+        VStack(alignment: .leading, spacing: 10) {
+            RecordingSectionLabel(title: "Sleep Summary")
+            RecordingCard(padding: 20) {
+                if let presentation, !dynamicType.isAccessibilitySize {
+                    ViewThatFits(in: .horizontal) {
+                        ringSummary(presentation, net: net, proposed: proposed != nil, diameter: 140)
+                        ringSummary(presentation, net: net, proposed: proposed != nil, diameter: 112)
+                    }
+                } else {
+                    summaryValues(net: net, proposed: proposed != nil)
+                    if let presentation { RecordingIntervalStrip(presentation: presentation) }
+                }
             }
-            .padding(.vertical, 8)
-        } else {
-            VStack(alignment: .leading, spacing: 10) {
-                Text("\(proposed == nil ? "Saved net sleep" : (draft.parent.isOngoing ? "Net sleep so far" : "Net sleep after saving")): \(TimeFormat.minutes(net))")
-                    .font(.system(.headline, design: .rounded))
-                    .foregroundStyle(CoachColor.purpleDeep)
-                    .accessibilityIdentifier("recording.netSleep")
-                details
-                if let presentation { RecordingIntervalStrip(presentation: presentation) }
-            }
-            .padding(.vertical, 8)
         }
     }
 
-    private var details: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Awake break · \(TimeFormat.minutes(max(0, Int(draft.end.timeIntervalSince(draft.start) / 60))))")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(CoachColor.ink)
-            Label {
-                Text("Proposed awake").foregroundStyle(CoachColor.muted)
-            } icon: {
-                Image(systemName: "circle.dashed").foregroundStyle(CoachColor.sun)
-            }
-            .font(.caption)
-            if existing.contains(where: { $0.parentNapID == draft.parent.id && $0.id != draft.editing?.id }) {
-                Label {
-                    Text("Existing awake").foregroundStyle(CoachColor.muted)
-                } icon: {
-                    Image(systemName: "circle.fill").foregroundStyle(CoachColor.sun.opacity(0.42))
-                }
-                .font(.caption)
+    private func ringSummary(_ presentation: RecordingIntervalPresentation, net: Int,
+                             proposed: Bool, diameter: CGFloat) -> some View {
+        HStack(spacing: 16) {
+            RecordingIntervalRing(presentation: presentation, diameter: diameter)
+            Rectangle().fill(RecordingColor.border).frame(width: 1, height: 120).accessibilityHidden(true)
+            summaryValues(net: net, proposed: proposed, ringVisible: true).frame(minWidth: 116, alignment: .leading)
+        }
+    }
+
+    private func summaryValues(net: Int, proposed: Bool, ringVisible: Bool = false) -> some View {
+        VStack(alignment: .leading, spacing: 20) {
+            summaryValue("Awake duration", minutes: max(0, Int(draft.end.timeIntervalSince(draft.start) / 60)), color: CoachColor.sun, identifier: "recording.awakeDuration")
+            summaryValue(proposed ? (draft.parent.isOngoing ? "Net sleep so far" : "Resulting net sleep") : "Saved net sleep",
+                         minutes: net, color: RecordingColor.accent, identifier: ringVisible ? "recording.resultingNetSleep" : "recording.netSleep")
+        }
+    }
+
+    private func summaryValue(_ title: String, minutes: Int, color: Color, identifier: String) -> some View {
+        HStack(alignment: .top, spacing: 9) {
+            Circle().fill(color).frame(width: 9, height: 9).padding(.top, 4).accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 5) {
+                Text(title).recordingFont(12).foregroundStyle(RecordingColor.secondary)
+                Text(RecordingFormat.duration(minutes))
+                    .recordingFont(20, weight: .semibold, rounded: true)
+                    .foregroundStyle(RecordingColor.ink)
+                    .monospacedDigit()
+                    .accessibilityIdentifier(identifier)
             }
         }
         .fixedSize(horizontal: false, vertical: true)
