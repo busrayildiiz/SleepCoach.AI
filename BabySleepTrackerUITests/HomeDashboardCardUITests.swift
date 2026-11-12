@@ -31,6 +31,29 @@ final class HomeDashboardCardUITests: XCTestCase {
         }
         XCTFail("Control could not be fully revealed")
     }
+    private func tapVisibleRecordingCard(_ card: XCUIElement, app: XCUIApplication) {
+        for _ in 0..<8 {
+            let window = app.windows.firstMatch.frame
+            // Exclude the floating tab controls from the usable scroll viewport.
+            let bottom = app.buttons["recording.addSleep"].frame.minY
+            let viewport = CGRect(x: window.minX + 16, y: window.minY + 44,
+                                  width: window.width - 32, height: max(0, bottom - window.minY - 44))
+            if card.exists && card.isHittable {
+                let frame = card.frame
+                let visible = frame.intersection(viewport)
+                // At maximum Dynamic Type the card can exceed the SE viewport.
+                // Its visible portion remains a real button; navigation below must succeed.
+                if !visible.isNull && visible.width >= 44 && visible.height >= 44 {
+                    card.coordinate(withNormalizedOffset: .zero)
+                        .withOffset(CGVector(dx: visible.midX - frame.minX, dy: visible.midY - frame.minY)).tap()
+                    return
+                }
+            }
+            if card.exists && card.frame.midY < viewport.midY { app.swipeDown() }
+            else { app.swipeUp() }
+        }
+        XCTFail("Recording card has no visible, hittable 44-point tap area within eight scroll gestures.")
+    }
     func testWakeSaveHidesAndPersistsAcrossRelaunch() {
         let app = launch()
         screenshot("wake-visible", app: app)
@@ -91,8 +114,7 @@ final class HomeDashboardCardUITests: XCTestCase {
         app.swipeDown()
         app.swipeDown()
         let add = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Ready to record")).firstMatch
-        reveal(add, app: app)
-        add.tap()
+        tapVisibleRecordingCard(add, app: app)
         XCTAssertTrue(app.navigationBars["Add Nap"].waitForExistence(timeout: 5))
     }
 }
