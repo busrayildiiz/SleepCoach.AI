@@ -23,13 +23,19 @@ final class RecordingNavigationTests: XCTestCase {
                 let form = app.collectionViews.containing(.any, identifier: element.identifier).firstMatch
                 let scroll = app.scrollViews.containing(.any, identifier: element.identifier).firstMatch
                 let window = app.windows.firstMatch.frame
-                let viewport = (form.exists ? form.frame : (scroll.exists ? scroll.frame : window)).intersection(window)
+                var viewport = (form.exists ? form.frame : (scroll.exists ? scroll.frame : window)).intersection(window)
+                let addSleep = app.buttons["recording.addSleep"]
+                if element.identifier.hasPrefix("sleep."), addSleep.exists, addSleep.isHittable {
+                    // The custom tab bar overlays the dashboard scroll view. Its raised Add
+                    // button marks a conservative, measured bottom edge for visible content.
+                    viewport.size.height = max(0, min(viewport.maxY, addSleep.frame.minY) - viewport.minY)
+                }
                 // A partially visible button can be hittable while its tap center is offscreen.
                 if !element.frame.isEmpty && viewport.contains(element.frame) { return }
             }
             app.swipeUp()
         }
-        XCTFail("Could not fully reveal the control within eight scroll gestures.")
+        XCTFail("Could not fully reveal \(element.identifier) within eight scroll gestures.")
     }
 
     private func waitForDismissal(of navigationBar: XCUIElement,
