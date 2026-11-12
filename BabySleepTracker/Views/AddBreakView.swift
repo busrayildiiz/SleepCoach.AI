@@ -170,10 +170,10 @@ private struct AwakeBreakFeedback: View {
 
     private func ringSummary(_ presentation: RecordingIntervalPresentation, net: Int,
                              proposed: Bool, diameter: CGFloat) -> some View {
-        HStack(spacing: 16) {
+        HStack(spacing: diameter < 144 ? 10 : 16) {
             RecordingIntervalRing(presentation: presentation, diameter: diameter)
             Rectangle().fill(RecordingColor.border).frame(width: 1, height: 120).accessibilityHidden(true)
-            summaryValues(net: net, proposed: proposed, ringVisible: true).frame(minWidth: 116, alignment: .leading)
+            summaryValues(net: net, proposed: proposed, ringVisible: true).frame(minWidth: diameter < 144 ? 112 : 116, alignment: .leading)
         }
     }
 
