@@ -13,9 +13,15 @@ concurrency:
 
 jobs:
   build-and-test:
+    name: ${{ matrix.simulator == 'standard' && 'build-and-test' || 'build-and-test (compact)' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        simulator: ${{ fromJSON(github.head_ref == 'feat/home-sleep-cards-redesign' && '["standard","compact"]' || '["standard"]') }}
     runs-on: macos-15
     timeout-minutes: 30
     env:
+      SIMULATOR_CLASS: ${{ matrix.simulator }}
       DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
     defaults:
       run:
@@ -38,7 +44,7 @@ jobs:
 
           runtime = "com.apple.CoreSimulator.SimRuntime.iOS-" + os.environ["SIMULATOR_SDK_VERSION"].replace(".", "-")
           devices = json.load(sys.stdin)["devices"].get(runtime, [])
-          device = next((d for d in devices if d.get("isAvailable") and d["name"].startswith("iPhone")), None)
+          device = next((d for d in devices if d.get("isAvailable") and d["name"].startswith("iPhone") and (os.environ["SIMULATOR_CLASS"] != "compact" or d["name"] == "iPhone SE (3rd generation)")), None)
           if device is None:
               sys.exit("No available iPhone simulator for " + runtime)
           print("Selected " + device["name"] + " (" + device["udid"] + ") on " + runtime)
@@ -73,11 +79,28 @@ jobs:
           DEVELOPMENT_TEAM=
           PROVISIONING_PROFILE_SPECIFIER=
 
-      - name: Upload failed test results
-        if: ${{ failure() }}
+      - name: Export Home visual verification attachments
+        if: ${{ always() && github.head_ref == 'feat/home-sleep-cards-redesign' }}
+        run: |
+          if [ -d "$RUNNER_TEMP/TestResults.xcresult" ]; then
+            xcrun xcresulttool export attachments --path "$RUNNER_TEMP/TestResults.xcresult" --output-path "$RUNNER_TEMP/HomeScreenshots"
+            xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/TestResults.xcresult" > "$RUNNER_TEMP/HomeScreenshots/test-summary.json"
+          fi
+
+      - name: Upload Home screenshots
+        if: ${{ always() && github.head_ref == 'feat/home-sleep-cards-redesign' }}
         uses: actions/upload-artifact@v4
         with:
-          name: ios-test-results
+          name: home-screenshots-${{ matrix.simulator }}
+          path: ${{ runner.temp }}/HomeScreenshots
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Upload failed test results
+        if: ${{ failure() || github.head_ref == 'feat/home-sleep-cards-redesign' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-test-results-${{ matrix.simulator }}
           path: ${{ runner.temp }}/TestResults.xcresult
           if-no-files-found: warn
           retention-days: 7

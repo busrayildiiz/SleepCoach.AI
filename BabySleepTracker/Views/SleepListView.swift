@@ -128,12 +128,13 @@ struct SleepListView: View {
     }
 
     private func loadWakeRecords() {
-        if let decoded = dailyWakeRecordPersistence.load() {
-            wakeRecords = decoded
-        }
+        wakeRecords = dailyWakeRecordPersistence.load() ?? []
     }
 
-    private func saveWakeTime(_ selectedTime: Date) {
+    private func saveWakeTime(_ selectedTime: Date) -> Bool {
+        #if DEBUG && targetEnvironment(simulator)
+        if HomeCardTestFixture.enabled && ProcessInfo.processInfo.environment["HOME_WAKE_SAVE_FAIL"] == "1" { return false }
+        #endif
         let result = SleepWakeTimeWorkflow(
             selectedWakeTime: selectedTime,
             now: Date(),
@@ -143,8 +144,11 @@ struct SleepListView: View {
             wakePersistence: dailyWakeRecordPersistence,
             sleepPersistence: sleepRecordPersistence
         ).execute()
-        wakeRecords = result.updatedWakeRecords
-        records = result.updatedSleepRecords
+        var state = HomeWakeCardState(records: wakeRecords)
+        state.accept(result)
+        wakeRecords = state.records
+        if result.sleepPersistenceSucceeded { records = result.updatedSleepRecords }
+        return result.wakePersistenceSucceeded
     }
 
     // MARK: - Derived Data
@@ -397,6 +401,9 @@ struct SleepListView: View {
         NavigationStack {
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 12) {
+                    #if DEBUG && targetEnvironment(simulator)
+                    if HomeCardTestFixture.enabled { Text("TEST FIXTURE — NOT A PREDICTION").font(.caption2).foregroundStyle(.secondary) }
+                    #endif
                     headerSection
                     nextNapOrBedtimeCard
                     rhythmLearningStrip
@@ -424,6 +431,14 @@ struct SleepListView: View {
             .onReceive(NotificationCenter.default.publisher(for: .dailyWakeRecordsDidChange)) { _ in
                 loadWakeRecords()
                 generationCoalescer.request { orchestrator.generate() }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.significantTimeChangeNotification)) { _ in
+                loadRecords()
+                loadWakeRecords()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+                loadRecords()
+                loadWakeRecords()
             }
             .onReceive(NotificationCenter.default.publisher(for: .babyProfileDidChange)) { _ in
                 generationCoalescer.request { orchestrator.generate() }
@@ -915,37 +930,43 @@ struct SleepListView: View {
 
     // MARK: next nap or bedtime?
 
-    @ViewBuilder
     private var nextNapOrBedtimeCard: some View {
-        if isStillInNightSleep {
-            stillSleepingCard
-        } else {
-            regularNextNapOrBedtimeCard
+        TimelineView(.periodic(from: .now, by: 60)) { context in
+            let now = homeCardNow(context.date)
+            let state = homeCardPresentation(now: now)
+            if let active = activeSleepRecord {
+                CurrentSleepSessionCard(presentation: state, now: now,
+                    onAddBreak: { activeSheet = .addBreak(parentID: active.id) }) {
+                    homeCardArtwork(kind: state.kind)
+                }
+            } else if isStillInNightSleep {
+                // Preserve the inferred-night card's existing noninteractive destination.
+                CurrentSleepSessionCard(presentation: state, now: now) { homeCardArtwork(kind: state.kind) }
+            } else {
+                Button { activeSheet = .addSleep(editing: nil, defaultDate: Date()) } label: {
+                    CurrentSleepSessionCard(presentation: state, now: now) { homeCardArtwork(kind: state.kind) }
+                }.buttonStyle(CardPressButtonStyle()).accessibilityIdentifier("home.sleep.record")
+            }
         }
     }
-    
-    // MARK: - Live Night Sleep Card Wrapper
 
-    private var stillSleepingCard: some View {
-        let ongoingSleep = activeSleepRecord ?? inferredNightSleepRecord
-        let isEstimated = activeSleepRecord == nil
+    @ViewBuilder private func homeCardArtwork(kind: SleepKind?) -> some View {
+        if kind == .nightSleep { MoonHeaderArt() }
+        else { Image(systemName: "bed.double.fill").font(.system(size: 30)).foregroundStyle(Color.sleepPurple) }
+    }
 
-        // Tahmini uyanma saati
-        let expectedWake = expectedWakeTime(for: ongoingSleep)
-        let nextSleepAfterCurrent = nextSleepTimeAfterCurrentSleep(
-            ongoingSleep: ongoingSleep,
-            expectedWake: expectedWake
-        )
+    private func homeCardNow(_ actual: Date) -> Date {
+        #if DEBUG && targetEnvironment(simulator)
+        if HomeCardTestFixture.enabled { return HomeCardTestFixture.now }
+        #endif
+        return actual
+    }
 
-        return CurrentSleepSessionCard(
-            ongoingNight: ongoingSleep,
-            expectedWakeTime: expectedWake,
-            nextSleepTime: nextSleepAfterCurrent,
-            isEstimated: isEstimated,
-            onAddBreak: ongoingSleep.map { parent in
-                { activeSheet = .addBreak(parentID: parent.id) }
-            }
-        )
+    private func homeCardPresentation(now: Date) -> HomeSleepCardPresentation {
+        #if DEBUG && targetEnvironment(simulator)
+        if HomeCardTestFixture.enabled { return HomeCardTestFixture.presentation(records: records) }
+        #endif
+        return HomeSleepCardPresentation.make(records: records, now: now, calendar: .current)
     }
 
     private func expectedWakeTime(for ongoingSleep: SleepRecord?) -> Date {
@@ -959,66 +980,16 @@ struct SleepListView: View {
     
     // MARK: - Today Wake Up Card
 
-    @ViewBuilder
     private var todayWakeSection: some View {
-        if let wakeTime = todayWakeRecord?.wakeTime {
-            WakeUpCard(time: wakeTime)
-        } else if shouldShowTodayWakeUpPrompt {
-            todayWakeUpCard
-        }
-    }
-
-    private var todayWakeUpCard: some View {
-        Button { activeSheet = .wakeTime } label: {
-            HStack(spacing: 14) {
-                ZStack {
-                    Circle()
-                        .fill(Color.orange.opacity(0.2))
-                        .frame(width: 48, height: 48)
-                    Image(systemName: "sun.max.fill")
-                        .font(.system(size: 22, weight: .semibold))
-                        .foregroundStyle(Color.orange)
-                }
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Wake-up time needed")
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(Color.orange)
-                    Text("Add \(babyName)'s actual wake-up time\nfor more accurate predictions.")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(Color(.secondaryLabel))
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                Spacer()
-
-                HStack(spacing: 4) {
-                    Text("Add wake time")
-                        .font(.system(size: 12, weight: .semibold))
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 11, weight: .semibold))
-                }
-                .foregroundStyle(Color.orange)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Color(.systemBackground))
-                )
+        TimelineView(.periodic(from: .now, by: 60)) { context in
+            if HomeWakeCardState(records: wakeRecords).isVisible(now: context.date, calendar: .current) {
+                HomeWakeTimeCard { activeSheet = .wakeTime }
+            } else if let wakeTime = todayWakeRecord?.wakeTime {
+                WakeUpCard(time: wakeTime)
             }
-            .padding(16)
-            .contentShape(Rectangle())
-            .background(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(Color.orange.opacity(0.10))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(Color.orange.opacity(0.2), lineWidth: 1)
-            )
         }
-        .buttonStyle(CardPressButtonStyle())
     }
+
     // MARK: - Regular Next Nap / Bedtime Card
 
     private var regularNextNapOrBedtimeCard: some View {

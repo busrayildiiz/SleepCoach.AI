@@ -8,7 +8,7 @@ struct SleepListSheetRouter: View {
     let onRecordUpsert: (SleepRecord) -> Bool
     let onBreakSaved: (SleepRecord) -> Bool
     let onDeleteRecords: (Set<UUID>) -> Void
-    let onWakeTimeSave: (Date) -> Void
+    let onWakeTimeSave: (Date) -> Bool
 
     var body: some View {
         switch sheet {
@@ -52,11 +52,12 @@ struct SleepListSheetRouter: View {
 // MARK: - Wake Time Editor
 
 private struct WakeTimeEditorView: View {
-    let onSave: (Date) -> Void
+    let onSave: (Date) -> Bool
     @Environment(\.dismiss) private var dismiss
     @State private var selectedTime: Date
+    @State private var saveFailed = false
 
-    init(initialTime: Date, onSave: @escaping (Date) -> Void) {
+    init(initialTime: Date, onSave: @escaping (Date) -> Bool) {
         self.onSave   = onSave
         _selectedTime = State(initialValue: initialTime)
     }
@@ -96,14 +97,19 @@ private struct WakeTimeEditorView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") { dismiss() }
+                    Button("Cancel") { dismiss() }.accessibilityIdentifier("home.wake.cancel")
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Save") { onSave(selectedTime); dismiss() }
+                    Button("Save") {
+                        if onSave(selectedTime) { dismiss() } else { saveFailed = true }
+                    }.accessibilityIdentifier("home.wake.save")
                         .fontWeight(.semibold)
                 }
             }
         }
+        .alert("Could not save wake time", isPresented: $saveFailed) {
+            Button("OK", role: .cancel) { }
+        } message: { Text("Your wake time has not been saved. Please try again.") }
         .tint(Color.sleepPurpleDeep)
         .presentationDetents([.height(390)])
         .presentationDragIndicator(.visible)

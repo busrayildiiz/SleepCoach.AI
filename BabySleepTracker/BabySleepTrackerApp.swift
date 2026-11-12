@@ -7,7 +7,9 @@ struct BabySleepTrackerApp: App {
     init() {
         #if DEBUG && targetEnvironment(simulator)
         // Explicit opt-in only in the UI-test runner's simulator app container.
-        if ProcessInfo.processInfo.environment["RECORDING_UI_TESTS"] == "1" {
+        if HomeCardTestFixture.enabled {
+            HomeCardTestFixture.prepare()
+        } else if ProcessInfo.processInfo.environment["RECORDING_UI_TESTS"] == "1" {
             let defaults = UserDefaults.standard
             if let domain = Bundle.main.bundleIdentifier {
                 defaults.removePersistentDomain(forName: domain)
