@@ -81,6 +81,7 @@ struct RecordingScreen<Content: View>: View {
                 VStack(alignment: .leading, spacing: spacing, content: content)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 16)
+                    .padding(.top, 20)
                     .padding(.bottom, 20)
             }
             .scrollDismissesKeyboard(.interactively)
@@ -101,16 +102,7 @@ struct RecordingScreen<Content: View>: View {
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
                 Button("Cancel", action: onCancel)
-                    .recordingFont(17)
                     .accessibilityIdentifier("recording.cancel")
-            }
-            ToolbarItem(placement: .principal) {
-                Text(title)
-                    .recordingFont(17, weight: .semibold)
-                    .foregroundStyle(RecordingColor.ink)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-                    .accessibilityAddTraits(.isHeader)
             }
         }
         .tint(RecordingColor.accent)

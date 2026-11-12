@@ -160,6 +160,14 @@ final class RecordingNavigationTests: XCTestCase {
         save.tap()
         waitForDismissal(of: app.navigationBars["Add Night Sleep"])
         XCTAssertTrue(app.buttons["sleep.current.addBreak"].waitForExistence(timeout: 5))
+        let addBreak = app.buttons["sleep.current.addBreak"]
+        reveal(addBreak, in: app)
+        addBreak.tap()
+        XCTAssertTrue(app.navigationBars["Add Awake Break"].waitForExistence(timeout: 5))
+        capture("recording-awake-ongoing-accessibility", app: app)
+        app.buttons["recording.cancel"].tap()
+        waitForDismissal(of: app.navigationBars["Add Awake Break"])
+        XCTAssertTrue(addBreak.waitForExistence(timeout: 5))
     }
 
     func testRecordingVisualReviewInLightAndDarkAppearance() {

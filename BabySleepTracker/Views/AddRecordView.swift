@@ -64,7 +64,7 @@ struct AddRecordView: View {
             }
             .onAppear(perform: loadBreaks)
             .onReceive(NotificationCenter.default.publisher(for: .sleepRecordsDidChange)) { _ in loadBreaks() }
-            .sheet(item: $breakParent) { parent in
+            .fullScreenCover(item: $breakParent) { parent in
                 AddBreakView(parent: parent, existingBreaks: existingBreaks, onSave: onSave)
             }
         }
