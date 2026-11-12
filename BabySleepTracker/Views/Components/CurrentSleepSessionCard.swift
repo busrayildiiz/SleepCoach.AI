@@ -169,7 +169,6 @@ struct CurrentSleepSessionCard<Artwork: View>: View {
         .padding(14)
         .background(LinearGradient(colors: [HomeCardColor.purple.opacity(0.025), HomeCardColor.purple.opacity(0.065)], startPoint: .topLeading, endPoint: .bottomTrailing))
         .modifier(HomeCardSurface())
-        .accessibilityIdentifier("home.sleep.card")
     }
 
     private var summary: some View {
@@ -225,12 +224,11 @@ struct HomeWakeTimeCard: View {
             }
         }
         .buttonStyle(.plain)
-        .background(LinearGradient(colors: [HomeCardColor.sun.opacity(0.025), HomeCardColor.sun.opacity(0.11)], startPoint: .top, endPoint: .bottom))
-        .modifier(HomeCardSurface(warm: true))
-        .accessibilityElement(children: .ignore)
         .accessibilityLabel("Add Wake Time. Record when your baby wakes up.")
         .accessibilityHint("Opens today's wake-time editor")
         .accessibilityIdentifier("home.wake.add")
+        .background(LinearGradient(colors: [HomeCardColor.sun.opacity(0.025), HomeCardColor.sun.opacity(0.11)], startPoint: .top, endPoint: .bottom))
+        .modifier(HomeCardSurface(warm: true))
     }
     private var content: some View {
         HStack(spacing: 12) {
@@ -274,6 +272,8 @@ enum HomeCardTestFixture {
         defaults.set("light", forKey: "appAppearance")
         defaults.set(true, forKey: "authComplete")
         defaults.set(true, forKey: "onboardingComplete")
+        defaults.set(23.0, forKey: "typicalBedHour")
+        defaults.set(0.0, forKey: "typicalWakeHour")
         let records: [SleepRecord] = scenario == "confirmed" ? [
             SleepRecord(date: now.addingTimeInterval(-3600), duration: 0, kind: .nightSleep, isOngoing: true)
         ] : []

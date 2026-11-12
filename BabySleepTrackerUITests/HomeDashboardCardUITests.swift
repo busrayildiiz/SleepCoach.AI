@@ -12,7 +12,7 @@ final class HomeDashboardCardUITests: XCTestCase {
         if failure { app.launchEnvironment["HOME_WAKE_SAVE_FAIL"] = "1" }
         if large { app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"] }
         app.launch()
-        XCTAssertTrue(app.buttons["home.wake.add"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["home.wake.add"].waitForExistence(timeout: 10), app.debugDescription)
         return app
     }
     private func screenshot(_ name: String, app: XCUIApplication) {
@@ -87,8 +87,10 @@ final class HomeDashboardCardUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Today's Wake-up"].waitForExistence(timeout: 5))
         app.buttons["home.wake.cancel"].tap()
         disappears(app.navigationBars["Today's Wake-up"])
-        // Existing Add Sleep entry point remains available independently of prediction eligibility.
-        let add = app.buttons["recording.addSleep"]
+        // The former next-sleep card keeps its existing Add Sleep destination.
+        app.swipeDown()
+        app.swipeDown()
+        let add = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Ready to record")).firstMatch
         reveal(add, app: app)
         add.tap()
         XCTAssertTrue(app.navigationBars["Add Nap"].waitForExistence(timeout: 5))

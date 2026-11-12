@@ -945,7 +945,7 @@ struct SleepListView: View {
             } else {
                 Button { activeSheet = .addSleep(editing: nil, defaultDate: Date()) } label: {
                     CurrentSleepSessionCard(presentation: state, now: now) { homeCardArtwork(kind: state.kind) }
-                }.buttonStyle(CardPressButtonStyle()).accessibilityIdentifier("home.sleep.record")
+                }.buttonStyle(CardPressButtonStyle())
             }
         }
     }
