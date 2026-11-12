@@ -63,6 +63,7 @@ struct RecordingIntervalPresentation {
 struct RecordingIntervalRing: View {
     let presentation: RecordingIntervalPresentation
     var diameter: CGFloat = 144
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         ZStack {
@@ -95,7 +96,7 @@ struct RecordingIntervalRing: View {
     private func style(_ kind: RecordingIntervalPresentation.Kind) -> AnyShapeStyle {
         switch kind {
         case .sleep:
-            return AnyShapeStyle(AngularGradient(colors: [RecordingColor.accent.opacity(0.55), CoachColor.purple, RecordingColor.accent.opacity(0.85)], center: .center))
+            return AnyShapeStyle(AngularGradient(colors: [RecordingColor.accent.opacity(colorScheme == .dark ? 0.9 : 0.55), CoachColor.purple, RecordingColor.accent.opacity(0.85)], center: .center))
         case .awake: return AnyShapeStyle(CoachColor.sun.opacity(0.5))
         case .proposedAwake: return AnyShapeStyle(CoachColor.sun)
         }

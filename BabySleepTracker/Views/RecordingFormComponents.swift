@@ -2,7 +2,15 @@ import SwiftUI
 
 // Recording-only values follow the approved image; AI Coach's tokens stay unchanged.
 enum RecordingColor {
-    static let accent = Color(red: 0.47, green: 0.28, blue: 0.82)
+    static let actionFill = Color(red: 0.47, green: 0.28, blue: 0.82)
+    static let accent = Color(uiColor: UIColor { traits in
+        if traits.userInterfaceStyle == .dark {
+            // AI Coach purple blended with 15% white for text contrast on dark surfaces.
+            return UIColor(red: 0.55 * 0.85 + 0.15, green: 0.45 * 0.85 + 0.15,
+                           blue: 0.96 * 0.85 + 0.15, alpha: 1)
+        }
+        return UIColor(red: 0.47, green: 0.28, blue: 0.82, alpha: 1)
+    })
     static let ink = CoachColor.ink
     static let secondary = Color(uiColor: UIColor { traits in
         traits.userInterfaceStyle == .dark ? .secondaryLabel : UIColor(red: 0.35, green: 0.34, blue: 0.49, alpha: 1)
@@ -396,7 +404,7 @@ struct RecordingSaveButton: View {
                 .padding(.vertical, 14)
                 .frame(maxWidth: .infinity, minHeight: 52)
                 .foregroundStyle(enabled ? Color.white : RecordingColor.secondary)
-                .background(Capsule().fill(enabled ? RecordingColor.accent : RecordingColor.inset))
+                .background(Capsule().fill(enabled ? RecordingColor.actionFill : RecordingColor.inset))
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
