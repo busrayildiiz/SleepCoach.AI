@@ -1,0 +1,6 @@
+# Xcode per-user editor, scheme and debugger state
+*.xcuserstate
+xcuserdata/
+
+# macOS Finder metadata
+.DS_Store
