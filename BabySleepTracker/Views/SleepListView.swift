@@ -594,7 +594,7 @@ struct SleepListView: View {
                     Spacer()
                     Text(rhythmLearningHint)
                         .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(Color(.tertiaryLabel))
+                        .foregroundStyle(Color(.secondaryLabel))
                         .lineLimit(1)
                         .minimumScaleFactor(0.78)
                 }
@@ -602,14 +602,25 @@ struct SleepListView: View {
         }
         .padding(12)
         .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .fill(Color(.systemBackground))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .fill(LinearGradient(
+                            colors: [
+                                Color(red: 0.55, green: 0.45, blue: 0.96).opacity(0.025),
+                                Color(red: 0.55, green: 0.45, blue: 0.96).opacity(0.065)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ))
+                )
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(Color(red: 0.55, green: 0.45, blue: 0.98).opacity(0.12), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(Color(red: 0.55, green: 0.45, blue: 0.96).opacity(0.14), lineWidth: 1)
         )
-        .shadow(color: Color(red: 0.45, green: 0.35, blue: 0.92).opacity(0.06), radius: 10, x: 0, y: 4)
+        .shadow(color: Color(red: 0.45, green: 0.35, blue: 0.92).opacity(0.07), radius: 9, x: 0, y: 4)
     }
 
     // MARK: - Sleep Overview Card
