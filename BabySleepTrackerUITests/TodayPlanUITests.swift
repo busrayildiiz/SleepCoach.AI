@@ -25,7 +25,12 @@ final class TodayPlanUITests: XCTestCase {
             let bottom = tab.exists ? tab.frame.minY : window.maxY
             let viewport = CGRect(x: window.minX + 8, y: window.minY + 44,
                                   width: window.width - 16, height: max(0, bottom - window.minY - 44))
-            if element.exists && viewport.contains(CGPoint(x: element.frame.midX, y: element.frame.midY)) && element.isHittable { return }
+            if element.exists {
+                let frame = element.frame
+                let fits = frame.height <= viewport.height && frame.width <= viewport.width
+                let visible = fits ? viewport.contains(frame) : viewport.contains(CGPoint(x: frame.midX, y: frame.midY))
+                if visible && element.isHittable { return }
+            }
             let distance = element.exists ? element.frame.midY - viewport.midY : viewport.height
             let step = min(abs(distance), viewport.height * 0.4)
             let start = app.coordinate(withNormalizedOffset: .zero)
@@ -37,6 +42,22 @@ final class TodayPlanUITests: XCTestCase {
     }
 
     private func capture(_ name: String, app: XCUIApplication) {
+        if !app.launchArguments.contains("UICTContentSizeCategoryAccessibilityXXXL") {
+            let indicator = app.staticTexts["home.plan.unavailable"]
+            if indicator.exists { reveal(indicator, app: app) }
+            else {
+                let window = app.windows.firstMatch.frame
+                let nodes = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "home.plan.event."))
+                for index in 0..<nodes.count {
+                    let node = nodes.element(boundBy: index)
+                    let frame = node.frame
+                    if !frame.isEmpty && frame.minX >= window.minX + 8 && frame.maxX <= window.maxX - 8 {
+                        reveal(node, app: app)
+                        break
+                    }
+                }
+            }
+        }
         let image = XCTAttachment(screenshot: app.screenshot())
         image.name = "TODAYS-PLAN-TEST-ONLY-\(name)"
         image.lifetime = .keepAlways
@@ -50,11 +71,11 @@ final class TodayPlanUITests: XCTestCase {
     func testEmptyPlanDoesNotFabricateWakeOrFutureSchedule() {
         let app = launch("empty")
         let progress = app.descendants(matching: .any).matching(identifier: "home.plan.progress").firstMatch
-        XCTAssertTrue(progress.label.contains("0 completed of 0"), progress.label)
+        XCTAssertFalse(progress.exists)
+        XCTAssertTrue(app.staticTexts["No sleep recorded yet"].exists)
+        XCTAssertTrue(app.staticTexts["home.plan.unavailable"].exists)
         let events = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "home.plan.event."))
-        XCTAssertEqual(events.count, 2)
-        XCTAssertTrue(events.element(boundBy: 0).label.contains("Not recorded"))
-        XCTAssertTrue(events.element(boundBy: 1).label.contains("Prediction unavailable"))
+        XCTAssertEqual(events.count, 0, "Unavailable predictions must not appear as scheduled nodes.")
         capture("no-confirmed-records-unavailable", app: app)
     }
 
@@ -62,9 +83,10 @@ final class TodayPlanUITests: XCTestCase {
         let app = launch("completed")
         let nap = event("record:\(parentID)", app: app)
         XCTAssertTrue(nap.label.contains("Done"), nap.label)
-        XCTAssertTrue(nap.label.contains("50m sleep"), nap.label)
+        XCTAssertTrue((nap.value as? String ?? "").contains("50m net sleep"), "Net duration remains available to VoiceOver and the full timeline.")
         let progress = app.descendants(matching: .any).matching(identifier: "home.plan.progress").firstMatch
         XCTAssertTrue(progress.label.contains("2 completed of 2"), progress.label)
+        assertCompactCard(app: app)
         capture("completed-wake-and-net-nap", app: app)
         app.buttons["home.plan.details"].tap()
         XCTAssertTrue(app.buttons["sleep.addBreak.\(parentID)"].waitForExistence(timeout: 5))
@@ -77,6 +99,7 @@ final class TodayPlanUITests: XCTestCase {
         XCTAssertTrue(nap.label.contains("26m elapsed"), nap.label)
         XCTAssertFalse(nap.label.contains("left"), nap.label)
         XCTAssertFalse(nap.label.contains("Done"), nap.label)
+        assertCompactCard(app: app)
         capture("ongoing-nap", app: app)
         let hero = app.descendants(matching: .any).matching(identifier: "home.sleep.summary").firstMatch
         XCTAssertTrue(hero.label.contains("Sleeping now"), hero.label)
@@ -109,7 +132,12 @@ final class TodayPlanUITests: XCTestCase {
         let app = launch("carryover")
         let night = event("record:\(parentID)", app: app)
         XCTAssertTrue(night.label.contains("Sleeping now"), night.label)
-        XCTAssertTrue(night.label.contains("Previous Sleep Day"), night.label)
+        XCTAssertTrue((night.value as? String ?? "").contains("Previous Sleep Day"))
+        XCTAssertTrue(night.label.contains("Yesterday"), night.label)
+        XCTAssertTrue(night.label.contains("7h 10m elapsed"), night.label)
+        let reference = app.descendants(matching: .any).matching(identifier: "home.plan.wakeReference").firstMatch
+        XCTAssertTrue(reference.label.contains("Morning wake") && reference.label.contains("Unavailable"), reference.label)
+        XCTAssertTrue(app.staticTexts["home.plan.title"].label.contains("Overnight"))
         XCTAssertFalse(night.label.contains("Done"), night.label)
         capture("night-carryover", app: app)
     }
@@ -118,7 +146,7 @@ final class TodayPlanUITests: XCTestCase {
         let app = launch("reference")
         let scroll = app.scrollViews["home.plan.scroll"]
         let next = event("proposal:fixture-nap-2", app: app)
-        XCTAssertTrue(next.label.contains("Next"), next.label)
+        XCTAssertTrue((next.value as? String ?? "").contains("Next planned event"))
         XCTAssertTrue(next.label.contains("Estimated"), next.label)
         XCTAssertTrue(next.label.contains("in 2h 29m"), next.label)
         capture("approved-reference-leading", app: app)
@@ -143,5 +171,46 @@ final class TodayPlanUITests: XCTestCase {
         scroll.swipeLeft()
         XCTAssertTrue(nap.label.contains("Sleeping now"), nap.label)
         capture("large-type-horizontal", app: large)
+    }
+    func testOvernightRoutineAndMorningGraceRemainUnconfirmed() {
+        for scenario in ["overnight-routine", "morning-grace"] {
+            let app = launch(scenario)
+            let night = event("record:\(parentID)", app: app)
+            XCTAssertTrue(night.label.contains("Sleeping now"), night.label)
+            XCTAssertFalse(night.label.contains("Done"), night.label)
+            let reference = app.descendants(matching: .any).matching(identifier: "home.plan.wakeReference").firstMatch
+            XCTAssertTrue(reference.label.contains("Usual wake") && reference.label.contains("Routine"), reference.label)
+            XCTAssertFalse(reference.label.contains("Done") || reference.label.contains("Estimated"), reference.label)
+            if scenario == "morning-grace" {
+                let hero = app.descendants(matching: .any).matching(identifier: "home.sleep.summary").firstMatch
+                XCTAssertTrue(hero.label.contains("Good morning"), hero.label)
+            }
+            assertCompactCard(app: app)
+            capture(scenario, app: app)
+            app.terminate()
+        }
+    }
+
+    func testOvernightEstimatedWakeUsesExplicitVerifiedFixture() {
+        let app = launch("overnight-estimate")
+        let reference = app.descendants(matching: .any).matching(identifier: "home.plan.wakeReference").firstMatch
+        XCTAssertTrue(reference.label.contains("Estimated wake") && reference.label.contains("Estimated"), reference.label)
+        XCTAssertFalse(reference.label.contains("Routine") || reference.label.contains("Done"), reference.label)
+        assertCompactCard(app: app)
+        capture("overnight-estimated-wake", app: app)
+    }
+
+    private func assertCompactCard(app: XCUIApplication) {
+        let title = app.staticTexts["home.plan.title"]
+        let nodes = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "home.plan.event."))
+        var bottom = title.frame.maxY
+        for index in 0..<nodes.count {
+            let frame = nodes.element(boundBy: index).frame
+            if !frame.isEmpty { bottom = max(bottom, frame.maxY) }
+        }
+        let reference = app.descendants(matching: .any).matching(identifier: "home.plan.wakeReference").firstMatch
+        if reference.exists { bottom = max(bottom, reference.frame.maxY) }
+        let height = bottom - title.frame.minY + 28
+        XCTAssertLessThanOrEqual(height, 250, "Default-size card must stay compact; actual content height: \(height)")
     }
 }

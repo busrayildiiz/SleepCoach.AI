@@ -293,15 +293,18 @@ struct SleepListView: View {
             return profile.expectedNapCount.upperBound
         }
 
-    private func planItems(at now: Date) -> [SleepTimelineItem] {
+    private func planPresentation(at actual: Date) -> TodayPlanPresentation {
+        let now = planNow(actual)
+        let hero = sleepHero(at: now)
+        let routine = TodaySleepHeroModel.Routine.load(defaults: .standard)
         #if DEBUG && targetEnvironment(simulator)
         if TodayPlanUITestFixture.enabled {
-            return TodayPlanUITestFixture.timeline(records: records, wakes: wakeRecords)
+            return TodayPlanUITestFixture.presentation(records: records, wakes: wakeRecords, hero: hero, routine: routine)
         }
         #endif
-        // Production has no verified eligibility provider. Do not substitute phase/DQS.
-        return SleepTimelineCalculator(records: records, wakeRecord: todayWakeRecord,
-            now: now, calendar: .current).calculate()
+        // No verified provider exists. No legacy phase, DQS or LLM timestamp is used.
+        return TodayPlanPresentation.make(records: records, wakes: wakeRecords, hero: hero,
+            now: now, calendar: .current, routine: routine)
     }
 
     // MARK: - Helpers
@@ -927,8 +930,10 @@ struct SleepListView: View {
         #if DEBUG && targetEnvironment(simulator)
         if TodayPlanUITestFixture.enabled {
             return TodaySleepHeroModel.make(records: records, wakeRecords: wakeRecords,
-                now: TodayPlanUITestFixture.now, calendar: .current, routine: nil,
-                displayName: displayedParentName, babyName: babyName)
+                now: TodayPlanUITestFixture.now, calendar: .current,
+                routine: TodaySleepHeroModel.Routine.load(defaults: .standard),
+                displayName: displayedParentName, babyName: babyName,
+                proposals: TodayPlanUITestFixture.wakePredictions(records: records))
         }
         if HeroUITestFixture.enabled { return HeroUITestFixture.model(records: records, wakes: wakeRecords) }
         if HomeCardTestFixture.enabled { return HeroUITestFixture.legacyModel(records: records, wakes: wakeRecords) }
@@ -1644,7 +1649,7 @@ struct SleepListView: View {
 
     private var todayTimelineCard: some View {
         TimelineView(.periodic(from: .now, by: 60)) { context in
-            TodayPlanCard(items: planItems(at: context.date), now: planNow(context.date)) {
+            TodayPlanCard(presentation: planPresentation(at: context.date), now: planNow(context.date)) {
                 activeSheet = .dayDetail(SelectedDay(day: context.date))
             }
         }

@@ -105,6 +105,37 @@ jobs:
             xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/TestResults.xcresult" > "$RUNNER_TEMP/HomeScreenshots/test-summary.json"
           fi
 
+      - name: Export labeled plan screenshots for visual inspection
+        if: ${{ always() && github.head_ref == 'feat/todays-plan-premium' }}
+        run: |
+          python3 - <<'PYTHON'
+          import base64, json, os
+          from pathlib import Path
+          root = Path(os.environ["RUNNER_TEMP"]) / "HomeScreenshots"
+          seen = set()
+          def walk(value):
+              if isinstance(value, list):
+                  for child in value: walk(child)
+              elif isinstance(value, dict):
+                  strings = [v for v in value.values() if isinstance(v, str)]
+                  names = [v for v in strings if "TODAYS-PLAN-TEST-ONLY-" in v]
+                  for name in names:
+                      for candidate in strings:
+                          path = root / Path(candidate).name
+                          if path.suffix.lower() == ".png" and path.is_file() and path.name not in seen:
+                              seen.add(path.name)
+                              print("PLAN_PREVIEW_BEGIN " + json.dumps({"name": name, "file": path.name}))
+                              encoded = base64.b64encode(path.read_bytes()).decode()
+                              for offset in range(0, len(encoded), 32000):
+                                  print("PLAN_PREVIEW_DATA " + encoded[offset:offset + 32000])
+                              print("PLAN_PREVIEW_END")
+                  for child in value.values(): walk(child)
+          for manifest in root.glob("*.json"):
+              try: walk(json.loads(manifest.read_text()))
+              except (ValueError, OSError): pass
+          print("Labeled plan preview count:", len(seen))
+          PYTHON
+
       - name: Upload Home screenshots
         if: ${{ always() && (github.head_ref == 'feat/home-sleep-cards-redesign' || github.head_ref == 'feat/todays-sleep-hero' || github.head_ref == 'feat/todays-plan-premium') }}
         uses: actions/upload-artifact@v4
