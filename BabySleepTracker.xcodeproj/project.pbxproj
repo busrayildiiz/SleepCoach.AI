@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		AC5100000000000000000002 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = AC5100000000000000000001 /* PrivacyInfo.xcprivacy */; };
 		FA04E40B3030DF6700EFF932 /* Ruleenginecontracttests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA04E40A3030DF6700EFF932 /* Ruleenginecontracttests.swift */; };
 		FA04E40D3030E00A00EFF932 /* Llmresponseparsingpropertytests .swift in Sources */ = {isa = PBXBuildFile; fileRef = FA04E40C3030E00A00EFF932 /* Llmresponseparsingpropertytests .swift */; };
 		FA04E40F30324CF100EFF932 /* SleepRecordTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA04E40E30324CF100EFF932 /* SleepRecordTests.swift */; };
@@ -117,6 +118,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		AC5100000000000000000001 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		FA04E40A3030DF6700EFF932 /* Ruleenginecontracttests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Ruleenginecontracttests.swift; sourceTree = "<group>"; };
 		FA04E40C3030E00A00EFF932 /* Llmresponseparsingpropertytests .swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Llmresponseparsingpropertytests .swift"; sourceTree = "<group>"; };
 		FA04E40E30324CF100EFF932 /* SleepRecordTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepRecordTests.swift; sourceTree = "<group>"; };
@@ -352,6 +354,7 @@
 			isa = PBXGroup;
 			children = (
 				FAB4BB052FE2059000702F49 /* Info.plist */,
+				AC5100000000000000000001 /* PrivacyInfo.xcprivacy */,
 				FAEF10432F4E207F00E76FD4 /* BabySleepTrackerApp.swift */,
 				FA7232E82FDD8F1E00647487 /* Config */,
 				FA91C5EE2FDB48350089E1EE /* Memory */,
@@ -561,6 +564,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AC5100000000000000000002 /* PrivacyInfo.xcprivacy in Resources */,
 				FAEF104B2F4E208000E76FD4 /* Preview Assets.xcassets in Resources */,
 				FAB4BB012FE204A200702F49 /* APIConfig.xcconfig in Resources */,
 				FAEF10482F4E208000E76FD4 /* Assets.xcassets in Resources */,
