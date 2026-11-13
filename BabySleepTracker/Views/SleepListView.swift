@@ -37,6 +37,7 @@ struct SleepListView: View {
 
     enum ActiveSheet: Identifiable {
         case addSleep(editing: SleepRecord?, defaultDate: Date)
+        case addNightSleep(defaultDate: Date)
         case addBreak(parentID: UUID)
         case endSleep(parentID: UUID)
         case dayDetail(SelectedDay)
@@ -44,7 +45,7 @@ struct SleepListView: View {
 
         var isRecording: Bool {
             switch self {
-            case .addSleep, .addBreak, .endSleep: return true
+            case .addSleep, .addNightSleep, .addBreak, .endSleep: return true
             case .dayDetail, .wakeTime: return false
             }
         }
@@ -53,6 +54,8 @@ struct SleepListView: View {
             switch self {
             case .addSleep(let editing, let date):
                 return "addSleep-\(editing?.id.uuidString ?? "new")-\(date.timeIntervalSince1970)"
+            case .addNightSleep(let date):
+                return "addNightSleep-\(date.timeIntervalSince1970)"
             case .addBreak(let id):
                 return "addBreak-\(id)"
             case .endSleep(let id):
@@ -986,6 +989,7 @@ struct SleepListView: View {
             let model = sleepHero(at: context.date)
             TodaySleepHeroCard(model: model,
                 addNap: { activeSheet = .addSleep(editing: nil, defaultDate: Date()) },
+                recordNight: { activeSheet = .addNightSleep(defaultDate: Date()) },
                 endSleep: { if let record = model.record { activeSheet = .endSleep(parentID: record.id) } },
                 addBreak: { if model.canAddBreak, let record = model.record { activeSheet = .addBreak(parentID: record.id) } },
                 viewDetails: { activeSheet = .dayDetail(SelectedDay(day: model.sleepDay ?? context.date)) },
