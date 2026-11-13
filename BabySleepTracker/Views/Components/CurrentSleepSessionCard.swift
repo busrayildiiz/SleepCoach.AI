@@ -1,288 +1,284 @@
 import SwiftUI
 
-struct CurrentSleepSessionCard: View {
-    let ongoingNight: SleepRecord?
-    let expectedWakeTime: Date
-    let nextSleepTime: Date?
-    let isEstimated: Bool
-    var onAddBreak: (() -> Void)? = nil
-
-    @State private var pulse = false
-    @State private var starOpacity1: Double = 0.3
-    @State private var starOpacity2: Double = 0.6
-    @State private var starOpacity3: Double = 0.2
-
-    private let deepPurple = Color(red: 0.18, green: 0.12, blue: 0.45)
-    private let midPurple  = Color(red: 0.32, green: 0.22, blue: 0.72)
-    private let lilac      = Color(red: 0.72, green: 0.65, blue: 0.98)
-    private let gold       = Color(red: 1.0,  green: 0.80, blue: 0.30)
-
-    private struct CardTheme {
-        let bg: [Color]
-        let border: Color
-        let shadow: Color
-        let label: Color
-        let title: Color
-        let subtitle: Color
-        let ringTrack: Color
-        let ringArc: [Color]
-        let ringText: Color
-        let mutedText: Color
-        let accent: Color
-        let divider: Color
-        let showStars: Bool
+/// Presentation only. Production deliberately supplies no estimate until the
+/// approved seven-valid-recording-day eligibility policy is implemented.
+struct HomeSleepCardPresentation {
+    enum Status { case missing, confirmed, estimated, completed }
+    struct Estimate {
+        let kind: SleepKind
+        let start: Date
+        let wake: Date
     }
+    let status: Status
+    let kind: SleepKind?
+    let napNumber: Int?
+    let start: Date?
+    let elapsedMinutes: Int?
+    let expectedWake: Date?
+    let progress: Double?
 
-    private var shouldUseNightTheme: Bool {
-        if ongoingNight?.kind == .nightSleep { return true }
-        if ongoingNight == nil { return true }
-
-        let bedHour = UserDefaults.standard.object(forKey: "typicalBedHour") as? Double ?? 19.0
-        let bedMinute = UserDefaults.standard.object(forKey: "typicalBedMinute") as? Double ?? 30.0
-        let bedtime = Calendar.current.date(
-            bySettingHour: Int(bedHour),
-            minute: Int(bedMinute),
-            second: 0,
-            of: Date()
-        ) ?? Date()
-
-        return Date() >= bedtime
-    }
-
-    private var theme: CardTheme {
-        if shouldUseNightTheme {
-            return CardTheme(
-                bg: [Color(red: 0.12, green: 0.08, blue: 0.35), Color(red: 0.08, green: 0.05, blue: 0.25)],
-                border: midPurple.opacity(0.4),
-                shadow: deepPurple.opacity(0.6),
-                label: lilac,
-                title: .white,
-                subtitle: gold,
-                ringTrack: Color.white.opacity(0.10),
-                ringArc: [gold.opacity(0.7), lilac, Color.white],
-                ringText: .white,
-                mutedText: lilac.opacity(0.85),
-                accent: gold,
-                divider: Color.white.opacity(0.08),
-                showStars: true
-            )
+    static func make(records: [SleepRecord], now: Date, calendar: Calendar,
+                     estimate: Estimate? = nil, eligibilityVerified: Bool = false) -> Self {
+        let active = records.filter { $0.kind != .break && $0.isOngoing && $0.date <= now }
+            .max { $0.date < $1.date }
+        if let active {
+            return session(record: active, records: records, now: now, calendar: calendar)
         }
-
-        return CardTheme(
-            bg: [Color(red: 0.99, green: 0.98, blue: 1.0), Color(red: 1.0, green: 0.96, blue: 0.88)],
-            border: Color(red: 0.55, green: 0.45, blue: 0.98).opacity(0.18),
-            shadow: Color(red: 0.45, green: 0.35, blue: 0.92).opacity(0.10),
-            label: Color(red: 0.45, green: 0.35, blue: 0.86),
-            title: Color(red: 0.17, green: 0.13, blue: 0.32),
-            subtitle: Color(red: 0.42, green: 0.38, blue: 0.58),
-            ringTrack: Color(red: 0.55, green: 0.45, blue: 0.98).opacity(0.14),
-            ringArc: [Color(red: 0.55, green: 0.45, blue: 0.98).opacity(0.55), Color(red: 0.45, green: 0.35, blue: 0.92), Color(red: 1.0, green: 0.72, blue: 0.30)],
-            ringText: Color(red: 0.17, green: 0.13, blue: 0.32),
-            mutedText: Color(red: 0.42, green: 0.38, blue: 0.58),
-            accent: Color(red: 0.45, green: 0.35, blue: 0.86),
-            divider: Color(red: 0.55, green: 0.45, blue: 0.98).opacity(0.10),
-            showStars: false
-        )
-    }
-
-    private var startTime: Date {
-        ongoingNight?.date ?? Calendar.current.date(byAdding: .hour, value: -9, to: expectedWakeTime) ?? Date()
-    }
-
-    private var elapsedMinutes: Int {
-        max(0, Int(Date().timeIntervalSince(startTime) / 60))
-    }
-
-    private var sleepStateTitle: String {
-        if isEstimated { return "Likely sleeping" }
-        return ongoingNight?.kind == .nightSleep ? "Sleeping tonight" : "Sleeping..."
-    }
-
-    private var sleepProgress: Double {
-        let total = max(1, Int(expectedWakeTime.timeIntervalSince(startTime) / 60))
-        return min(1.0, max(0.05, Double(elapsedMinutes) / Double(total)))
-    }
-
-    private var ringCenterText: String {
-        TimeFormat.minutes(elapsedMinutes)
-    }
-
-    var body: some View {
-        let t = theme
-        ZStack {
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(LinearGradient(
-                    colors: t.bg,
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                ))
-
-            if t.showStars {
-                starsLayer
-            }
-
-            VStack(spacing: 0) {
-                topRow(t)
-                Divider()
-                    .background(t.divider)
-                    .padding(.horizontal, 16)
-                bottomRow(t)
-                if let onAddBreak, ongoingNight != nil, !isEstimated {
-                    Button(action: onAddBreak) {
-                        Label("Add Awake Break", systemImage: "plus")
-                            .font(.subheadline.weight(.semibold))
-                            .frame(maxWidth: .infinity)
-                            .padding()
-                    }
-                    .foregroundStyle(t.accent)
-                    .accessibilityIdentifier("sleep.current.addBreak")
-                }
-            }
+        if eligibilityVerified, let estimate, estimate.kind != .break,
+           estimate.start <= now, estimate.wake > now, estimate.wake > estimate.start {
+            let elapsed = max(0, Int(now.timeIntervalSince(estimate.start) / 60))
+            return Self(status: .estimated, kind: estimate.kind,
+                        napNumber: estimate.kind == .dayNap ? napSequence(records: records, start: estimate.start, id: nil, now: now, calendar: calendar) : nil,
+                        start: estimate.start, elapsedMinutes: elapsed, expectedWake: estimate.wake,
+                        progress: min(1, max(0, now.timeIntervalSince(estimate.start) / estimate.wake.timeIntervalSince(estimate.start))))
         }
-        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(t.border, lineWidth: 1)
-        )
-        .shadow(color: t.shadow, radius: 16, x: 0, y: 8)
-        .onAppear {
-            pulse = true
-            withAnimation(.easeInOut(duration: 2.1).repeatForever(autoreverses: true)) { starOpacity1 = 0.9 }
-            withAnimation(.easeInOut(duration: 1.6).repeatForever(autoreverses: true).delay(0.4)) { starOpacity2 = 0.2 }
-            withAnimation(.easeInOut(duration: 2.5).repeatForever(autoreverses: true).delay(0.9)) { starOpacity3 = 0.8 }
+        return Self(status: .missing, kind: nil, napNumber: nil, start: nil,
+                    elapsedMinutes: nil, expectedWake: nil, progress: nil)
+    }
+
+    static func session(record: SleepRecord, records: [SleepRecord], now: Date, calendar: Calendar) -> Self {
+        guard record.kind != .break, record.date <= now,
+              record.isOngoing || record.observedEnd != nil else {
+            return make(records: [], now: now, calendar: calendar)
+        }
+        let end = record.isOngoing ? now : min(record.observedEnd ?? now, now)
+        return Self(status: record.isOngoing ? .confirmed : .completed, kind: record.kind,
+                    napNumber: record.kind == .dayNap ? napSequence(records: records, start: record.date, id: record.id, now: now, calendar: calendar) : nil,
+                    start: record.date, elapsedMinutes: max(0, Int(end.timeIntervalSince(record.date) / 60)),
+                    expectedWake: nil, progress: nil)
+    }
+
+    private static func napSequence(records: [SleepRecord], start: Date, id: UUID?, now: Date, calendar: Calendar) -> Int {
+        let day = SleepAccounting(records: records, now: now, calendar: calendar).records(on: start)
+        let preceding = day.filter {
+            $0.kind == .dayNap && $0.id != id && $0.date < start && $0.date <= now &&
+            ($0.isOngoing || $0.observedEnd != nil)
+        }
+        return Set(preceding.map(\.id)).count + 1
+    }
+
+    var classification: String {
+        guard let kind else { return "SLEEP RECORDING" }
+        if kind == .nightSleep { return "NIGHT SLEEP" }
+        switch napNumber {
+        case 1: return "FIRST NAP"
+        case 2: return "SECOND NAP"
+        case 3: return "THIRD NAP"
+        default: return "NAP \(napNumber ?? 1)"
         }
     }
-
-    private func topRow(_ t: CardTheme) -> some View {
-        HStack(alignment: .center, spacing: 16) {
-            VStack(alignment: .leading, spacing: 7) {
-                HStack(spacing: 5) {
-                    Circle()
-                        .fill(t.label)
-                        .frame(width: 6, height: 6)
-                        .scaleEffect(pulse ? 1.4 : 0.8)
-                        .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: pulse)
-                    Text(isEstimated ? "LIKELY NIGHT SLEEP" : "LIVE SLEEP SESSION")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(t.label)
-                        .tracking(0.5)
-                }
-
-                TimelineView(.periodic(from: .now, by: 60)) { _ in
-                    Text(sleepStateTitle)
-                        .font(.system(size: 28, weight: .bold, design: .rounded))
-                        .foregroundStyle(t.title)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.78)
-                }
-
-                HStack(spacing: 4) {
-                    Image(systemName: "clock")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(t.mutedText.opacity(0.75))
-                    Text("\(isEstimated ? "Expected start" : "Started") \(ampm(startTime)) · \(TimeFormat.minutes(elapsedMinutes)) asleep")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(t.mutedText)
-                        .monospacedDigit()
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
-                }
-            }
-            Spacer()
-            sleepProgressRing(t)
-        }
-        .padding(.horizontal, 18)
-        .padding(.top, 18)
-        .padding(.bottom, 14)
-    }
-
-    private func sleepProgressRing(_ t: CardTheme) -> some View {
-        ZStack {
-            Circle()
-                .stroke(t.ringTrack, lineWidth: 5)
-                .frame(width: 72, height: 72)
-
-            Circle()
-                .trim(from: 0, to: sleepProgress)
-                .stroke(
-                    AngularGradient(colors: t.ringArc, center: .center),
-                    style: StrokeStyle(lineWidth: 5, lineCap: .round)
-                )
-                .frame(width: 72, height: 72)
-                .rotationEffect(.degrees(-90))
-                .animation(.easeInOut(duration: 1.0), value: sleepProgress)
-
-            VStack(spacing: 1) {
-                Text(ringCenterText)
-                    .font(.system(size: ringCenterText.count > 4 ? 12 : 15, weight: .bold, design: .rounded))
-                    .foregroundStyle(t.ringText)
-                    .monospacedDigit()
-                    .minimumScaleFactor(0.7)
-                Text("asleep")
-                    .font(.system(size: 8, weight: .semibold))
-                    .foregroundStyle(t.label.opacity(0.7))
-            }
+    var section: String {
+        switch status {
+        case .missing: return classification
+        case .estimated: return "LIKELY " + classification
+        case .confirmed: return "LIVE " + classification
+        case .completed: return "COMPLETED " + classification
         }
     }
-
-    // While the baby is asleep at night (or an inferred night-sleep window),
-    // the bottom row must show the expected wake time — never a daytime
-    // nap estimate, which is meaningless while still asleep overnight.
-    // "Next nap estimate" only applies while the ongoing session is a day nap.
-    private var isCurrentlyNightSleep: Bool {
-        ongoingNight == nil || ongoingNight?.kind == .nightSleep
-    }
-
-    private func bottomRow(_ t: CardTheme) -> some View {
-        HStack(spacing: 8) {
-            HStack(spacing: 6) {
-                Image(systemName: isCurrentlyNightSleep ? "sunrise.fill" : "moon.zzz.fill")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(t.mutedText.opacity(0.75))
-
-                Text(isCurrentlyNightSleep ? "Expected wake" : (nextSleepTime == nil ? "Next sleep plan" : "Next nap estimate"))
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(t.mutedText)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-            }
-            Spacer()
-            Text(isCurrentlyNightSleep ? ampm(expectedWakeTime) : (nextSleepTime.map { ampm($0) } ?? "After wake"))
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(t.accent)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-        }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 12)
-    }
-
-    private var starsLayer: some View {
-        GeometryReader { geo in
-            let w = geo.size.width
-            let h = geo.size.height
-            ZStack {
-                Circle().fill(Color.white).frame(width: 2.5, height: 2.5).position(x: w * 0.15, y: h * 0.22).opacity(starOpacity1)
-                Circle().fill(Color.white).frame(width: 1.5, height: 1.5).position(x: w * 0.75, y: h * 0.15).opacity(starOpacity2)
-                Circle().fill(Color.white).frame(width: 2, height: 2).position(x: w * 0.88, y: h * 0.40).opacity(starOpacity3)
-                Circle().fill(Color.white).frame(width: 1.5, height: 1.5).position(x: w * 0.25, y: h * 0.70).opacity(starOpacity2)
-                Circle().fill(Color.white).frame(width: 1, height: 1).position(x: w * 0.60, y: h * 0.25).opacity(starOpacity1)
-                Image(systemName: "moon.stars.fill")
-                    .font(.system(size: 56, weight: .thin))
-                    .foregroundStyle(LinearGradient(
-                        colors: [Color.white.opacity(0.06), Color.white.opacity(0.03)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ))
-                    .position(x: w * 0.82, y: h * 0.38)
-            }
+    var title: String {
+        switch status {
+        case .missing: return "Ready to record"
+        case .estimated: return "Likely sleeping"
+        case .confirmed: return kind == .nightSleep ? "Sleeping tonight" : "Sleeping now"
+        case .completed: return "Sleep recorded"
         }
     }
-
-    private func ampm(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "h:mm a"
-        return formatter.string(from: date)
+    var duration: String { elapsedMinutes.map(TimeFormat.minutes) ?? "—" }
+    var durationLabel: String { status == .estimated ? "estimated" : "elapsed" }
+    func time(_ date: Date, relativeTo now: Date, calendar: Calendar) -> String {
+        date.formatted(date: calendar.isDate(date, inSameDayAs: now) ? .omitted : .abbreviated, time: .shortened)
+    }
+    func detail(now: Date, calendar: Calendar) -> String {
+        guard let start else { return "Record sleep to follow your baby's day." }
+        return "\(status == .estimated ? "Expected start" : "Started") \(time(start, relativeTo: now, calendar: calendar)) · \(duration) \(durationLabel)"
+    }
+    func accessibility(now: Date, calendar: Calendar) -> String {
+        "\(section). \(title). \(detail(now: now, calendar: calendar)) Expected wake: \(expectedWake.map { time($0, relativeTo: now, calendar: calendar) } ?? "not estimated")."
     }
 }
+
+struct HomeWakeCardState {
+    private(set) var records: [DailyWakeRecord]
+    func isVisible(now: Date, calendar: Calendar) -> Bool {
+        !records.contains { calendar.isDate($0.day, inSameDayAs: now) }
+    }
+    mutating func accept(_ result: SleepWakeTimeWorkflowResult) {
+        if result.wakePersistenceSucceeded { records = result.updatedWakeRecords }
+    }
+}
+
+private enum HomeCardColor {
+    // Exact AI Coach accents; adaptive system surfaces/ink preserve dark mode.
+    static let purple = Color(red: 0.55, green: 0.45, blue: 0.96)
+    static let deep = Color(red: 0.45, green: 0.35, blue: 0.92)
+    static let sun = Color(red: 1.0, green: 0.68, blue: 0.12)
+}
+
+private struct HomeCardSurface: ViewModifier {
+    var warm = false
+    func body(content: Content) -> some View {
+        let accent = warm ? HomeCardColor.sun : HomeCardColor.purple
+        content
+            .background(Color(.secondarySystemGroupedBackground))
+            .overlay { RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(accent.opacity(0.14), lineWidth: 1) }
+            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .shadow(color: HomeCardColor.deep.opacity(0.07), radius: 9, x: 0, y: 4)
+    }
+}
+
+struct CurrentSleepSessionCard<Artwork: View>: View {
+    let presentation: HomeSleepCardPresentation
+    let now: Date
+    var onAddBreak: (() -> Void)? = nil
+    @ViewBuilder let artwork: () -> Artwork
+    @Environment(\.dynamicTypeSize) private var typeSize
+    @ScaledMetric(relativeTo: .body) private var ringSize = 80.0
+
+    var body: some View {
+        VStack(spacing: 12) {
+            if typeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 14) { summary; if presentation.start != nil { ring } }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                HStack(spacing: 12) {
+                    summary.frame(maxWidth: .infinity, alignment: .leading)
+                    if presentation.start != nil { ring }
+                }
+            }
+            if presentation.start != nil {
+                Divider().overlay(HomeCardColor.purple.opacity(0.12))
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Label("Expected wake", systemImage: "sunrise.fill")
+                        .font(.system(.subheadline, design: .rounded, weight: .semibold))
+                        .foregroundStyle(Color(.secondaryLabel))
+                    Spacer(minLength: 0)
+                    Text(presentation.expectedWake.map { presentation.time($0, relativeTo: now, calendar: .current) } ?? "Not estimated")
+                        .font(.system(.subheadline, design: .rounded, weight: .bold))
+                        .multilineTextAlignment(.trailing)
+                }
+            }
+            if let onAddBreak, presentation.status == .confirmed {
+                Button(action: onAddBreak) {
+                    Label("Add Awake Break", systemImage: "plus").font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                }
+                .foregroundStyle(HomeCardColor.deep)
+                .accessibilityIdentifier("sleep.current.addBreak")
+            }
+        }
+        .padding(14)
+        .background(LinearGradient(colors: [HomeCardColor.purple.opacity(0.025), HomeCardColor.purple.opacity(0.065)], startPoint: .topLeading, endPoint: .bottomTrailing))
+        .modifier(HomeCardSurface())
+    }
+
+    private var summary: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 6) {
+                Circle().fill(HomeCardColor.purple).frame(width: 6, height: 6)
+                Text(presentation.section).font(.system(.caption2, design: .rounded, weight: .bold)).tracking(0.7)
+            }.foregroundStyle(HomeCardColor.deep)
+            HStack(spacing: 10) {
+                artwork().frame(width: 40, height: 40).accessibilityHidden(true)
+                Text(presentation.title).font(.system(.title3, design: .rounded, weight: .bold))
+                    .foregroundStyle(Color(.label)).fixedSize(horizontal: false, vertical: true)
+            }
+            Label(presentation.detail(now: now, calendar: .current), systemImage: "clock")
+                .font(.caption).foregroundStyle(Color(.secondaryLabel))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(presentation.accessibility(now: now, calendar: .current))
+        .accessibilityIdentifier("home.sleep.summary")
+    }
+
+    private var ring: some View {
+        ZStack {
+            Circle().stroke(HomeCardColor.purple.opacity(0.17), lineWidth: 6)
+            if let progress = presentation.progress {
+                Circle().trim(from: 0, to: progress)
+                    .stroke(HomeCardColor.purple, style: StrokeStyle(lineWidth: 6, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+            }
+            VStack(spacing: 2) {
+                Image(systemName: "sparkles").font(.caption).foregroundStyle(HomeCardColor.purple)
+                Text(presentation.duration).font(.system(.subheadline, design: .rounded, weight: .bold)).monospacedDigit()
+                Text(presentation.durationLabel).font(.caption2).foregroundStyle(Color(.secondaryLabel))
+            }.padding(5)
+        }
+        .frame(width: ringSize, height: ringSize)
+        .accessibilityLabel("\(presentation.duration) \(presentation.durationLabel)")
+    }
+}
+
+struct HomeWakeTimeCard: View {
+    let action: () -> Void
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    var body: some View {
+        Button(action: action) {
+            if typeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 12) { content; addLabel }
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(14)
+            } else {
+                HStack(spacing: 12) { content; Spacer(minLength: 0); addLabel }.padding(14)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Add Wake Time. Record when your baby wakes up.")
+        .accessibilityHint("Opens today's wake-time editor")
+        .accessibilityIdentifier("home.wake.add")
+        .background(LinearGradient(colors: [HomeCardColor.sun.opacity(0.025), HomeCardColor.sun.opacity(0.11)], startPoint: .top, endPoint: .bottom))
+        .modifier(HomeCardSurface(warm: true))
+    }
+    private var content: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "sunrise.fill").font(.system(size: 30)).foregroundStyle(HomeCardColor.sun).accessibilityHidden(true)
+            Rectangle().fill(HomeCardColor.sun.opacity(0.3)).frame(width: 1, height: 32).accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Add Wake Time").font(.system(.subheadline, design: .rounded, weight: .bold)).foregroundStyle(Color(.label))
+                Text("Record when your baby wakes up.").font(.caption).foregroundStyle(Color(.secondaryLabel))
+            }.fixedSize(horizontal: false, vertical: true)
+        }
+    }
+    private var addLabel: some View {
+        Label("Add", systemImage: "plus").font(.system(.subheadline, design: .rounded, weight: .semibold))
+            .foregroundStyle(HomeCardColor.sun).padding(.horizontal, 14).frame(minHeight: 44)
+            .background(Color(.secondarySystemGroupedBackground), in: Capsule())
+            .overlay(Capsule().stroke(HomeCardColor.sun.opacity(0.2), lineWidth: 1))
+    }
+}
+
+#if DEBUG && targetEnvironment(simulator)
+/// Explicit UI-test opt-in only; never a production eligibility bypass.
+enum HomeCardTestFixture {
+    static var enabled: Bool { ProcessInfo.processInfo.environment["HOME_CARD_UI_TESTS"] == "1" }
+    static var scenario: String { ProcessInfo.processInfo.environment["HOME_CARD_SCENARIO"] ?? "missing" }
+    static var now: Date {
+        if scenario == "confirmed" { return Date() }
+        return Calendar.current.date(bySettingHour: 21, minute: 49, second: 0, of: Date())!
+    }
+    static func presentation(records: [SleepRecord]) -> HomeSleepCardPresentation {
+        let kind: SleepKind = scenario == "night" ? .nightSleep : .dayNap
+        let start = now.addingTimeInterval(scenario == "night" ? -8340 : -2700)
+        let wake = start.addingTimeInterval(scenario == "night" ? 41400 : 5400)
+        return HomeSleepCardPresentation.make(records: records, now: now, calendar: .current,
+            estimate: .init(kind: kind, start: start, wake: wake),
+            eligibilityVerified: scenario == "first-nap" || scenario == "night")
+    }
+    static func prepare() {
+        let defaults = UserDefaults.standard
+        guard ProcessInfo.processInfo.environment["HOME_CARD_RESET"] == "1" else { return }
+        if let domain = Bundle.main.bundleIdentifier { defaults.removePersistentDomain(forName: domain) }
+        defaults.set("light", forKey: "appAppearance")
+        defaults.set(true, forKey: "authComplete")
+        defaults.set(true, forKey: "onboardingComplete")
+        defaults.set(23.0, forKey: "typicalBedHour")
+        defaults.set(0.0, forKey: "typicalWakeHour")
+        let records: [SleepRecord] = scenario == "confirmed" ? [
+            SleepRecord(date: now.addingTimeInterval(-3600), duration: 0, kind: .nightSleep, isOngoing: true)
+        ] : []
+        SleepRecordPersistence().save(records)
+        defaults.removeObject(forKey: "dailyWakeRecords_v1")
+    }
+}
+#endif
