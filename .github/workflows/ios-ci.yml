@@ -19,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        simulator: ${{ fromJSON((github.head_ref == 'feat/recording-experience-redesign' || (github.head_ref == 'feat/home-sleep-cards-redesign' || github.head_ref == 'feat/todays-sleep-hero')) && '["standard","compact"]' || '["standard"]') }}
+        simulator: ${{ fromJSON((github.head_ref == 'feat/recording-experience-redesign' || (github.head_ref == 'feat/home-sleep-cards-redesign' || github.head_ref == 'feat/todays-sleep-hero' || github.head_ref == 'feat/todays-plan-premium')) && '["standard","compact"]' || '["standard"]') }}
     env:
       SIMULATOR_CLASS: ${{ matrix.simulator }}
       DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
@@ -65,25 +65,40 @@ jobs:
       - name: Build and run XCTest
         env:
           SIMULATOR_UDID: ${{ steps.simulator.outputs.udid }}
-        run: >-
-          xcodebuild test
-          -project BabySleepTracker.xcodeproj
-          -scheme BabySleepTracker
-          -configuration Debug
-          -sdk iphonesimulator
-          -destination "platform=iOS Simulator,id=$SIMULATOR_UDID"
-          -derivedDataPath "$RUNNER_TEMP/DerivedData"
-          -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult"
-          CODE_SIGN_STYLE=Manual
-          CODE_SIGN_IDENTITY=-
-          CODE_SIGNING_ALLOWED=YES
-          CODE_SIGNING_REQUIRED=NO
-          AD_HOC_CODE_SIGNING_ALLOWED=YES
-          DEVELOPMENT_TEAM=
-          PROVISIONING_PROFILE_SPECIFIER=
+          HEAD_BRANCH: ${{ github.head_ref }}
+        run: |
+          test_selection=()
+          if [ "$HEAD_BRANCH" = "feat/todays-plan-premium" ]; then
+            test_selection=(
+              -only-testing:BabySleepTrackerTests/SleepTimelineCalculatorTests
+              -only-testing:BabySleepTrackerTests/TodaySleepHeroModelTests
+              -only-testing:BabySleepTrackerTests/SleepOverviewCalculatorTests
+              -only-testing:BabySleepTrackerTests/SleepRecordTests
+              -only-testing:BabySleepTrackerTests/SleepRecordPersistenceTests
+              -only-testing:BabySleepTrackerTests/DailyWakeRecordPersistenceTests
+              -only-testing:BabySleepTrackerTests/SleepWakeTimeWorkflowTests
+              -only-testing:BabySleepTrackerUITests/TodayPlanUITests
+              -only-testing:BabySleepTrackerUITests/TodaySleepHeroUITests
+            )
+          fi
+          xcodebuild test "${test_selection[@]}" \
+            -project BabySleepTracker.xcodeproj \
+            -scheme BabySleepTracker \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY=- \
+            CODE_SIGNING_ALLOWED=YES \
+            CODE_SIGNING_REQUIRED=NO \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES \
+            DEVELOPMENT_TEAM= \
+            PROVISIONING_PROFILE_SPECIFIER=
 
       - name: Export Home visual verification attachments
-        if: ${{ always() && (github.head_ref == 'feat/home-sleep-cards-redesign' || github.head_ref == 'feat/todays-sleep-hero') }}
+        if: ${{ always() && (github.head_ref == 'feat/home-sleep-cards-redesign' || github.head_ref == 'feat/todays-sleep-hero' || github.head_ref == 'feat/todays-plan-premium') }}
         run: |
           if [ -d "$RUNNER_TEMP/TestResults.xcresult" ]; then
             xcrun xcresulttool export attachments --path "$RUNNER_TEMP/TestResults.xcresult" --output-path "$RUNNER_TEMP/HomeScreenshots"
@@ -91,7 +106,7 @@ jobs:
           fi
 
       - name: Upload Home screenshots
-        if: ${{ always() && (github.head_ref == 'feat/home-sleep-cards-redesign' || github.head_ref == 'feat/todays-sleep-hero') }}
+        if: ${{ always() && (github.head_ref == 'feat/home-sleep-cards-redesign' || github.head_ref == 'feat/todays-sleep-hero' || github.head_ref == 'feat/todays-plan-premium') }}
         uses: actions/upload-artifact@v4
         with:
           name: home-screenshots-${{ matrix.simulator }}
@@ -100,7 +115,7 @@ jobs:
           retention-days: 7
 
       - name: Upload failed test results or recording review bundle
-        if: ${{ failure() || github.head_ref == 'feat/recording-experience-redesign' || (github.head_ref == 'feat/home-sleep-cards-redesign' || github.head_ref == 'feat/todays-sleep-hero') }}
+        if: ${{ failure() || github.head_ref == 'feat/recording-experience-redesign' || (github.head_ref == 'feat/home-sleep-cards-redesign' || github.head_ref == 'feat/todays-sleep-hero' || github.head_ref == 'feat/todays-plan-premium') }}
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.simulator == 'compact' && 'ios-test-results-compact' || 'ios-test-results' }}

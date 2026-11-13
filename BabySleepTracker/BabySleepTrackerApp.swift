@@ -7,7 +7,9 @@ struct BabySleepTrackerApp: App {
     init() {
         #if DEBUG && targetEnvironment(simulator)
         // Explicit opt-in only in the UI-test runner's simulator app container.
-        if HeroUITestFixture.enabled {
+        if TodayPlanUITestFixture.enabled {
+            TodayPlanUITestFixture.prepare()
+        } else if HeroUITestFixture.enabled {
             HeroUITestFixture.prepare()
         } else if HomeCardTestFixture.enabled {
             HomeCardTestFixture.prepare()

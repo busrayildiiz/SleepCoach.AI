@@ -271,4 +271,125 @@ final class SleepTimelineCalculatorTests: XCTestCase {
         XCTAssertEqual(calculate(proposals: [otherDay, second, first], verified: true), expected)
         XCTAssertEqual(expected.filter { $0.source == .estimate }.map(\.visualState), [.next, .future])
     }
+    func testPlanProgressCountsConfirmedCompletionsAndAvailableEventsOnly() {
+        let wake = DailyWakeRecord(day: day, wakeTime: at(7))
+        let done = SleepRecord(date: at(8), duration: 30)
+        let active = SleepRecord(date: at(11), duration: 0, isOngoing: true)
+        let invalid = SleepRecord(date: at(10), duration: 0)
+        let items = calculate(records: [done, active, invalid], wake: wake,
+            proposals: [proposal("next", hour: 14), proposal("future", hour: 20, kind: .bedtime)], verified: true)
+        let display = TodayPlanPresentation(items: items)
+        XCTAssertEqual(display.completedEventCount, 2)
+        XCTAssertEqual(display.availableEventCount, 5)
+        XCTAssertEqual(TodayPlanPresentation(items: calculate()).availableEventCount, 0)
+        XCTAssertEqual(TodayPlanPresentation(items: calculate()).completedEventCount, 0)
+    }
+
+    func testProgressNeverUsesAFixedFourEventDenominator() {
+        for count in [1, 3, 5, 8] {
+            let naps = (0..<count).map { SleepRecord(date: at(1 + Double($0)), duration: 20) }
+            let display = TodayPlanPresentation(items: calculate(records: naps))
+            XCTAssertEqual(display.availableEventCount, count)
+            XCTAssertEqual(display.completedEventCount, count)
+        }
+    }
+
+    func testSolidConnectorRequiresConfirmedProgressOnBothSides() {
+        let wake = DailyWakeRecord(day: day, wakeTime: at(7))
+        let done = SleepRecord(date: at(8), duration: 30)
+        let active = SleepRecord(date: at(11), duration: 0, isOngoing: true)
+        let items = calculate(records: [done, active], wake: wake,
+            proposals: [proposal("next", hour: 14)], verified: true)
+        let display = TodayPlanPresentation(items: items)
+        XCTAssertTrue(display.isConfirmedConnector(after: 0))
+        XCTAssertTrue(display.isConfirmedConnector(after: 1))
+        XCTAssertFalse(display.isConfirmedConnector(after: 2), "An ongoing sleep has no observed ending.")
+        XCTAssertFalse(display.isConfirmedConnector(after: 3))
+        XCTAssertFalse(display.isConfirmedConnector(after: -1))
+    }
+
+    func testMissingWakeAndInvalidIntervalCannotCreateSolidProgress() {
+        let unknown = SleepRecord(date: at(8), duration: 0)
+        let done = SleepRecord(date: at(9), duration: 30)
+        let display = TodayPlanPresentation(items: calculate(records: [unknown, done]))
+        XCTAssertFalse(display.isConfirmedConnector(after: 0))
+        XCTAssertFalse(display.isConfirmedConnector(after: 1))
+        XCTAssertEqual(display.completedEventCount, 1)
+        XCTAssertEqual(display.availableEventCount, 1)
+    }
+
+    func testRelativeTimeRequiresVerifiedFutureEstimateAndStopsWhenOverdue() throws {
+        let proposals = [proposal("next", hour: 13)]
+        let eligible = calculate(proposals: proposals, verified: true)
+        let display = TodayPlanPresentation(items: eligible)
+        let estimate = try XCTUnwrap(eligible.first { $0.source == .estimate })
+        XCTAssertEqual(display.minutesUntil(estimate, now: at(12)), 60)
+        XCTAssertNil(display.minutesUntil(estimate, now: at(13)), "Never display stale countdowns.")
+        XCTAssertNil(display.minutesUntil(estimate, now: at(14)))
+        let unverified = calculate(proposals: proposals)
+        let neutral = try XCTUnwrap(unverified.first { $0.source == .estimate })
+        XCTAssertNil(TodayPlanPresentation(items: unverified).minutesUntil(neutral, now: at(12)))
+        let overdue = calculate(proposals: proposals, verified: true, now: at(14))
+        XCTAssertEqual(TodayPlanPresentation(items: overdue).availableEventCount, 0)
+    }
+
+    func testEditingAndDeletingRecordReprojectsDurationProgressAndIdentity() throws {
+        let original = SleepRecord(date: at(8), duration: 60)
+        let updated = SleepRecord(id: original.id, date: at(9), duration: 40)
+        let awake = SleepRecord(date: at(9.25), duration: 10, kind: .break, parentNapID: original.id)
+        let before = try item(original, in: calculate(records: [original]))
+        let afterItems = calculate(records: [updated, awake])
+        let after = try item(updated, in: afterItems)
+        XCTAssertEqual(before.id, after.id)
+        XCTAssertEqual(after.time, at(9))
+        XCTAssertEqual(after.durationMinutes, 30)
+        XCTAssertEqual(TodayPlanPresentation(items: afterItems).completedEventCount, 1)
+        XCTAssertEqual(TodayPlanPresentation(items: calculate()).completedEventCount, 0)
+    }
+
+    func testWakeDeletionRemovesItsProgressWithoutInventingDefaultWake() {
+        let done = SleepRecord(date: at(8), duration: 30)
+        let wake = DailyWakeRecord(day: day, wakeTime: at(7))
+        XCTAssertEqual(TodayPlanPresentation(items: calculate(records: [done], wake: wake)).completedEventCount, 2)
+        let deleted = calculate(records: [done])
+        XCTAssertEqual(TodayPlanPresentation(items: deleted).completedEventCount, 1)
+        XCTAssertNil(deleted.first?.time)
+        XCTAssertEqual(deleted.first?.visualState, .unavailable)
+    }
+
+    func testHeroAndTimelineAgreeOnActiveNapCompletionAndOvernightCarryover() throws {
+        let cases = [SleepRecord(date: at(11), duration: 0, isOngoing: true),
+                     SleepRecord(date: at(10), duration: 60),
+                     SleepRecord(date: at(-4), duration: 0, kind: .nightSleep, isOngoing: true)]
+        for record in cases {
+            let hero = TodaySleepHeroModel.make(records: [record], wakeRecords: [], now: at(12),
+                calendar: calendar, routine: nil, displayName: "Parent", babyName: "Baby")
+            let result = try item(record, in: calculate(records: [record]))
+            XCTAssertEqual(hero.record?.id, record.id)
+            XCTAssertEqual(result.visualState, record.isOngoing ? .active : .completed)
+            XCTAssertEqual(hero.record?.isOngoing, result.isActive)
+            if record.isOngoing { XCTAssertNil(result.observedEnd) }
+        }
+    }
+
+    func testProgressRetainsCarryoverContextWithoutCompletingOrReassigningIt() throws {
+        let night = SleepRecord(date: at(-4), duration: 0, kind: .nightSleep, isOngoing: true)
+        let items = calculate(records: [night])
+        let result = try item(night, in: items)
+        XCTAssertTrue(result.isCarryover)
+        XCTAssertEqual(result.sleepDay, calendar.startOfDay(for: at(-4)))
+        XCTAssertEqual(TodayPlanPresentation(items: items).availableEventCount, 1)
+        XCTAssertEqual(TodayPlanPresentation(items: items).completedEventCount, 0)
+    }
+
+    func testLocalTimezoneUsesLocalStartDayRatherThanUTCDate() throws {
+        var local = calendar
+        local.timeZone = try XCTUnwrap(TimeZone(identifier: "Europe/Istanbul"))
+        let now = try XCTUnwrap(local.date(from: DateComponents(year: 2026, month: 11, day: 14, hour: 1)))
+        let start = now.addingTimeInterval(-30 * 60)
+        let record = SleepRecord(date: start, duration: 20)
+        let items = SleepTimelineCalculator(records: [record], wakeRecord: nil, now: now, calendar: local).calculate()
+        XCTAssertEqual(try item(record, in: items).sleepDay, local.startOfDay(for: now))
+        XCTAssertEqual(TodayPlanPresentation(items: items).completedEventCount, 1)
+    }
 }
