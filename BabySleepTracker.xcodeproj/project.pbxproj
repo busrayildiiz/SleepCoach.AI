@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		AC5100000000000000000002 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = AC5100000000000000000001 /* PrivacyInfo.xcprivacy */; };
 		FA04E40B3030DF6700EFF932 /* Ruleenginecontracttests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA04E40A3030DF6700EFF932 /* Ruleenginecontracttests.swift */; };
 		FA04E40D3030E00A00EFF932 /* Llmresponseparsingpropertytests .swift in Sources */ = {isa = PBXBuildFile; fileRef = FA04E40C3030E00A00EFF932 /* Llmresponseparsingpropertytests .swift */; };
 		FA04E40F30324CF100EFF932 /* SleepRecordTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA04E40E30324CF100EFF932 /* SleepRecordTests.swift */; };
@@ -94,6 +95,15 @@
 		AC1000000000000000000004 /* RecordingFormComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC1000000000000000000003 /* RecordingFormComponents.swift */; };
 		AC1000000000000000000006 /* SleepRecordingFlowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC1000000000000000000005 /* SleepRecordingFlowTests.swift */; };
 		AC100000000000000000000B /* RecordingNavigationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC100000000000000000000A; };
+		AC2000000000000000000002 /* HomeDashboardCardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC2000000000000000000001; };
+		AC3000000000000000000002 /* HomeDashboardCardUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC3000000000000000000001; };
+		AD2000000000000000000002 /* CoachDesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD2000000000000000000001 /* CoachDesignSystem.swift */; };
+		AD2000000000000000000004 /* RecordingIntervalRing.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD2000000000000000000003 /* RecordingIntervalRing.swift */; };
+		AD2000000000000000000006 /* RecordingIntervalPresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD2000000000000000000005 /* RecordingIntervalPresentationTests.swift */; };
+		AE1000000000000000000002 /* TodaySleepHeroModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE1000000000000000000001; };
+		AE2000000000000000000002 /* TodaySleepHeroCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE2000000000000000000001; };
+		AE3000000000000000000002 /* TodaySleepHeroModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE3000000000000000000001; };
+		AE4000000000000000000002 /* TodaySleepHeroUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE4000000000000000000001; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -108,6 +118,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		AC5100000000000000000001 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		FA04E40A3030DF6700EFF932 /* Ruleenginecontracttests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Ruleenginecontracttests.swift; sourceTree = "<group>"; };
 		FA04E40C3030E00A00EFF932 /* Llmresponseparsingpropertytests .swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Llmresponseparsingpropertytests .swift"; sourceTree = "<group>"; };
 		FA04E40E30324CF100EFF932 /* SleepRecordTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepRecordTests.swift; sourceTree = "<group>"; };
@@ -198,6 +209,15 @@
 		AC1000000000000000000005 /* SleepRecordingFlowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepRecordingFlowTests.swift; sourceTree = "<group>"; };
 		AC100000000000000000000A /* RecordingNavigationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingNavigationTests.swift; sourceTree = "<group>"; };
 		AC100000000000000000000C /* BabySleepTrackerUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BabySleepTrackerUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		AC2000000000000000000001 /* HomeDashboardCardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeDashboardCardTests.swift; sourceTree = "<group>"; };
+		AC3000000000000000000001 /* HomeDashboardCardUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeDashboardCardUITests.swift; sourceTree = "<group>"; };
+		AD2000000000000000000001 /* CoachDesignSystem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoachDesignSystem.swift; sourceTree = "<group>"; };
+		AD2000000000000000000003 /* RecordingIntervalRing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingIntervalRing.swift; sourceTree = "<group>"; };
+		AD2000000000000000000005 /* RecordingIntervalPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingIntervalPresentationTests.swift; sourceTree = "<group>"; };
+		AE1000000000000000000001 /* TodaySleepHeroModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Components/TodaySleepHeroModel.swift"; sourceTree = "<group>"; };
+		AE2000000000000000000001 /* TodaySleepHeroCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Components/TodaySleepHeroCard.swift"; sourceTree = "<group>"; };
+		AE3000000000000000000001 /* TodaySleepHeroModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "TodaySleepHeroModelTests.swift"; sourceTree = "<group>"; };
+		AE4000000000000000000001 /* TodaySleepHeroUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "TodaySleepHeroUITests.swift"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -223,7 +243,10 @@
 		FA5488D12FAEB964002BC18B /* BabySleepTrackerTests */ = {
 			isa = PBXGroup;
 			children = (
+				AD2000000000000000000005 /* RecordingIntervalPresentationTests.swift */,
 				AC1000000000000000000005 /* SleepRecordingFlowTests.swift */,
+                AC2000000000000000000001,
+                AE3000000000000000000001,
 				FA294726304667BD00BE2E20 /* SleepWakeTimeWorkflowTests.swift */,
 				FA5488D22FAEB964002BC18B /* BabySleepTrackerTests.swift */,
 				FA5488D92FAEB98D002BC18B /* AddRecorViewModelTests.swift */,
@@ -331,6 +354,7 @@
 			isa = PBXGroup;
 			children = (
 				FAB4BB052FE2059000702F49 /* Info.plist */,
+				AC5100000000000000000001 /* PrivacyInfo.xcprivacy */,
 				FAEF10432F4E207F00E76FD4 /* BabySleepTrackerApp.swift */,
 				FA7232E82FDD8F1E00647487 /* Config */,
 				FA91C5EE2FDB48350089E1EE /* Memory */,
@@ -369,6 +393,8 @@
 		FAEF105F2F4E26B100E76FD4 /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				AD2000000000000000000003 /* RecordingIntervalRing.swift */,
+				AD2000000000000000000001 /* CoachDesignSystem.swift */,
 				AC1000000000000000000003 /* RecordingFormComponents.swift */,
 				FA9DB0A82FD49ED4000B9211 /* CreateAccountView.swift */,
 				FAB4BAFB2FE11F9700702F49 /* ProfileEditSheet.swift */,
@@ -384,6 +410,8 @@
 				FAEF10562F4E20BC00E76FD4 /* DayDetailView.swift */,
 				FAEF10582F4E20D600E76FD4 /* AddRecordView.swift */,
 				FAE100012FF9000100ABCDEF /* Components/CurrentSleepSessionCard.swift */,
+                AE2000000000000000000001,
+                AE1000000000000000000001,
 				FAEF10452F4E207F00E76FD4 /* SleepListView.swift */,
 				FAEF107D2F530D3100E76FD4 /* SleepListSheetRouter.swift */,
 			);
@@ -428,7 +456,7 @@
 			path = Utils;
 			sourceTree = "<group>";
 		};
-		AC100000000000000000000D /* BabySleepTrackerUITests */ = {isa = PBXGroup; children = (AC100000000000000000000A,); path = BabySleepTrackerUITests; sourceTree = "<group>"; };
+		AC100000000000000000000D /* BabySleepTrackerUITests */ = {isa = PBXGroup; children = (AC100000000000000000000A, AC3000000000000000000001, AE4000000000000000000001,); path = BabySleepTrackerUITests; sourceTree = "<group>"; };
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -536,6 +564,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AC5100000000000000000002 /* PrivacyInfo.xcprivacy in Resources */,
 				FAEF104B2F4E208000E76FD4 /* Preview Assets.xcassets in Resources */,
 				FAB4BB012FE204A200702F49 /* APIConfig.xcconfig in Resources */,
 				FAEF10482F4E208000E76FD4 /* Assets.xcassets in Resources */,
@@ -550,7 +579,10 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AD2000000000000000000006 /* RecordingIntervalPresentationTests.swift in Sources */,
 				AC1000000000000000000006 /* SleepRecordingFlowTests.swift in Sources */,
+                AC2000000000000000000002,
+                AE3000000000000000000002,
 				FA04E41D30325A6900EFF932 /* TimeFormatTests.swift in Sources */,
 				FA04E41B303258E800EFF932 /* SegmentKindTests.swift in Sources */,
 				FA04E4133032501500EFF932 /* DayDetailViewModelTests.swift in Sources */,
@@ -586,6 +618,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AD2000000000000000000004 /* RecordingIntervalRing.swift in Sources */,
+				AD2000000000000000000002 /* CoachDesignSystem.swift in Sources */,
 				AC1000000000000000000004 /* RecordingFormComponents.swift in Sources */,
 				AC1000000000000000000002 /* SleepRecordingFlow.swift in Sources */,
 				FAEF106A2F4E5D0100E76FD4 /* DayDetailViewModel.swift in Sources */,
@@ -627,6 +661,8 @@
 				FAEF10462F4E207F00E76FD4 /* SleepListView.swift in Sources */,
 				FAEF107E2F530D3100E76FD4 /* SleepListSheetRouter.swift in Sources */,
 				FAE100022FF9000100ABCDEF /* Components/CurrentSleepSessionCard.swift in Sources */,
+                AE2000000000000000000002,
+                AE1000000000000000000002,
 				FA9DB0992FD37964000B9211 /* ContentView.swift in Sources */,
 				FA7232DD2FDCC80200647487 /* NapTransitionAgent.swift in Sources */,
 				FAEF10642F4E284100E76FD4 /* SleepKind.swift in Sources */,
@@ -642,7 +678,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		AC100000000000000000000F /* UI Test Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (AC100000000000000000000B,); runOnlyForDeploymentPostprocessing = 0; };
+		AC100000000000000000000F /* UI Test Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (AC100000000000000000000B, AC3000000000000000000002, AE4000000000000000000002,); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */

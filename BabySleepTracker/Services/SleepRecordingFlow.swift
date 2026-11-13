@@ -1,5 +1,10 @@
 import Foundation
 
+extension Notification.Name {
+    /// Ephemeral presentation confirmation; never stored or used by learning/accounting.
+    static let sleepStillSleepingConfirmed = Notification.Name("sleepStillSleepingConfirmed")
+}
+
 /// Transient form state; the persisted SleepRecord format is unchanged.
 struct SleepRecordingDraft {
     var start: Date
@@ -10,6 +15,13 @@ struct SleepRecordingDraft {
         start = editing?.date ?? min(defaultDate, now.addingTimeInterval(-3600))
         end = editing.map { $0.observedEnd ?? $0.date } ?? min(start.addingTimeInterval(3600), now)
         isOngoing = editing?.isOngoing ?? false
+    }
+
+    /// Presentation draft only; Cancel never changes the stored ongoing session.
+    mutating func prepareForEnding(at now: Date) {
+        guard isOngoing else { return }
+        isOngoing = false
+        end = now
     }
 
     func validationMessage(now: Date) -> String? {

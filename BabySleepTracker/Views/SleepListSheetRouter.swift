@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct SleepListSheetRouter: View {
+    @Environment(\.dismiss) private var dismiss
     let sheet: SleepListView.ActiveSheet
     let records: [SleepRecord]
     let todayWakeTime: Date?
@@ -8,7 +9,7 @@ struct SleepListSheetRouter: View {
     let onRecordUpsert: (SleepRecord) -> Bool
     let onBreakSaved: (SleepRecord) -> Bool
     let onDeleteRecords: (Set<UUID>) -> Void
-    let onWakeTimeSave: (Date) -> Void
+    let onWakeTimeSave: (Date) -> Bool
 
     var body: some View {
         switch sheet {
@@ -20,13 +21,38 @@ struct SleepListSheetRouter: View {
                 onSave: onRecordUpsert
             )
 
+        case .endSleep(let parentID):
+            if let parent = records.first(where: { $0.id == parentID && $0.kind != .break && $0.isOngoing }) {
+                AddRecordView(defaultDate: parent.date, editingRecord: parent,
+                              vm: AddRecordViewModel(), endingOngoing: true, onSave: onRecordUpsert)
+            } else {
+                NavigationStack {
+                    Text("This sleep session is no longer ongoing.")
+                        .toolbar { Button("Cancel") { dismiss() } }
+                }
+            }
+
         case .addBreak(let parentID):
             if let parent = records.first(where: { $0.id == parentID && $0.kind != .break }) {
                 AddBreakView(parent: parent,
                              existingBreaks: records.filter { $0.parentNapID == parent.id && $0.kind == .break },
                              onSave: onBreakSaved)
             } else {
-                Text("This sleep session is no longer available.")
+                NavigationStack {
+                    Text("This sleep session is no longer available.")
+                        .padding(24)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(RecordingColor.background)
+                        .navigationTitle("Add Awake Break")
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("Cancel") { dismiss() }
+                                    .accessibilityIdentifier("recording.cancel")
+                            }
+                        }
+                }
+                .tint(RecordingColor.accent)
             }
 
         case .dayDetail(let selected):
@@ -52,11 +78,12 @@ struct SleepListSheetRouter: View {
 // MARK: - Wake Time Editor
 
 private struct WakeTimeEditorView: View {
-    let onSave: (Date) -> Void
+    let onSave: (Date) -> Bool
     @Environment(\.dismiss) private var dismiss
     @State private var selectedTime: Date
+    @State private var saveFailed = false
 
-    init(initialTime: Date, onSave: @escaping (Date) -> Void) {
+    init(initialTime: Date, onSave: @escaping (Date) -> Bool) {
         self.onSave   = onSave
         _selectedTime = State(initialValue: initialTime)
     }
@@ -96,14 +123,19 @@ private struct WakeTimeEditorView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") { dismiss() }
+                    Button("Cancel") { dismiss() }.accessibilityIdentifier("home.wake.cancel")
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Save") { onSave(selectedTime); dismiss() }
+                    Button("Save") {
+                        if onSave(selectedTime) { dismiss() } else { saveFailed = true }
+                    }.accessibilityIdentifier("home.wake.save")
                         .fontWeight(.semibold)
                 }
             }
         }
+        .alert("Could not save wake time", isPresented: $saveFailed) {
+            Button("OK", role: .cancel) { }
+        } message: { Text("Your wake time has not been saved. Please try again.") }
         .tint(Color.sleepPurpleDeep)
         .presentationDetents([.height(390)])
         .presentationDragIndicator(.visible)

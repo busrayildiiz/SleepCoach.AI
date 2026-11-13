@@ -38,8 +38,16 @@ struct SleepListView: View {
     enum ActiveSheet: Identifiable {
         case addSleep(editing: SleepRecord?, defaultDate: Date)
         case addBreak(parentID: UUID)
+        case endSleep(parentID: UUID)
         case dayDetail(SelectedDay)
         case wakeTime
+
+        var isRecording: Bool {
+            switch self {
+            case .addSleep, .addBreak, .endSleep: return true
+            case .dayDetail, .wakeTime: return false
+            }
+        }
 
         var id: String {
             switch self {
@@ -47,6 +55,8 @@ struct SleepListView: View {
                 return "addSleep-\(editing?.id.uuidString ?? "new")-\(date.timeIntervalSince1970)"
             case .addBreak(let id):
                 return "addBreak-\(id)"
+            case .endSleep(let id):
+                return "endSleep-\(id)"
             case .dayDetail(let day):
                 return "dayDetail-\(day.id)"
             case .wakeTime:
@@ -108,6 +118,9 @@ struct SleepListView: View {
     @AppStorage("babyName")   private var babyName:   String = "Baby"
     @AppStorage("parentName") private var parentName: String = ""
 
+    @State private var heroShowsPlan = false
+    @State private var stillSleepingConfirmation: TodaySleepHeroModel.StillSleepingConfirmation?
+
     // MARK: - Persistence
 
     private func upsert(_ record: SleepRecord) -> Bool {
@@ -126,12 +139,13 @@ struct SleepListView: View {
     }
 
     private func loadWakeRecords() {
-        if let decoded = dailyWakeRecordPersistence.load() {
-            wakeRecords = decoded
-        }
+        wakeRecords = dailyWakeRecordPersistence.load() ?? []
     }
 
-    private func saveWakeTime(_ selectedTime: Date) {
+    private func saveWakeTime(_ selectedTime: Date) -> Bool {
+        #if DEBUG && targetEnvironment(simulator)
+        if HomeCardTestFixture.enabled && ProcessInfo.processInfo.environment["HOME_WAKE_SAVE_FAIL"] == "1" { return false }
+        #endif
         let result = SleepWakeTimeWorkflow(
             selectedWakeTime: selectedTime,
             now: Date(),
@@ -141,8 +155,11 @@ struct SleepListView: View {
             wakePersistence: dailyWakeRecordPersistence,
             sleepPersistence: sleepRecordPersistence
         ).execute()
-        wakeRecords = result.updatedWakeRecords
-        records = result.updatedSleepRecords
+        var state = HomeWakeCardState(records: wakeRecords)
+        state.accept(result)
+        wakeRecords = state.records
+        if result.sleepPersistenceSucceeded { records = result.updatedSleepRecords }
+        return result.wakePersistenceSucceeded
     }
 
     // MARK: - Derived Data
@@ -421,13 +438,17 @@ struct SleepListView: View {
 
     var body: some View {
         NavigationStack {
+            ScrollViewReader { proxy in
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 12) {
+                    #if DEBUG && targetEnvironment(simulator)
+                    if HomeCardTestFixture.enabled || HeroUITestFixture.enabled { Text("TEST FIXTURE — NOT A PREDICTION").font(.caption2).foregroundStyle(.secondary) }
+                    #endif
                     headerSection
                     nextNapOrBedtimeCard
                     rhythmLearningStrip
                     todayWakeSection
-                       todayTimelineCard
+                       todayTimelineCard.id("home.todayPlan")
                        coachInsightCard
                         sleepOverviewCard
                 }
@@ -447,30 +468,64 @@ struct SleepListView: View {
                 loadRecords()
                 generationCoalescer.request { orchestrator.generate() }
             }
+            .onReceive(NotificationCenter.default.publisher(for: .sleepStillSleepingConfirmed)) { event in
+                if let id = event.object as? UUID, let date = event.userInfo?["confirmedAt"] as? Date {
+                    stillSleepingConfirmation = .init(recordID: id, date: date)
+                }
+            }
             .onReceive(NotificationCenter.default.publisher(for: .dailyWakeRecordsDidChange)) { _ in
                 loadWakeRecords()
                 generationCoalescer.request { orchestrator.generate() }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.significantTimeChangeNotification)) { _ in
+                loadRecords()
+                loadWakeRecords()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+                loadRecords()
+                loadWakeRecords()
             }
             .onReceive(NotificationCenter.default.publisher(for: .babyProfileDidChange)) { _ in
                 generationCoalescer.request { orchestrator.generate() }
             }
             .environment(\.locale, Locale(identifier: "en_US"))
+            .onChange(of: heroShowsPlan) { requested in
+                if requested {
+                    withAnimation { proxy.scrollTo("home.todayPlan", anchor: .top) }
+                    heroShowsPlan = false
+                }
+            }
+            }
         }
-        .sheet(item: $activeSheet) { sheet in
-            SleepListSheetRouter(
-                sheet: sheet,
-                records: records,
-                todayWakeTime: todayWakeRecord?.wakeTime,
-                defaultWakeTime: defaultWakeTime,
-                onRecordUpsert: upsert,
-                onBreakSaved: upsert,
-                onDeleteRecords: { ids in
-                    records.removeAll { ids.contains($0.id) }
-                    saveRecords()
-                },
-                onWakeTimeSave: saveWakeTime
-            )
-        }
+        .sheet(item: presentationSheet(recording: false), content: sheetContent)
+        .fullScreenCover(item: presentationSheet(recording: true), content: sheetContent)
+    }
+
+    private func presentationSheet(recording: Bool) -> Binding<ActiveSheet?> {
+        Binding(get: {
+            guard let sheet = activeSheet, sheet.isRecording == recording else { return nil }
+            return sheet
+        }, set: { value in
+            // An outgoing presentation must not clear a different incoming destination.
+            if let value { activeSheet = value }
+            else if activeSheet?.isRecording == recording { activeSheet = nil }
+        })
+    }
+
+    private func sheetContent(_ sheet: ActiveSheet) -> some View {
+        SleepListSheetRouter(
+            sheet: sheet,
+            records: records,
+            todayWakeTime: todayWakeRecord?.wakeTime,
+            defaultWakeTime: defaultWakeTime,
+            onRecordUpsert: upsert,
+            onBreakSaved: upsert,
+            onDeleteRecords: { ids in
+                records.removeAll { ids.contains($0.id) }
+                saveRecords()
+            },
+            onWakeTimeSave: saveWakeTime
+        )
     }
     // MARK: - Header
 
@@ -605,7 +660,7 @@ struct SleepListView: View {
                     Spacer()
                     Text(rhythmLearningHint)
                         .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(Color(.tertiaryLabel))
+                        .foregroundStyle(Color(.secondaryLabel))
                         .lineLimit(1)
                         .minimumScaleFactor(0.78)
                 }
@@ -613,14 +668,25 @@ struct SleepListView: View {
         }
         .padding(12)
         .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .fill(Color(.systemBackground))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .fill(LinearGradient(
+                            colors: [
+                                Color(red: 0.55, green: 0.45, blue: 0.96).opacity(0.025),
+                                Color(red: 0.55, green: 0.45, blue: 0.96).opacity(0.065)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ))
+                )
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(Color(red: 0.55, green: 0.45, blue: 0.98).opacity(0.12), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(Color(red: 0.55, green: 0.45, blue: 0.96).opacity(0.14), lineWidth: 1)
         )
-        .shadow(color: Color(red: 0.45, green: 0.35, blue: 0.92).opacity(0.06), radius: 10, x: 0, y: 4)
+        .shadow(color: Color(red: 0.45, green: 0.35, blue: 0.92).opacity(0.07), radius: 9, x: 0, y: 4)
     }
 
     // MARK: - Sleep Overview Card
@@ -941,37 +1007,51 @@ struct SleepListView: View {
 
     // MARK: next nap or bedtime?
 
-    @ViewBuilder
     private var nextNapOrBedtimeCard: some View {
-        if isStillInNightSleep {
-            stillSleepingCard
-        } else {
-            regularNextNapOrBedtimeCard
+        TimelineView(.periodic(from: .now, by: 30)) { context in
+            let model = sleepHero(at: context.date)
+            TodaySleepHeroCard(model: model,
+                addNap: { activeSheet = .addSleep(editing: nil, defaultDate: Date()) },
+                endSleep: { if let record = model.record { activeSheet = .endSleep(parentID: record.id) } },
+                addBreak: { if model.canAddBreak, let record = model.record { activeSheet = .addBreak(parentID: record.id) } },
+                viewDetails: { activeSheet = .dayDetail(SelectedDay(day: model.sleepDay ?? context.date)) },
+                viewPlan: { heroShowsPlan = true },
+                confirmWake: { activeSheet = .wakeTime })
         }
     }
-    
-    // MARK: - Live Night Sleep Card Wrapper
 
-    private var stillSleepingCard: some View {
-        let ongoingSleep = activeSleepRecord ?? inferredNightSleepRecord
-        let isEstimated = activeSleepRecord == nil
+    private func sleepHero(at now: Date) -> TodaySleepHeroModel {
+        #if DEBUG && targetEnvironment(simulator)
+        if HeroUITestFixture.enabled { return HeroUITestFixture.model(records: records, wakes: wakeRecords) }
+        if HomeCardTestFixture.enabled { return HeroUITestFixture.legacyModel(records: records, wakes: wakeRecords) }
+        #endif
+        let defaults = UserDefaults.standard
+        let routine = TodaySleepHeroModel.Routine.load(defaults: defaults)
+        // No verified eligibility provider exists. Do not feed the legacy counter,
+        // DQS or LLM text into this prediction display contract.
+        return TodaySleepHeroModel.make(records: records, wakeRecords: wakeRecords,
+            now: now, calendar: .current, routine: routine,
+            displayName: displayedParentName, babyName: babyName,
+            confirmation: stillSleepingConfirmation)
+    }
 
-        // Tahmini uyanma saati
-        let expectedWake = expectedWakeTime(for: ongoingSleep)
-        let nextSleepAfterCurrent = nextSleepTimeAfterCurrentSleep(
-            ongoingSleep: ongoingSleep,
-            expectedWake: expectedWake
-        )
+    @ViewBuilder private func homeCardArtwork(kind: SleepKind?) -> some View {
+        if kind == .nightSleep { MoonHeaderArt() }
+        else { Image(systemName: "bed.double.fill").font(.system(size: 30)).foregroundStyle(Color.sleepPurple) }
+    }
 
-        return CurrentSleepSessionCard(
-            ongoingNight: ongoingSleep,
-            expectedWakeTime: expectedWake,
-            nextSleepTime: nextSleepAfterCurrent,
-            isEstimated: isEstimated,
-            onAddBreak: ongoingSleep.map { parent in
-                { activeSheet = .addBreak(parentID: parent.id) }
-            }
-        )
+    private func homeCardNow(_ actual: Date) -> Date {
+        #if DEBUG && targetEnvironment(simulator)
+        if HomeCardTestFixture.enabled { return HomeCardTestFixture.now }
+        #endif
+        return actual
+    }
+
+    private func homeCardPresentation(now: Date) -> HomeSleepCardPresentation {
+        #if DEBUG && targetEnvironment(simulator)
+        if HomeCardTestFixture.enabled { return HomeCardTestFixture.presentation(records: records) }
+        #endif
+        return HomeSleepCardPresentation.make(records: records, now: now, calendar: .current)
     }
 
     private func expectedWakeTime(for ongoingSleep: SleepRecord?) -> Date {
@@ -985,66 +1065,16 @@ struct SleepListView: View {
     
     // MARK: - Today Wake Up Card
 
-    @ViewBuilder
     private var todayWakeSection: some View {
-        if let wakeTime = todayWakeRecord?.wakeTime {
-            WakeUpCard(time: wakeTime)
-        } else if shouldShowTodayWakeUpPrompt {
-            todayWakeUpCard
-        }
-    }
-
-    private var todayWakeUpCard: some View {
-        Button { activeSheet = .wakeTime } label: {
-            HStack(spacing: 14) {
-                ZStack {
-                    Circle()
-                        .fill(Color.orange.opacity(0.2))
-                        .frame(width: 48, height: 48)
-                    Image(systemName: "sun.max.fill")
-                        .font(.system(size: 22, weight: .semibold))
-                        .foregroundStyle(Color.orange)
-                }
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Wake-up time needed")
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(Color.orange)
-                    Text("Add \(babyName)'s actual wake-up time\nfor more accurate predictions.")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(Color(.secondaryLabel))
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                Spacer()
-
-                HStack(spacing: 4) {
-                    Text("Add wake time")
-                        .font(.system(size: 12, weight: .semibold))
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 11, weight: .semibold))
-                }
-                .foregroundStyle(Color.orange)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Color(.systemBackground))
-                )
+        TimelineView(.periodic(from: .now, by: 60)) { context in
+            if HomeWakeCardState(records: wakeRecords).isVisible(now: context.date, calendar: .current) {
+                HomeWakeTimeCard { activeSheet = .wakeTime }
+            } else if let wakeTime = todayWakeRecord?.wakeTime {
+                WakeUpCard(time: wakeTime)
             }
-            .padding(16)
-            .contentShape(Rectangle())
-            .background(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(Color.orange.opacity(0.10))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(Color.orange.opacity(0.2), lineWidth: 1)
-            )
         }
-        .buttonStyle(CardPressButtonStyle())
     }
+
     // MARK: - Regular Next Nap / Bedtime Card
 
     private var regularNextNapOrBedtimeCard: some View {
