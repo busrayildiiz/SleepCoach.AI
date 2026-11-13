@@ -38,12 +38,13 @@ struct SleepListView: View {
     enum ActiveSheet: Identifiable {
         case addSleep(editing: SleepRecord?, defaultDate: Date)
         case addBreak(parentID: UUID)
+        case endSleep(parentID: UUID)
         case dayDetail(SelectedDay)
         case wakeTime
 
         var isRecording: Bool {
             switch self {
-            case .addSleep, .addBreak: return true
+            case .addSleep, .addBreak, .endSleep: return true
             case .dayDetail, .wakeTime: return false
             }
         }
@@ -54,6 +55,8 @@ struct SleepListView: View {
                 return "addSleep-\(editing?.id.uuidString ?? "new")-\(date.timeIntervalSince1970)"
             case .addBreak(let id):
                 return "addBreak-\(id)"
+            case .endSleep(let id):
+                return "endSleep-\(id)"
             case .dayDetail(let day):
                 return "dayDetail-\(day.id)"
             case .wakeTime:
@@ -116,6 +119,9 @@ struct SleepListView: View {
 
     @AppStorage("babyName")   private var babyName:   String = "Baby"
     @AppStorage("parentName") private var parentName: String = ""
+
+    @State private var heroShowsPlan = false
+    @State private var stillSleepingConfirmation: TodaySleepHeroModel.StillSleepingConfirmation?
 
     // MARK: - Persistence
 
@@ -406,16 +412,17 @@ struct SleepListView: View {
 
     var body: some View {
         NavigationStack {
+            ScrollViewReader { proxy in
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 12) {
                     #if DEBUG && targetEnvironment(simulator)
-                    if HomeCardTestFixture.enabled { Text("TEST FIXTURE — NOT A PREDICTION").font(.caption2).foregroundStyle(.secondary) }
+                    if HomeCardTestFixture.enabled || HeroUITestFixture.enabled { Text("TEST FIXTURE — NOT A PREDICTION").font(.caption2).foregroundStyle(.secondary) }
                     #endif
                     headerSection
                     nextNapOrBedtimeCard
                     rhythmLearningStrip
                     todayWakeSection
-                       todayTimelineCard
+                       todayTimelineCard.id("home.todayPlan")
                        coachInsightCard
                         sleepOverviewCard
                 }
@@ -435,6 +442,11 @@ struct SleepListView: View {
                 loadRecords()
                 generationCoalescer.request { orchestrator.generate() }
             }
+            .onReceive(NotificationCenter.default.publisher(for: .sleepStillSleepingConfirmed)) { event in
+                if let id = event.object as? UUID, let date = event.userInfo?["confirmedAt"] as? Date {
+                    stillSleepingConfirmation = .init(recordID: id, date: date)
+                }
+            }
             .onReceive(NotificationCenter.default.publisher(for: .dailyWakeRecordsDidChange)) { _ in
                 loadWakeRecords()
                 generationCoalescer.request { orchestrator.generate() }
@@ -451,6 +463,13 @@ struct SleepListView: View {
                 generationCoalescer.request { orchestrator.generate() }
             }
             .environment(\.locale, Locale(identifier: "en_US"))
+            .onChange(of: heroShowsPlan) { requested in
+                if requested {
+                    withAnimation { proxy.scrollTo("home.todayPlan", anchor: .top) }
+                    heroShowsPlan = false
+                }
+            }
+            }
         }
         .sheet(item: presentationSheet(recording: false), content: sheetContent)
         .fullScreenCover(item: presentationSheet(recording: true), content: sheetContent)
@@ -963,23 +982,31 @@ struct SleepListView: View {
     // MARK: next nap or bedtime?
 
     private var nextNapOrBedtimeCard: some View {
-        TimelineView(.periodic(from: .now, by: 60)) { context in
-            let now = homeCardNow(context.date)
-            let state = homeCardPresentation(now: now)
-            if let active = activeSleepRecord {
-                CurrentSleepSessionCard(presentation: state, now: now,
-                    onAddBreak: { activeSheet = .addBreak(parentID: active.id) }) {
-                    homeCardArtwork(kind: state.kind)
-                }
-            } else if isStillInNightSleep {
-                // Preserve the inferred-night card's existing noninteractive destination.
-                CurrentSleepSessionCard(presentation: state, now: now) { homeCardArtwork(kind: state.kind) }
-            } else {
-                Button { activeSheet = .addSleep(editing: nil, defaultDate: Date()) } label: {
-                    CurrentSleepSessionCard(presentation: state, now: now) { homeCardArtwork(kind: state.kind) }
-                }.buttonStyle(CardPressButtonStyle())
-            }
+        TimelineView(.periodic(from: .now, by: 30)) { context in
+            let model = sleepHero(at: context.date)
+            TodaySleepHeroCard(model: model,
+                addNap: { activeSheet = .addSleep(editing: nil, defaultDate: Date()) },
+                endSleep: { if let record = model.record { activeSheet = .endSleep(parentID: record.id) } },
+                addBreak: { if model.canAddBreak, let record = model.record { activeSheet = .addBreak(parentID: record.id) } },
+                viewDetails: { activeSheet = .dayDetail(SelectedDay(day: model.sleepDay ?? context.date)) },
+                viewPlan: { heroShowsPlan = true },
+                confirmWake: { activeSheet = .wakeTime })
         }
+    }
+
+    private func sleepHero(at now: Date) -> TodaySleepHeroModel {
+        #if DEBUG && targetEnvironment(simulator)
+        if HeroUITestFixture.enabled { return HeroUITestFixture.model(records: records, wakes: wakeRecords) }
+        if HomeCardTestFixture.enabled { return HeroUITestFixture.legacyModel(records: records, wakes: wakeRecords) }
+        #endif
+        let defaults = UserDefaults.standard
+        let routine = TodaySleepHeroModel.Routine.load(defaults: defaults)
+        // No verified eligibility provider exists. Do not feed the legacy counter,
+        // DQS or LLM text into this prediction display contract.
+        return TodaySleepHeroModel.make(records: records, wakeRecords: wakeRecords,
+            now: now, calendar: .current, routine: routine,
+            displayName: displayedParentName, babyName: babyName,
+            confirmation: stillSleepingConfirmation)
     }
 
     @ViewBuilder private func homeCardArtwork(kind: SleepKind?) -> some View {

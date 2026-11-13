@@ -99,6 +99,10 @@
 		AD2000000000000000000002 /* CoachDesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD2000000000000000000001 /* CoachDesignSystem.swift */; };
 		AD2000000000000000000004 /* RecordingIntervalRing.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD2000000000000000000003 /* RecordingIntervalRing.swift */; };
 		AD2000000000000000000006 /* RecordingIntervalPresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD2000000000000000000005 /* RecordingIntervalPresentationTests.swift */; };
+		AE1000000000000000000002 /* TodaySleepHeroModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE1000000000000000000001; };
+		AE2000000000000000000002 /* TodaySleepHeroCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE2000000000000000000001; };
+		AE3000000000000000000002 /* TodaySleepHeroModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE3000000000000000000001; };
+		AE4000000000000000000002 /* TodaySleepHeroUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE4000000000000000000001; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -208,6 +212,10 @@
 		AD2000000000000000000001 /* CoachDesignSystem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoachDesignSystem.swift; sourceTree = "<group>"; };
 		AD2000000000000000000003 /* RecordingIntervalRing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingIntervalRing.swift; sourceTree = "<group>"; };
 		AD2000000000000000000005 /* RecordingIntervalPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingIntervalPresentationTests.swift; sourceTree = "<group>"; };
+		AE1000000000000000000001 /* TodaySleepHeroModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Components/TodaySleepHeroModel.swift"; sourceTree = "<group>"; };
+		AE2000000000000000000001 /* TodaySleepHeroCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Components/TodaySleepHeroCard.swift"; sourceTree = "<group>"; };
+		AE3000000000000000000001 /* TodaySleepHeroModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "TodaySleepHeroModelTests.swift"; sourceTree = "<group>"; };
+		AE4000000000000000000001 /* TodaySleepHeroUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "TodaySleepHeroUITests.swift"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -236,6 +244,7 @@
 				AD2000000000000000000005 /* RecordingIntervalPresentationTests.swift */,
 				AC1000000000000000000005 /* SleepRecordingFlowTests.swift */,
                 AC2000000000000000000001,
+                AE3000000000000000000001,
 				FA294726304667BD00BE2E20 /* SleepWakeTimeWorkflowTests.swift */,
 				FA5488D22FAEB964002BC18B /* BabySleepTrackerTests.swift */,
 				FA5488D92FAEB98D002BC18B /* AddRecorViewModelTests.swift */,
@@ -398,6 +407,8 @@
 				FAEF10562F4E20BC00E76FD4 /* DayDetailView.swift */,
 				FAEF10582F4E20D600E76FD4 /* AddRecordView.swift */,
 				FAE100012FF9000100ABCDEF /* Components/CurrentSleepSessionCard.swift */,
+                AE2000000000000000000001,
+                AE1000000000000000000001,
 				FAEF10452F4E207F00E76FD4 /* SleepListView.swift */,
 				FAEF107D2F530D3100E76FD4 /* SleepListSheetRouter.swift */,
 			);
@@ -442,7 +453,7 @@
 			path = Utils;
 			sourceTree = "<group>";
 		};
-		AC100000000000000000000D /* BabySleepTrackerUITests */ = {isa = PBXGroup; children = (AC100000000000000000000A, AC3000000000000000000001,); path = BabySleepTrackerUITests; sourceTree = "<group>"; };
+		AC100000000000000000000D /* BabySleepTrackerUITests */ = {isa = PBXGroup; children = (AC100000000000000000000A, AC3000000000000000000001, AE4000000000000000000001,); path = BabySleepTrackerUITests; sourceTree = "<group>"; };
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -567,6 +578,7 @@
 				AD2000000000000000000006 /* RecordingIntervalPresentationTests.swift in Sources */,
 				AC1000000000000000000006 /* SleepRecordingFlowTests.swift in Sources */,
                 AC2000000000000000000002,
+                AE3000000000000000000002,
 				FA04E41D30325A6900EFF932 /* TimeFormatTests.swift in Sources */,
 				FA04E41B303258E800EFF932 /* SegmentKindTests.swift in Sources */,
 				FA04E4133032501500EFF932 /* DayDetailViewModelTests.swift in Sources */,
@@ -645,6 +657,8 @@
 				FAEF10462F4E207F00E76FD4 /* SleepListView.swift in Sources */,
 				FAEF107E2F530D3100E76FD4 /* SleepListSheetRouter.swift in Sources */,
 				FAE100022FF9000100ABCDEF /* Components/CurrentSleepSessionCard.swift in Sources */,
+                AE2000000000000000000002,
+                AE1000000000000000000002,
 				FA9DB0992FD37964000B9211 /* ContentView.swift in Sources */,
 				FA7232DD2FDCC80200647487 /* NapTransitionAgent.swift in Sources */,
 				FAEF10642F4E284100E76FD4 /* SleepKind.swift in Sources */,
@@ -660,7 +674,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		AC100000000000000000000F /* UI Test Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (AC100000000000000000000B, AC3000000000000000000002,); runOnlyForDeploymentPostprocessing = 0; };
+		AC100000000000000000000F /* UI Test Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (AC100000000000000000000B, AC3000000000000000000002, AE4000000000000000000002,); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */

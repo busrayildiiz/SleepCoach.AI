@@ -13,14 +13,16 @@ struct AddRecordView: View {
     @State private var breakParent: SleepRecord?
     @State private var existingBreaks: [SleepRecord] = []
 
-    init(defaultDate: Date, editingRecord: SleepRecord? = nil, vm: AddRecordViewModel,
+    init(defaultDate: Date, editingRecord: SleepRecord? = nil, vm: AddRecordViewModel, endingOngoing: Bool = false,
          onSave: @escaping (SleepRecord) -> Bool) {
         self.defaultDate = defaultDate
         self.editingRecord = editingRecord
         self.onSave = onSave
         self.vm = vm
         if let editingRecord { vm.kind = editingRecord.kind }
-        _draft = State(initialValue: SleepRecordingDraft(defaultDate: defaultDate, editing: editingRecord))
+        var initialDraft = SleepRecordingDraft(defaultDate: defaultDate, editing: editingRecord)
+        if endingOngoing { initialDraft.prepareForEnding(at: Date()) }
+        _draft = State(initialValue: initialDraft)
     }
 
     private var title: String {
@@ -90,6 +92,10 @@ struct AddRecordView: View {
     private func save() {
         submission.submit(draft.record(kind: vm.kind, editing: editingRecord, now: Date()), save: { record in
             let saved = onSave(record)
+            if saved && record.isOngoing {
+                NotificationCenter.default.post(name: .sleepStillSleepingConfirmed, object: record.id,
+                                                userInfo: ["confirmedAt": Date()])
+            }
             saveFailed = !saved
             return saved
         }, dismiss: { dismiss() })

@@ -254,7 +254,7 @@ enum HomeCardTestFixture {
     static var enabled: Bool { ProcessInfo.processInfo.environment["HOME_CARD_UI_TESTS"] == "1" }
     static var scenario: String { ProcessInfo.processInfo.environment["HOME_CARD_SCENARIO"] ?? "missing" }
     static var now: Date {
-        if scenario == "confirmed" { return Date() }
+        if scenario == "confirmed" || scenario == "confirmed-nap" { return Date() }
         return Calendar.current.date(bySettingHour: 21, minute: 49, second: 0, of: Date())!
     }
     static func presentation(records: [SleepRecord]) -> HomeSleepCardPresentation {
@@ -274,8 +274,8 @@ enum HomeCardTestFixture {
         defaults.set(true, forKey: "onboardingComplete")
         defaults.set(23.0, forKey: "typicalBedHour")
         defaults.set(0.0, forKey: "typicalWakeHour")
-        let records: [SleepRecord] = scenario == "confirmed" ? [
-            SleepRecord(date: now.addingTimeInterval(-3600), duration: 0, kind: .nightSleep, isOngoing: true)
+        let records: [SleepRecord] = (scenario == "confirmed" || scenario == "confirmed-nap") ? [
+            SleepRecord(date: now.addingTimeInterval(-3600), duration: 0, kind: scenario == "confirmed-nap" ? .dayNap : .nightSleep, isOngoing: true)
         ] : []
         SleepRecordPersistence().save(records)
         defaults.removeObject(forKey: "dailyWakeRecords_v1")

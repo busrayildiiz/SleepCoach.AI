@@ -81,21 +81,21 @@ final class HomeDashboardCardUITests: XCTestCase {
         XCTAssertTrue(app.buttons["home.wake.add"].exists)
     }
     func testLikelyNapAndNightVisualFixtures() {
-        for (scenario, label) in [("first-nap", "LIKELY FIRST NAP"), ("night", "LIKELY NIGHT SLEEP")] {
+        for (scenario, label) in [("first-nap", "Likely next sleep"), ("night", "Likely next sleep")] {
             let app = launch(scenario)
             let summary = app.descendants(matching: .any).matching(identifier: "home.sleep.summary").firstMatch
             XCTAssertTrue(summary.waitForExistence(timeout: 5))
             XCTAssertTrue(summary.label.contains(label), summary.label)
-            XCTAssertTrue(summary.label.contains("estimated"))
+            XCTAssertTrue(summary.label.localizedCaseInsensitiveContains("estimated"))
             screenshot(scenario, app: app)
             app.terminate()
         }
     }
-    func testConfirmedSessionPreservesAddBreakNavigation() {
-        let app = launch("confirmed")
+    func testConfirmedNapPreservesAddBreakNavigation() {
+        let app = launch("confirmed-nap")
         let summary = app.descendants(matching: .any).matching(identifier: "home.sleep.summary").firstMatch
         XCTAssertTrue(summary.waitForExistence(timeout: 5))
-        XCTAssertTrue(summary.label.contains("LIVE NIGHT SLEEP"))
+        XCTAssertTrue(summary.label.contains("Sleeping now"))
         screenshot("confirmed-ongoing", app: app)
         app.buttons["sleep.current.addBreak"].tap()
         XCTAssertTrue(app.navigationBars["Add Awake Break"].waitForExistence(timeout: 5))
@@ -113,7 +113,7 @@ final class HomeDashboardCardUITests: XCTestCase {
         // The former next-sleep card keeps its existing Add Sleep destination.
         app.swipeDown()
         app.swipeDown()
-        let add = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Ready to record")).firstMatch
+        let add = app.buttons["hero.addNap"]
         tapVisibleRecordingCard(add, app: app)
         XCTAssertTrue(app.navigationBars["Add Nap"].waitForExistence(timeout: 5))
     }

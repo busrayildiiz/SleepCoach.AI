@@ -21,6 +21,17 @@ struct SleepListSheetRouter: View {
                 onSave: onRecordUpsert
             )
 
+        case .endSleep(let parentID):
+            if let parent = records.first(where: { $0.id == parentID && $0.kind != .break && $0.isOngoing }) {
+                AddRecordView(defaultDate: parent.date, editingRecord: parent,
+                              vm: AddRecordViewModel(), endingOngoing: true, onSave: onRecordUpsert)
+            } else {
+                NavigationStack {
+                    Text("This sleep session is no longer ongoing.")
+                        .toolbar { Button("Cancel") { dismiss() } }
+                }
+            }
+
         case .addBreak(let parentID):
             if let parent = records.first(where: { $0.id == parentID && $0.kind != .break }) {
                 AddBreakView(parent: parent,
