@@ -25,7 +25,7 @@ final class TodayPlanUITests: XCTestCase {
             let bottom = tab.exists ? tab.frame.minY : window.maxY
             let viewport = CGRect(x: window.minX + 8, y: window.minY + 44,
                                   width: window.width - 16, height: max(0, bottom - window.minY - 44))
-            if element.exists && element.isHittable && viewport.contains(CGPoint(x: element.frame.midX, y: element.frame.midY)) { return }
+            if element.exists && viewport.contains(CGPoint(x: element.frame.midX, y: element.frame.midY)) && element.isHittable { return }
             let distance = element.exists ? element.frame.midY - viewport.midY : viewport.height
             let step = min(abs(distance), viewport.height * 0.4)
             let start = app.coordinate(withNormalizedOffset: .zero)
@@ -87,11 +87,19 @@ final class TodayPlanUITests: XCTestCase {
         let scroll = app.scrollViews["home.plan.scroll"]
         XCTAssertTrue(scroll.exists)
         let fifth = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "home.plan.event.record:", "Nap 5")).firstMatch
+        reveal(scroll, app: app)
+        let viewport = scroll.frame.intersection(app.windows.firstMatch.frame)
         for _ in 0..<6 {
-            if fifth.exists && fifth.isHittable && app.windows.firstMatch.frame.contains(fifth.frame) { break }
+            // XCTest can raise an invalid-activation-point failure when isHittable
+            // is queried for an offscreen static text. Scroll by geometry first.
+            if fifth.exists && !fifth.frame.isEmpty && viewport.contains(fifth.frame) { break }
             scroll.swipeLeft()
         }
-        XCTAssertTrue(fifth.exists && fifth.isHittable, app.debugDescription)
+        XCTAssertTrue(fifth.exists)
+        XCTAssertFalse(fifth.frame.isEmpty)
+        XCTAssertTrue(viewport.contains(fifth.frame), app.debugDescription)
+        XCTAssertTrue(fifth.isHittable)
+        XCTAssertTrue(fifth.label.contains("Nap 5") && fifth.label.contains("Done"), fifth.label)
         capture("multiple-naps-scrolled-compact", app: app)
         let progress = app.descendants(matching: .any).matching(identifier: "home.plan.progress").firstMatch
         XCTAssertTrue(progress.label.contains("6 completed of 6"), progress.label)
