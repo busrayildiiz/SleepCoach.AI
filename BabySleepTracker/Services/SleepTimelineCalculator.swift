@@ -1,96 +1,170 @@
 import Foundation
 
-struct SleepTimelineItem: Equatable {
-    enum Kind: Equatable { case wake, nap(index: Int), bedtime }
-    enum VisualState: Equatable { case completed, active, upcoming }
+/// A projection of observations and explicitly supplied planning events, not a predictor.
+struct SleepTimelineItem: Equatable, Identifiable {
+    enum Kind: Equatable { case wake, nap(index: Int?), bedtime, plan }
+    enum VisualState: Equatable { case completed, active, next, future, unavailable }
+    enum Source: Equatable { case recorded(UUID), estimate, defaultValue, guidance, unavailable }
+    enum UnavailableReason: Equatable {
+        case missingRecord, invalidRecord, eligibilityUnverified, missingPrediction, overdue, notAnObservation
+    }
 
+    let id: String
     let kind: Kind
-    let time: Date
+    /// The original start-date Sleep Day; never reassigned at midnight.
+    let sleepDay: Date
+    let source: Source
+    let time: Date?
+    let observedEnd: Date?
+    /// Net recorded sleep, only for a valid completed interval.
     let durationMinutes: Int?
-    let isOngoing: Bool
+    /// Wall-clock elapsed time, not a predicted duration or remaining countdown.
+    let elapsedMinutes: Int?
     let visualState: VisualState
-    let isActive: Bool
-    let isFuture: Bool
-    let awakeBeforeMinutes: Int
+    let unavailableReason: UnavailableReason?
+    var awakeBeforeMinutes: Int? = nil
+    /// Context only: this session still belongs to its original Sleep Day.
+    var isCarryover: Bool = false
+
+    var isOngoing: Bool { visualState == .active }
+    var isActive: Bool { visualState == .active }
+    var isFuture: Bool { visualState == .next || visualState == .future }
+    var usesDashedConnector: Bool {
+        if case .recorded = source { return visualState == .unavailable }
+        return true
+    }
+}
+
+struct SleepTimelineProposal {
+    enum Source { case estimate, defaultValue, guidance }
+    /// Stable identity supplied by the planning source.
+    let id: String
+    let kind: SleepTimelineItem.Kind
+    let sleepDay: Date
+    let time: Date
+    let source: Source
 }
 
 struct SleepTimelineCalculator {
+    /// This is an explicit input, not an implementation of the learning policy.
+    /// The app must leave it unavailable until a verified source exists.
+    enum PredictionEligibility { case unavailable, verified }
+
     let records: [SleepRecord]
     let wakeRecord: DailyWakeRecord?
-    let snapshot: OrchestratedSnapshot?
-    let defaultWakeTime: Date
     let now: Date
-    let profileProvider: AgeBasedSleepProfileProviding
-    var calendar: Calendar = .current
+    let calendar: Calendar
+    var day: Date? = nil
+    var proposals: [SleepTimelineProposal] = []
+    var predictionEligibility: PredictionEligibility = .unavailable
 
     func calculate() -> [SleepTimelineItem] {
-        let naps = records.filter { $0.kind == .dayNap }.sorted { $0.date < $1.date }
-        let wake = wakeAnchor(sortedNaps: naps)
-        let expectedDuration = expectedNapDuration
-        var items = [SleepTimelineItem(kind: .wake, time: wake, durationMinutes: nil, isOngoing: false, visualState: wake <= now ? .completed : .upcoming, isActive: false, isFuture: wake > now, awakeBeforeMinutes: 0)]
-        var anchorEnd = wake
-
-        for (index, nap) in naps.enumerated() {
-            guard items.count < 4 else { return items }
-            let end = nap.observedEnd ?? now
-            let active = nap.date <= now && (nap.isOngoing || end > now)
-            let state: SleepTimelineItem.VisualState = active ? .active : (end <= now ? .completed : .upcoming)
-            items.append(SleepTimelineItem(kind: .nap(index: index + 1), time: nap.date, durationMinutes: nap.isOngoing ? nil : nap.totalMinutes(breaks: records.filter { $0.kind == .break }, at: now), isOngoing: nap.isOngoing, visualState: state, isActive: active, isFuture: nap.date > now, awakeBeforeMinutes: max(0, Int(nap.date.timeIntervalSince(anchorEnd) / 60))))
-            anchorEnd = end
+        let sleepDay = calendar.startOfDay(for: day ?? now)
+        let accounting = SleepAccounting(records: records, now: now, calendar: calendar)
+        let selected = accounting.records(on: sleepDay)
+        let previousDay = calendar.date(byAdding: .day, value: -1, to: sleepDay)
+        // Only today's row receives previous-day ongoing context. Historical rows
+        // retain their own start-day records, and completed nights are never reassigned.
+        let carryover = calendar.isDate(sleepDay, inSameDayAs: now) ? records.filter { record in
+            record.kind != .break && record.isOngoing && record.date <= now &&
+                previousDay.map { calendar.isDate(record.date, inSameDayAs: $0) } == true
+        } : []
+        let sleeps = (selected.filter { $0.kind != .break } + carryover).sorted {
+            $0.date == $1.date ? $0.id.uuidString < $1.id.uuidString : $0.date < $1.date
+        }
+        var items = [wakeItem(on: sleepDay)]
+        for record in sleeps {
+            let completed = !record.isOngoing && record.date <= now &&
+                record.observedEnd.map { $0 <= now } == true
+            let active = record.isOngoing && record.date <= now
+            let originalDay = calendar.startOfDay(for: record.date)
+            let kind: SleepTimelineItem.Kind = record.kind == .nightSleep ? .bedtime :
+                .nap(index: completed || active ? napNumber(for: record, accounting: accounting) : nil)
+            items.append(SleepTimelineItem(
+                id: "record:\(record.id.uuidString)", kind: kind, sleepDay: originalDay,
+                source: .recorded(record.id), time: record.date,
+                observedEnd: completed ? record.observedEnd : nil,
+                durationMinutes: completed ? record.totalMinutes(breaks: selected.filter { $0.kind == .break }, at: now) : nil,
+                elapsedMinutes: active ? max(0, Int(now.timeIntervalSince(record.date) / 60)) : nil,
+                visualState: completed ? .completed : (active ? .active : .unavailable),
+                unavailableReason: completed || active ? nil : .invalidRecord,
+                isCarryover: originalDay != sleepDay))
         }
 
-        let expectedCount: Int
-        if let ageMonths = snapshot?.ageMonths {
-            expectedCount = profileProvider.profile(forAgeMonths: ageMonths).expectedNapCount.upperBound
-        } else {
-            expectedCount = 2
+        let selectedProposals = proposals.filter { calendar.isDate($0.sleepDay, inSameDayAs: sleepDay) }
+            .sorted { $0.time == $1.time ? $0.id < $1.id : $0.time < $1.time }
+        var hasNext = false
+        for proposal in selectedProposals {
+            let source: SleepTimelineItem.Source
+            switch proposal.source {
+            case .estimate: source = .estimate
+            case .defaultValue: source = .defaultValue
+            case .guidance: source = .guidance
+            }
+            let state: SleepTimelineItem.VisualState
+            let reason: SleepTimelineItem.UnavailableReason?
+            let visibleTime: Date?
+            if proposal.source != .estimate {
+                state = .unavailable; reason = .notAnObservation; visibleTime = nil
+            } else if predictionEligibility != .verified {
+                state = .unavailable; reason = .eligibilityUnverified; visibleTime = nil
+            } else if proposal.time <= now {
+                state = .unavailable; reason = .overdue; visibleTime = proposal.time
+            } else {
+                state = hasNext ? .future : .next; reason = nil; visibleTime = proposal.time
+                hasNext = true
+            }
+            items.append(SleepTimelineItem(
+                id: "proposal:\(proposal.id)", kind: proposal.kind, sleepDay: sleepDay,
+                source: source, time: visibleTime, observedEnd: nil, durationMinutes: nil,
+                elapsedMinutes: nil, visualState: state, unavailableReason: reason))
         }
-        var predictedIndex = naps.count + 1
-        while snapshot?.nextSleepKind != .bedtime && items.count < 4 && predictedIndex <= expectedCount {
-            let start = predictedNapStart(index: predictedIndex, anchorEnd: anchorEnd)
-            items.append(SleepTimelineItem(kind: .nap(index: predictedIndex), time: start, durationMinutes: expectedDuration, isOngoing: false, visualState: .upcoming, isActive: false, isFuture: true, awakeBeforeMinutes: max(0, Int(start.timeIntervalSince(anchorEnd) / 60))))
-            anchorEnd = start.addingTimeInterval(TimeInterval(expectedDuration * 60))
-            predictedIndex += 1
+        if selectedProposals.isEmpty {
+            items.append(SleepTimelineItem(
+                id: "plan:\(sleepDay.timeIntervalSince1970)", kind: .plan, sleepDay: sleepDay,
+                source: .unavailable, time: nil, observedEnd: nil, durationMinutes: nil,
+                elapsedMinutes: nil, visualState: .unavailable,
+                unavailableReason: predictionEligibility == .verified ? .missingPrediction : .eligibilityUnverified))
         }
-
-        if items.count < 4 {
-            let bedtime = bedtime(after: anchorEnd, expectedNapCount: expectedCount)
-            items.append(SleepTimelineItem(kind: .bedtime, time: bedtime, durationMinutes: nil, isOngoing: false, visualState: bedtime <= now ? .completed : .upcoming, isActive: false, isFuture: bedtime > now, awakeBeforeMinutes: max(0, Int(bedtime.timeIntervalSince(anchorEnd) / 60))))
+        // Nil-time wake/plan placeholders bookend the chronological observed/eligible events.
+        items.sort {
+            let left = $0.time ?? ($0.kind == .wake ? .distantPast : .distantFuture)
+            let right = $1.time ?? ($1.kind == .wake ? .distantPast : .distantFuture)
+            return left == right ? $0.id < $1.id : left < right
+        }
+        for index in items.indices.dropFirst() {
+            let previous = items[index - 1]
+            // An ongoing/unknown interval has no observed ending to anchor awake time.
+            let end = previous.kind == .wake && previous.visualState == .completed ? previous.time : previous.observedEnd
+            if let end, let start = items[index].time, start >= end,
+               items[index].visualState != .unavailable {
+                items[index].awakeBeforeMinutes = Int(start.timeIntervalSince(end) / 60)
+            }
         }
         return items
     }
 
-    private var completedNapCount: Int { records.filter { $0.kind == .dayNap }.count }
-    private var profile: AgeBasedSleepProfile { profileProvider.profile(forAgeMonths: snapshot?.ageMonths ?? 10) }
-    private var expectedNapDuration: Int {
-        if let value = snapshot?.daytime.expectedDurationMinutes { return value }
-        let target = profile.daytimeSleepRange.lowerBound / max(profile.expectedNapCount.upperBound, 1)
-        return min(profile.maxSingleNapMinutes, max(45, target))
+    private func napNumber(for record: SleepRecord, accounting: SleepAccounting) -> Int? {
+        let naps = accounting.records(on: record.date).filter {
+            $0.kind == .dayNap && $0.date <= now &&
+                ($0.isOngoing || $0.observedEnd.map { $0 <= now } == true)
+        }.sorted {
+            $0.date == $1.date ? $0.id.uuidString < $1.id.uuidString : $0.date < $1.date
+        }
+        return naps.firstIndex { $0.id == record.id }.map { $0 + 1 }
     }
 
-    private func wakeAnchor(sortedNaps: [SleepRecord]) -> Date {
-        if let wakeRecord { return wakeRecord.wakeTime }
-        if let first = sortedNaps.first { return first.date.addingTimeInterval(TimeInterval(-wakeWindow(index: 1) * 60)) }
-        return defaultWakeTime
-    }
-
-    private func wakeWindow(index: Int) -> Int {
-        if index == completedNapCount + 1, let used = snapshot?.daytime.wakeWindowUsed { return used }
-        if index <= 1 { return (profile.morningWakeWindow.lowerBound + profile.morningWakeWindow.upperBound) / 2 }
-        if index >= profile.expectedNapCount.upperBound + 1 { return (profile.eveningWakeWindow.lowerBound + profile.eveningWakeWindow.upperBound) / 2 }
-        return (profile.wakeWindowRange.lowerBound + profile.wakeWindowRange.upperBound) / 2
-    }
-
-    private func predictedNapStart(index: Int, anchorEnd: Date) -> Date {
-        if index == completedNapCount + 1, let next = snapshot?.daytime.nextNapTime { return next }
-        return anchorEnd.addingTimeInterval(TimeInterval(wakeWindow(index: index) * 60))
-    }
-
-    private func bedtime(after anchorEnd: Date, expectedNapCount: Int) -> Date {
-        if let value = snapshot?.night.optimalBedtimeStart { return value }
-        let proposed = anchorEnd.addingTimeInterval(TimeInterval(wakeWindow(index: expectedNapCount + 1) * 60))
-        let hour = calendar.component(.hour, from: proposed)
-        guard hour < profile.bedtimeHourRange.lowerBound || hour > profile.bedtimeHourRange.upperBound else { return proposed }
-        return calendar.date(bySettingHour: min(max(hour, profile.bedtimeHourRange.lowerBound), profile.bedtimeHourRange.upperBound), minute: calendar.component(.minute, from: proposed), second: 0, of: proposed) ?? proposed
+    private func wakeItem(on day: Date) -> SleepTimelineItem {
+        guard let record = wakeRecord, calendar.isDate(record.day, inSameDayAs: day) else {
+            return SleepTimelineItem(id: "wake:\(day.timeIntervalSince1970)", kind: .wake,
+                sleepDay: day, source: .unavailable, time: nil, observedEnd: nil,
+                durationMinutes: nil, elapsedMinutes: nil, visualState: .unavailable,
+                unavailableReason: .missingRecord)
+        }
+        let valid = calendar.isDate(record.wakeTime, inSameDayAs: day) && record.wakeTime <= now
+        return SleepTimelineItem(id: "record:\(record.id.uuidString)", kind: .wake,
+            sleepDay: day, source: .recorded(record.id), time: record.wakeTime, observedEnd: nil,
+            durationMinutes: nil, elapsedMinutes: nil,
+            visualState: valid ? .completed : .unavailable, unavailableReason: valid ? nil : .invalidRecord)
     }
 }

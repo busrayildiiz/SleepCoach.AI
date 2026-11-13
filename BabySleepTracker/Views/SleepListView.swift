@@ -66,13 +66,9 @@ struct SleepListView: View {
     }
 
     private struct TimelineItem: Identifiable {
-        enum VisualState {
-            case completed
-            case active
-            case upcoming
-        }
+        typealias VisualState = SleepTimelineItem.VisualState
 
-        let id = UUID()
+        let id: String
         let icon: String
         let iconColor: Color
         let time: String
@@ -80,10 +76,11 @@ struct SleepListView: View {
         let detail: String
         let visualState: VisualState
         let isActive: Bool
-        let isFuture: Bool
-        var awakeBeforeMinutes: Int
+        let usesDashedConnector: Bool
+        var awakeBeforeMinutes: Int?
         
         init(
+            id: String,
             icon: String,
             iconColor: Color,
             time: String,
@@ -91,9 +88,10 @@ struct SleepListView: View {
             detail: String,
             visualState: VisualState,
             isActive: Bool,
-            isFuture: Bool,
-            awakeBeforeMinutes: Int = 0
+            usesDashedConnector: Bool,
+            awakeBeforeMinutes: Int? = nil
         ) {
+            self.id                 = id
             self.icon               = icon
             self.iconColor          = iconColor
             self.time               = time
@@ -101,7 +99,7 @@ struct SleepListView: View {
             self.detail             = detail
             self.visualState        = visualState
             self.isActive           = isActive
-            self.isFuture           = isFuture
+            self.usesDashedConnector = usesDashedConnector
             self.awakeBeforeMinutes = awakeBeforeMinutes
         }
     }
@@ -334,34 +332,60 @@ struct SleepListView: View {
             return profile.expectedNapCount.upperBound
         }
 
-    private var timelineItems: [TimelineItem] {
-        let calculator = SleepTimelineCalculator(records: todayRecords, wakeRecord: todayWakeRecord, snapshot: orchestrator.snapshot, defaultWakeTime: defaultWakeTime, now: Date(), profileProvider: DefaultAgeBasedSleepProfileProvider())
+    private func timelineItems(at now: Date) -> [TimelineItem] {
+        // Neither the older phase nor DQS verifies the approved eligibility policy.
+        // Keep estimates unavailable until the domain supplies an explicit verified source.
+        let calculator = SleepTimelineCalculator(records: records, wakeRecord: todayWakeRecord,
+            now: now, calendar: .current)
         return calculator.calculate().map { item in
-            let state: TimelineItem.VisualState = {
-                switch item.visualState { case .completed: return .completed; case .active: return .active; case .upcoming: return .upcoming }
-            }()
             let icon: String
             let color: Color
             let title: String
-            let detail: String
             switch item.kind {
             case .wake:
                 icon = "sun.max.fill"
                 color = Color(red: 1.0, green: 0.68, blue: 0.20)
                 title = "Wake up"
-                detail = todayWakeRecord == nil ? "Default wake" : "Logged"
             case .nap(let index):
                 icon = "moon.fill"
-                color = timelineNapColor(state: state)
-                title = "Nap \(index)"
-                detail = item.isOngoing ? "Sleeping now" : TimeFormat.minutes(item.durationMinutes ?? 0)
+                color = timelineNapColor(state: item.visualState)
+                title = index.map { "Nap \($0)" } ?? "Nap"
             case .bedtime:
                 icon = "moon.stars.fill"
                 color = Color.sleepPurpleDeep
-                title = "Bedtime"
-                detail = "Night sleep"
+                if case .recorded = item.source { title = "Night sleep" }
+                else { title = "Bedtime" }
+            case .plan:
+                icon = "calendar"
+                color = Color(.secondaryLabel)
+                title = "Plan"
             }
-            return TimelineItem(icon: icon, iconColor: color, time: shortTime(item.time), title: title, detail: detail, visualState: state, isActive: item.isActive, isFuture: item.isFuture, awakeBeforeMinutes: item.awakeBeforeMinutes)
+            var detail: String
+            switch item.source {
+            case .recorded:
+                switch item.visualState {
+                case .active: detail = "Elapsed \(TimeFormat.minutes(item.elapsedMinutes ?? 0))"
+                case .completed: detail = item.durationMinutes.map(TimeFormat.minutes) ?? "Logged"
+                default: detail = "Unconfirmed interval"
+                }
+            case .estimate:
+                detail = item.unavailableReason == .overdue ? "Overdue estimate" :
+                    (item.visualState == .next ? "Next · estimated" :
+                        (item.visualState == .future ? "Future · estimated" : "Estimate unavailable"))
+            case .defaultValue: detail = "Default · not recorded"
+            case .guidance: detail = "General guidance"
+            case .unavailable:
+                detail = item.kind == .wake ? "Not recorded" : "Prediction unavailable"
+            }
+            if item.isCarryover { detail += " · Previous Sleep Day" }
+            let time = item.time.map { date in
+                Calendar.current.isDate(date, inSameDayAs: now) ? shortTime(date) :
+                    date.formatted(date: .abbreviated, time: .shortened)
+            } ?? "—"
+            return TimelineItem(id: item.id, icon: icon, iconColor: color, time: time,
+                title: title, detail: detail, visualState: item.visualState,
+                isActive: item.isActive, usesDashedConnector: item.usesDashedConnector,
+                awakeBeforeMinutes: item.awakeBeforeMinutes)
         }
     }
 
@@ -371,8 +395,10 @@ struct SleepListView: View {
             return Color(red: 0.55, green: 0.45, blue: 0.98).opacity(0.42)
         case .active:
             return Color.sleepPurpleDeep
-        case .upcoming:
+        case .next, .future:
             return Color(red: 0.55, green: 0.45, blue: 0.98).opacity(0.58)
+        case .unavailable:
+            return Color(.secondaryLabel)
         }
     }
     // MARK: - Helpers
@@ -1747,17 +1773,13 @@ struct SleepListView: View {
                 )
             }
 
-            HStack(alignment: .top, spacing: 0) {
-                ForEach(Array(timelineItems.enumerated()), id: \.element.id) { index, item in
-                    premiumTimelineNode(item)
-                    if index < timelineItems.count - 1 {
-                        premiumTimelineSegment(
-                            awakeMinutes: timelineItems[index + 1].awakeBeforeMinutes,
-                            isDashed:     timelineItems[index + 1].isFuture,
-                            fromColor:    item.iconColor,
-                            toColor:      timelineItems[index + 1].iconColor
-                        )
-                    }
+            TimelineView(.periodic(from: .now, by: 60)) { context in
+                let items = timelineItems(at: context.date)
+                if items.count > 4 {
+                    // Preserve every recorded event without expanding the existing node design.
+                    ScrollView(.horizontal) { timelineRow(items, scrolling: true) }
+                } else {
+                    timelineRow(items, scrolling: false)
                 }
             }
             .padding(.top, 4)
@@ -1787,6 +1809,23 @@ struct SleepListView: View {
         .shadow(color: Color(red: 0.45, green: 0.35, blue: 0.92).opacity(0.08),
                 radius: 16, x: 0, y: 6)
     }
+    private func timelineRow(_ items: [TimelineItem], scrolling: Bool) -> some View {
+        HStack(alignment: .top, spacing: 0) {
+            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                premiumTimelineNode(item)
+                if index < items.count - 1 {
+                    premiumTimelineSegment(
+                        awakeMinutes: items[index + 1].awakeBeforeMinutes,
+                        isDashed: items[index + 1].usesDashedConnector,
+                        fromColor: item.iconColor,
+                        toColor: items[index + 1].iconColor
+                    )
+                    .frame(width: scrolling ? 28 : nil)
+                }
+            }
+        }
+    }
+
     // MARK: - Premium Timeline Node
 
     private func premiumTimelineNode(_ item: TimelineItem) -> some View {
@@ -1809,7 +1848,7 @@ struct SleepListView: View {
                     .fill(item.iconColor.opacity(fillOpacity))
                     .frame(width: 34, height: 34)
 
-                if item.visualState == .upcoming {
+                if item.visualState == .next || item.visualState == .future {
                     Circle()
                         .strokeBorder(
                             item.iconColor.opacity(0.34),
@@ -1852,7 +1891,7 @@ struct SleepListView: View {
     // MARK: - Premium Timeline Segment
 
     private func premiumTimelineSegment(
-        awakeMinutes: Int,
+        awakeMinutes: Int?,
         isDashed:     Bool,
         fromColor:    Color,
         toColor:      Color
@@ -1881,7 +1920,7 @@ struct SleepListView: View {
                     .frame(height: 1.5)
             }
 
-            if awakeMinutes > 0 {
+            if let awakeMinutes, awakeMinutes > 0 {
                 Text(TimeFormat.minutes(awakeMinutes))
                     .font(.system(size: 8, weight: .semibold))
                     .foregroundStyle(Color(.tertiaryLabel))
