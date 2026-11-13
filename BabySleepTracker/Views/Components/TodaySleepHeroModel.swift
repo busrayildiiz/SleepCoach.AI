@@ -185,11 +185,11 @@ struct TodaySleepHeroModel {
             netMinutes: context.flatMap { $0.isOngoing ? nil : $0.totalMinutes(breaks: records.filter { $0.kind == .break }, at: now) },
             elapsedMinutes: context.flatMap { $0.isOngoing ? max(0, Int(now.timeIntervalSince($0.date) / 60)) : nil },
             predictions: valid,
+            displayName: displayName.isEmpty ? String(localized: "there") : displayName,
+            babyName: babyName.isEmpty ? String(localized: "Baby") : babyName,
             predictionUnavailableReason: valid.isEmpty ? (proposals.first.flatMap {
                 $0.unavailableReason(now: now, record: context, wake: observedWake)
-            } ?? .eligibilityUnverified) : nil,
-            displayName: displayName.isEmpty ? String(localized: "there") : displayName,
-            babyName: babyName.isEmpty ? String(localized: "Baby") : babyName)
+            } ?? .eligibilityUnverified) : nil)
     }
 }
 
