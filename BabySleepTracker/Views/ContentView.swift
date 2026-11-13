@@ -42,7 +42,7 @@ struct ContentView: View {
             customTabBar
         }
         .ignoresSafeArea(edges: .bottom)
-        .sheet(isPresented: $showAddSheet) {
+        .fullScreenCover(isPresented: $showAddSheet) {
             AddRecordView(
                 defaultDate: Date(),
                 vm: AddRecordViewModel(),

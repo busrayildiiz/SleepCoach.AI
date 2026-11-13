@@ -16,6 +16,14 @@ final class SleepRecordingFlowTests: XCTestCase {
         XCTAssertNotEqual(route.id, RecordingSheet.sleep(editing: first, date: first.date).id)
     }
 
+    @MainActor
+    func testOnlyRecordingRoutesUseFullScreenPresentation() {
+        XCTAssertTrue(SleepListView.ActiveSheet.addSleep(editing: nil, defaultDate: start).isRecording)
+        XCTAssertTrue(SleepListView.ActiveSheet.addBreak(parentID: parent.id).isRecording)
+        XCTAssertFalse(SleepListView.ActiveSheet.dayDetail(.init(day: start)).isRecording)
+        XCTAssertFalse(SleepListView.ActiveSheet.wakeTime.isRecording)
+    }
+
     func testOngoingNightDoesNotRequireEndAndPreservesIdentityOnEdit() throws {
         let night = SleepRecord(date: start, duration: 0, kind: .nightSleep, isOngoing: true, createdAt: start)
         var draft = SleepRecordingDraft(defaultDate: start, editing: night, now: now)
