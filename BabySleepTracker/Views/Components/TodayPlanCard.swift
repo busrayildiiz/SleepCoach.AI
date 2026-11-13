@@ -38,7 +38,7 @@ struct TodayPlanCard: View {
                         .accessibilityIdentifier("home.plan.scroll")
                 }
             }
-            if presentation.predictionsUnavailable {
+            if presentation.predictionsUnavailable && items.isEmpty {
                 Text("Predictions unavailable")
                     .recordingFont(10, weight: .medium).foregroundStyle(RecordingColor.secondary)
                     .accessibilityIdentifier("home.plan.unavailable")
@@ -80,12 +80,19 @@ struct TodayPlanCard: View {
     }
     @ViewBuilder private var progress: some View {
         if presentation.availableEventCount > 0 {
-            Text("Today · \(presentation.completedEventCount) of \(presentation.availableEventCount)")
+            Group {
+                if items.contains(where: { $0.source == .estimate && $0.isFuture }) {
+                    Text("Today · \(presentation.completedEventCount) of \(presentation.availableEventCount)")
+                        .accessibilityLabel("\(presentation.completedEventCount) completed of \(presentation.availableEventCount) available events")
+                } else {
+                    Text("\(presentation.availableEventCount) recorded")
+                        .accessibilityLabel("\(presentation.availableEventCount) recorded events")
+                }
+            }
                 .recordingFont(11, weight: .bold).foregroundStyle(accent)
                 .padding(.horizontal, 8).padding(.vertical, 4)
                 .background(CoachColor.purple.opacity(0.11), in: Capsule())
                 .fixedSize(horizontal: false, vertical: true)
-                .accessibilityLabel("\(presentation.completedEventCount) completed of \(presentation.availableEventCount) available events")
                 .accessibilityIdentifier("home.plan.progress")
         }
     }
@@ -100,6 +107,7 @@ struct TodayPlanCard: View {
             .frame(minHeight: 44).contentShape(Rectangle())
         }
         .buttonStyle(.plain).accessibilityIdentifier("home.plan.details")
+        .accessibilityValue(presentation.predictionsUnavailable && !items.isEmpty ? Text("Predictions unavailable") : Text(""))
     }
 
     private var timeline: some View {
@@ -188,11 +196,11 @@ struct TodayPlanCard: View {
         case .completed: Text("Done").foregroundStyle(RecordingColor.secondary)
         case .active:
             Group {
-                if dynamicType.isAccessibilitySize {
+                if presentation.isOvernight || dynamicType.isAccessibilitySize {
                     Text("\(TimeFormat.minutes(item.elapsedMinutes ?? 0)) elapsed")
-                        .accessibilityLabel("Sleeping now · \(TimeFormat.minutes(item.elapsedMinutes ?? 0)) elapsed")
                 } else { Text("Sleeping now · \(TimeFormat.minutes(item.elapsedMinutes ?? 0)) elapsed") }
             }
+            .accessibilityLabel("Sleeping now · \(TimeFormat.minutes(item.elapsedMinutes ?? 0)) elapsed")
             .foregroundStyle(accent).padding(.horizontal, 7).padding(.vertical, 4)
             .background(CoachColor.purple.opacity(0.13), in: Capsule())
         case .next, .future:

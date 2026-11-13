@@ -85,7 +85,8 @@ final class TodayPlanUITests: XCTestCase {
         XCTAssertTrue(nap.label.contains("Done"), nap.label)
         XCTAssertTrue((nap.value as? String ?? "").contains("50m net sleep"), "Net duration remains available to VoiceOver and the full timeline.")
         let progress = app.descendants(matching: .any).matching(identifier: "home.plan.progress").firstMatch
-        XCTAssertTrue(progress.label.contains("2 completed of 2"), progress.label)
+        XCTAssertEqual(progress.label, "2 recorded events")
+        assertUnavailableIsDetailOnly(app: app)
         assertCompactCard(app: app)
         capture("completed-wake-and-net-nap", app: app)
         app.buttons["home.plan.details"].tap()
@@ -99,6 +100,9 @@ final class TodayPlanUITests: XCTestCase {
         XCTAssertTrue(nap.label.contains("26m elapsed"), nap.label)
         XCTAssertFalse(nap.label.contains("left"), nap.label)
         XCTAssertFalse(nap.label.contains("Done"), nap.label)
+        let progress = app.descendants(matching: .any).matching(identifier: "home.plan.progress").firstMatch
+        XCTAssertEqual(progress.label, "2 recorded events", "An ongoing observed sleep is recorded, not completed.")
+        assertUnavailableIsDetailOnly(app: app)
         assertCompactCard(app: app)
         capture("ongoing-nap", app: app)
         let hero = app.descendants(matching: .any).matching(identifier: "home.sleep.summary").firstMatch
@@ -125,7 +129,8 @@ final class TodayPlanUITests: XCTestCase {
         XCTAssertTrue(fifth.label.contains("Nap 5") && fifth.label.contains("Done"), fifth.label)
         capture("multiple-naps-scrolled-compact", app: app)
         let progress = app.descendants(matching: .any).matching(identifier: "home.plan.progress").firstMatch
-        XCTAssertTrue(progress.label.contains("6 completed of 6"), progress.label)
+        XCTAssertEqual(progress.label, "6 recorded events")
+        assertUnavailableIsDetailOnly(app: app)
     }
 
     func testOvernightCarryoverRemainsActiveAndKeepsOriginalDay() {
@@ -135,6 +140,7 @@ final class TodayPlanUITests: XCTestCase {
         XCTAssertTrue((night.value as? String ?? "").contains("Previous Sleep Day"))
         XCTAssertTrue(night.label.contains("Yesterday"), night.label)
         XCTAssertTrue(night.label.contains("7h 10m elapsed"), night.label)
+        XCTAssertTrue(night.label.contains("Sleeping now · 7h 10m elapsed"), "VoiceOver retains the full state despite the shorter visible overnight status.")
         let reference = app.descendants(matching: .any).matching(identifier: "home.plan.wakeReference").firstMatch
         XCTAssertTrue(reference.label.contains("Morning wake") && reference.label.contains("Unavailable"), reference.label)
         XCTAssertTrue(app.staticTexts["home.plan.title"].label.contains("Overnight"))
@@ -149,6 +155,9 @@ final class TodayPlanUITests: XCTestCase {
         XCTAssertTrue((next.value as? String ?? "").contains("Next planned event"))
         XCTAssertTrue(next.label.contains("Estimated"), next.label)
         XCTAssertTrue(next.label.contains("in 2h 29m"), next.label)
+        let progress = app.descendants(matching: .any).matching(identifier: "home.plan.progress").firstMatch
+        XCTAssertEqual(progress.label, "1 completed of 4 available events", "Eligible future events retain plan progress.")
+        XCTAssertFalse(app.staticTexts["home.plan.unavailable"].exists)
         capture("approved-reference-leading", app: app)
         if scroll.exists { scroll.swipeLeft() }
         let future = event("proposal:fixture-bedtime", app: app)
@@ -212,5 +221,10 @@ final class TodayPlanUITests: XCTestCase {
         if reference.exists { bottom = max(bottom, reference.frame.maxY) }
         let height = bottom - title.frame.minY + 28
         XCTAssertLessThanOrEqual(height, 250, "Default-size card must stay compact; actual content height: \(height)")
+    }
+
+    private func assertUnavailableIsDetailOnly(app: XCUIApplication) {
+        XCTAssertFalse(app.staticTexts["home.plan.unavailable"].exists, "Recorded timelines do not need a persistent unavailable footer.")
+        XCTAssertEqual(app.buttons["home.plan.details"].value as? String, "Predictions unavailable", "Prediction availability remains accessible through the neutral full-plan detail.")
     }
 }
