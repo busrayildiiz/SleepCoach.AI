@@ -33,7 +33,7 @@ final class TodayPlanUITests: XCTestCase {
             let end = start.withOffset(CGVector(dx: 0, dy: distance < 0 ? step : -step))
             start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.1)
         }
-        XCTFail("Plan element is not reachable: \(element)")
+        XCTFail("Plan element is not reachable: \(element)\n\(app.debugDescription)")
     }
 
     private func capture(_ name: String, app: XCUIApplication) {

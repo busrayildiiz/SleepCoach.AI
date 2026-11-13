@@ -6,9 +6,9 @@ struct TodayPlanCard: View {
     let now: Date
     var calendar: Calendar = .current
     let viewFullPlan: () -> Void
-    @ScaledMetric(relativeTo: .body) private var nodeWidth: CGFloat = 76
+    @ScaledMetric(relativeTo: .body) private var nodeWidth: CGFloat = 68
     @ScaledMetric(relativeTo: .body) private var nodeDiameter: CGFloat = 34
-    @ScaledMetric(relativeTo: .body) private var connectorWidth: CGFloat = 24
+    @ScaledMetric(relativeTo: .body) private var connectorWidth: CGFloat = 16
     @Environment(\.colorScheme) private var colorScheme
 
     private var presentation: TodayPlanPresentation { .init(items: items) }
@@ -33,6 +33,7 @@ struct TodayPlanCard: View {
                 ScrollView(.horizontal) {
                     timeline.padding(.vertical, 5)
                 }
+                .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("home.plan.scroll")
             }
         }
@@ -51,7 +52,6 @@ struct TodayPlanCard: View {
         .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous)
             .stroke(CoachColor.purple.opacity(0.15), lineWidth: 1))
         .shadow(color: CoachColor.purpleDeep.opacity(0.08), radius: 12, x: 0, y: 5)
-        .accessibilityIdentifier("home.plan.card")
     }
 
     private var heading: some View {
@@ -198,6 +198,7 @@ struct TodayPlanCard: View {
             Text("Sleeping now · \(TimeFormat.minutes(item.elapsedMinutes ?? 0)) elapsed")
                 .foregroundStyle(accent)
                 .padding(.horizontal, 7).padding(.vertical, 5)
+                .frame(width: nodeWidth + 12)
                 .background(CoachColor.purple.opacity(0.13), in: Capsule())
         case .next, .future:
             if item.visualState == .next {
@@ -228,12 +229,13 @@ struct TodayPlanCard: View {
     private func connector(after index: Int) -> some View {
         let solid = presentation.isConfirmedConnector(after: index)
         let gap = items[index + 1].awakeBeforeMinutes
+        let inset = max(0, (nodeWidth - nodeDiameter) / 2)
         return Rectangle().fill(Color.clear)
             .frame(width: connectorWidth, height: nodeDiameter + 18)
             .overlay {
                 Path { path in
-                    path.move(to: CGPoint(x: 0, y: (nodeDiameter + 18) / 2))
-                    path.addLine(to: CGPoint(x: connectorWidth, y: (nodeDiameter + 18) / 2))
+                    path.move(to: CGPoint(x: -inset, y: (nodeDiameter + 18) / 2))
+                    path.addLine(to: CGPoint(x: connectorWidth + inset, y: (nodeDiameter + 18) / 2))
                 }
                 .stroke(CoachColor.purple.opacity(solid ? 0.8 : 0.22),
                     style: StrokeStyle(lineWidth: 1.8, lineCap: .round, dash: solid ? [] : [1, 4]))
