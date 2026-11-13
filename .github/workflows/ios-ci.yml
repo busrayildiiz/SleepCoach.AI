@@ -19,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        simulator: ${{ fromJSON((github.head_ref == 'feat/recording-experience-redesign' || (github.head_ref == 'feat/home-sleep-cards-redesign' || github.head_ref == 'feat/todays-sleep-hero')) && '["standard","compact"]' || '["standard"]') }}
+        simulator: ${{ fromJSON((github.head_ref == 'feat/recording-experience-redesign' || (github.head_ref == 'feat/home-sleep-cards-redesign' || github.head_ref == 'feat/todays-sleep-hero' || github.head_ref == 'feat/bedtime-routine-hero')) && '["standard","compact"]' || '["standard"]') }}
     env:
       SIMULATOR_CLASS: ${{ matrix.simulator }}
       DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
@@ -83,7 +83,7 @@ jobs:
           PROVISIONING_PROFILE_SPECIFIER=
 
       - name: Export Home visual verification attachments
-        if: ${{ always() && (github.head_ref == 'feat/home-sleep-cards-redesign' || github.head_ref == 'feat/todays-sleep-hero') }}
+        if: ${{ always() && (github.head_ref == 'feat/home-sleep-cards-redesign' || github.head_ref == 'feat/todays-sleep-hero' || github.head_ref == 'feat/bedtime-routine-hero') }}
         run: |
           if [ -d "$RUNNER_TEMP/TestResults.xcresult" ]; then
             xcrun xcresulttool export attachments --path "$RUNNER_TEMP/TestResults.xcresult" --output-path "$RUNNER_TEMP/HomeScreenshots"
@@ -91,7 +91,7 @@ jobs:
           fi
 
       - name: Upload Home screenshots
-        if: ${{ always() && (github.head_ref == 'feat/home-sleep-cards-redesign' || github.head_ref == 'feat/todays-sleep-hero') }}
+        if: ${{ always() && (github.head_ref == 'feat/home-sleep-cards-redesign' || github.head_ref == 'feat/todays-sleep-hero' || github.head_ref == 'feat/bedtime-routine-hero') }}
         uses: actions/upload-artifact@v4
         with:
           name: home-screenshots-${{ matrix.simulator }}
@@ -100,7 +100,7 @@ jobs:
           retention-days: 7
 
       - name: Upload failed test results or recording review bundle
-        if: ${{ failure() || github.head_ref == 'feat/recording-experience-redesign' || (github.head_ref == 'feat/home-sleep-cards-redesign' || github.head_ref == 'feat/todays-sleep-hero') }}
+        if: ${{ failure() || github.head_ref == 'feat/recording-experience-redesign' || (github.head_ref == 'feat/home-sleep-cards-redesign' || github.head_ref == 'feat/todays-sleep-hero' || github.head_ref == 'feat/bedtime-routine-hero') }}
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.simulator == 'compact' && 'ios-test-results-compact' || 'ios-test-results' }}

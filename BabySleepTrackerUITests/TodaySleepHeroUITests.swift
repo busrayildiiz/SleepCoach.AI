@@ -29,8 +29,14 @@ final class TodaySleepHeroUITests: XCTestCase {
             let visible = CGRect(x: window.minX, y: window.minY + 44, width: window.width,
                                  height: max(0, bottom - window.minY - 44))
             if element.exists && element.isHittable && visible.contains(CGPoint(x: element.frame.midX, y: element.frame.midY)) { return }
-            if element.exists && element.frame.midY < visible.midY { app.swipeDown() }
-            else { app.swipeUp() }
+            // Keep large-type hero actions reachable on SE without overshooting them.
+            let distance = element.exists ? element.frame.midY - visible.midY : visible.height
+            let step = min(abs(distance), visible.height * 0.4)
+            let start = app.coordinate(withNormalizedOffset: .zero)
+                .withOffset(CGVector(dx: visible.midX, dy: visible.midY))
+            start.press(forDuration: 0.05,
+                        thenDragTo: start.withOffset(CGVector(dx: 0, dy: distance < 0 ? step : -step)),
+                        withVelocity: .slow, thenHoldForDuration: 0.1)
         }
         XCTFail("Hero action is not reachable")
     }
@@ -109,5 +115,74 @@ final class TodaySleepHeroUITests: XCTestCase {
         reveal(nap, app: app)
         nap.tap()
         XCTAssertTrue(app.navigationBars["Add Nap"].waitForExistence(timeout: 5))
+    }
+
+    func testBedtimeRoutineTransitionVisualCaptures() {
+        for (scenario, title) in [("bedtimeBefore", "Nap completed"), ("bedtimeRoutine", "Bedtime routine"),
+                                  ("nightActive", "Night sleep in progress"), ("morningUnconfirmed", "Good morning, Alex!")] {
+            let app = launch(scenario)
+            let summary = app.descendants(matching: .any).matching(identifier: "home.sleep.summary").firstMatch
+            XCTAssertTrue(summary.waitForExistence(timeout: 5))
+            XCTAssertTrue(summary.label.contains(title), summary.label)
+            if scenario == "bedtimeRoutine" {
+                XCTAssertTrue(summary.label.contains("Baby's usual bedtime"), summary.label)
+                XCTAssertTrue(app.buttons["hero.recordNight"].isHittable)
+                XCTAssertFalse(app.buttons["hero.endSleep"].exists)
+            }
+            capture("bedtime-transition-\(scenario)", app: app)
+            app.terminate()
+        }
+    }
+
+    func testBedtimeRecordNightCancelAndCompletedSave() {
+        let app = launch("bedtimeRoutine", live: true)
+        let record = app.buttons["hero.recordNight"]
+        record.tap()
+        XCTAssertTrue(app.navigationBars["Add Night Sleep"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["recording.end.edit"].exists)
+        app.buttons["recording.cancel"].tap()
+        dismissed(app.navigationBars["Add Night Sleep"])
+        XCTAssertTrue(record.waitForExistence(timeout: 5), "Cancel must leave the routine cue unchanged.")
+        record.tap()
+        XCTAssertTrue(app.navigationBars["Add Night Sleep"].waitForExistence(timeout: 5))
+        let save = app.buttons["recording.save"]
+        reveal(save, app: app)
+        XCTAssertTrue(save.isEnabled)
+        save.tap()
+        dismissed(app.navigationBars["Add Night Sleep"])
+        let summary = app.descendants(matching: .any).matching(identifier: "home.sleep.summary").firstMatch
+        let confirmed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "Good morning, Alex!"), object: summary)
+        XCTAssertEqual(XCTWaiter.wait(for: [confirmed], timeout: 5), .completed)
+        XCTAssertFalse(record.exists)
+        XCTAssertFalse(app.buttons["hero.endSleep"].exists)
+    }
+
+    func testBedtimeOngoingSaveAndForegroundPreserveConfirmedState() {
+        let app = launch("bedtimeRoutine", live: true, large: true)
+        let record = app.buttons["hero.recordNight"]
+        XCUIDevice.shared.press(.home)
+        app.activate()
+        XCTAssertTrue(record.waitForExistence(timeout: 5), "Foreground refresh must retain the eligible routine cue.")
+        reveal(record, app: app)
+        capture("bedtime-routine-large-type", app: app)
+        record.tap()
+        XCTAssertTrue(app.navigationBars["Add Night Sleep"].waitForExistence(timeout: 5))
+        let ongoing = app.switches["recording.ongoing"]
+        reveal(ongoing, app: app)
+        ongoing.tap()
+        XCTAssertFalse(app.buttons["recording.end.edit"].exists)
+        let save = app.buttons["recording.save"]
+        reveal(save, app: app)
+        XCTAssertTrue(save.isEnabled)
+        save.tap()
+        dismissed(app.navigationBars["Add Night Sleep"])
+        XCUIDevice.shared.press(.home)
+        app.activate()
+        let summary = app.descendants(matching: .any).matching(identifier: "home.sleep.summary").firstMatch
+        let active = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "Night sleep in progress"), object: summary)
+        XCTAssertEqual(XCTWaiter.wait(for: [active], timeout: 5), .completed)
+        XCTAssertTrue(app.buttons["hero.endSleep"].exists)
+        XCTAssertFalse(record.exists)
+        capture("bedtime-confirmed-night-large-type", app: app)
     }
 }

@@ -13,13 +13,15 @@ struct AddRecordView: View {
     @State private var breakParent: SleepRecord?
     @State private var existingBreaks: [SleepRecord] = []
 
-    init(defaultDate: Date, editingRecord: SleepRecord? = nil, vm: AddRecordViewModel, endingOngoing: Bool = false,
+    init(defaultDate: Date, editingRecord: SleepRecord? = nil, vm: AddRecordViewModel,
+         initialKind: SleepKind? = nil, endingOngoing: Bool = false,
          onSave: @escaping (SleepRecord) -> Bool) {
         self.defaultDate = defaultDate
         self.editingRecord = editingRecord
         self.onSave = onSave
         self.vm = vm
         if let editingRecord { vm.kind = editingRecord.kind }
+        else if let initialKind { vm.kind = initialKind }
         var initialDraft = SleepRecordingDraft(defaultDate: defaultDate, editing: editingRecord)
         if endingOngoing { initialDraft.prepareForEnding(at: Date()) }
         _draft = State(initialValue: initialDraft)

@@ -3,6 +3,7 @@ import SwiftUI
 struct TodaySleepHeroCard: View {
     let model: TodaySleepHeroModel
     let addNap: () -> Void
+    let recordNight: () -> Void
     let endSleep: () -> Void
     let addBreak: () -> Void
     let viewDetails: () -> Void
@@ -87,7 +88,7 @@ struct TodaySleepHeroCard: View {
         switch model.mode {
         case .ready, .napActive: return "bed.double.fill"
         case .napCompleted: return "checkmark.circle.fill"
-        case .nightActive: return "moon.fill"
+        case .nightActive, .bedtimeRoutine: return "moon.fill"
         case .morningConfirmed: return "sun.max.fill"
         case .morningUnconfirmed: return "sunrise.fill"
         case .likelyNext: return "sparkles"
@@ -117,6 +118,8 @@ struct TodaySleepHeroCard: View {
             Text("You haven't recorded \(model.babyName)'s wake time yet.")
         case .likelyNext:
             Text("An estimated sleep is expected soon. This is guidance, not an observed sleep session.")
+        case .bedtimeRoutine:
+            Text("It's around \(model.babyName)'s usual bedtime.")
         }
     }
     private var napLabel: String { model.napNumber.map { String(localized: "Nap \($0)") } ?? String(localized: "Nap") }
@@ -129,6 +132,8 @@ struct TodaySleepHeroCard: View {
     @ViewBuilder private var information: some View {
         switch model.mode {
         case .ready: EmptyView()
+        case .bedtimeRoutine:
+            tile("Usual bedtime", value: model.routineBedtime.map(time) ?? unavailable, symbol: "moon")
         case .napActive:
             tile("Estimated end", value: model.prediction(.napEnd)?.end.map(time) ?? unavailable, symbol: "clock", showsInfo: true)
         case .nightActive:
@@ -188,6 +193,8 @@ struct TodaySleepHeroCard: View {
     @ViewBuilder private var actions: some View {
         switch model.mode {
         case .ready: action("Add Nap", symbol: "bed.double", id: "hero.addNap", primary: true, addNap)
+        case .bedtimeRoutine:
+            action("Record night sleep", symbol: "moon", id: "hero.recordNight", primary: true, recordNight)
         case .napActive:
             adaptive {
                 action("End Sleep", symbol: "stop.fill", id: "hero.endSleep", primary: true, endSleep)
