@@ -97,7 +97,7 @@ struct DayDetailView: View {
                 }
                 Button("Cancel", role: .cancel) { contextNap = nil }
             }
-            .sheet(item: $recordingSheet) { destination in
+            .fullScreenCover(item: $recordingSheet) { destination in
                 switch destination {
                 case .sleep(let editing, let date):
                     AddRecordView(defaultDate: date, editingRecord: editing,

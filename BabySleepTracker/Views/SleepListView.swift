@@ -41,6 +41,13 @@ struct SleepListView: View {
         case dayDetail(SelectedDay)
         case wakeTime
 
+        var isRecording: Bool {
+            switch self {
+            case .addSleep, .addBreak: return true
+            case .dayDetail, .wakeTime: return false
+            }
+        }
+
         var id: String {
             switch self {
             case .addSleep(let editing, let date):
@@ -445,21 +452,35 @@ struct SleepListView: View {
             }
             .environment(\.locale, Locale(identifier: "en_US"))
         }
-        .sheet(item: $activeSheet) { sheet in
-            SleepListSheetRouter(
-                sheet: sheet,
-                records: records,
-                todayWakeTime: todayWakeRecord?.wakeTime,
-                defaultWakeTime: defaultWakeTime,
-                onRecordUpsert: upsert,
-                onBreakSaved: upsert,
-                onDeleteRecords: { ids in
-                    records.removeAll { ids.contains($0.id) }
-                    saveRecords()
-                },
-                onWakeTimeSave: saveWakeTime
-            )
-        }
+        .sheet(item: presentationSheet(recording: false), content: sheetContent)
+        .fullScreenCover(item: presentationSheet(recording: true), content: sheetContent)
+    }
+
+    private func presentationSheet(recording: Bool) -> Binding<ActiveSheet?> {
+        Binding(get: {
+            guard let sheet = activeSheet, sheet.isRecording == recording else { return nil }
+            return sheet
+        }, set: { value in
+            // An outgoing presentation must not clear a different incoming destination.
+            if let value { activeSheet = value }
+            else if activeSheet?.isRecording == recording { activeSheet = nil }
+        })
+    }
+
+    private func sheetContent(_ sheet: ActiveSheet) -> some View {
+        SleepListSheetRouter(
+            sheet: sheet,
+            records: records,
+            todayWakeTime: todayWakeRecord?.wakeTime,
+            defaultWakeTime: defaultWakeTime,
+            onRecordUpsert: upsert,
+            onBreakSaved: upsert,
+            onDeleteRecords: { ids in
+                records.removeAll { ids.contains($0.id) }
+                saveRecords()
+            },
+            onWakeTimeSave: saveWakeTime
+        )
     }
     // MARK: - Header
 

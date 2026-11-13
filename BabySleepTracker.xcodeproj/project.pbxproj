@@ -96,6 +96,9 @@
 		AC100000000000000000000B /* RecordingNavigationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC100000000000000000000A; };
 		AC2000000000000000000002 /* HomeDashboardCardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC2000000000000000000001; };
 		AC3000000000000000000002 /* HomeDashboardCardUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC3000000000000000000001; };
+		AD2000000000000000000002 /* CoachDesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD2000000000000000000001 /* CoachDesignSystem.swift */; };
+		AD2000000000000000000004 /* RecordingIntervalRing.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD2000000000000000000003 /* RecordingIntervalRing.swift */; };
+		AD2000000000000000000006 /* RecordingIntervalPresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD2000000000000000000005 /* RecordingIntervalPresentationTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -202,6 +205,9 @@
 		AC100000000000000000000C /* BabySleepTrackerUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BabySleepTrackerUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		AC2000000000000000000001 /* HomeDashboardCardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeDashboardCardTests.swift; sourceTree = "<group>"; };
 		AC3000000000000000000001 /* HomeDashboardCardUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeDashboardCardUITests.swift; sourceTree = "<group>"; };
+		AD2000000000000000000001 /* CoachDesignSystem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoachDesignSystem.swift; sourceTree = "<group>"; };
+		AD2000000000000000000003 /* RecordingIntervalRing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingIntervalRing.swift; sourceTree = "<group>"; };
+		AD2000000000000000000005 /* RecordingIntervalPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingIntervalPresentationTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -227,6 +233,7 @@
 		FA5488D12FAEB964002BC18B /* BabySleepTrackerTests */ = {
 			isa = PBXGroup;
 			children = (
+				AD2000000000000000000005 /* RecordingIntervalPresentationTests.swift */,
 				AC1000000000000000000005 /* SleepRecordingFlowTests.swift */,
                 AC2000000000000000000001,
 				FA294726304667BD00BE2E20 /* SleepWakeTimeWorkflowTests.swift */,
@@ -374,6 +381,8 @@
 		FAEF105F2F4E26B100E76FD4 /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				AD2000000000000000000003 /* RecordingIntervalRing.swift */,
+				AD2000000000000000000001 /* CoachDesignSystem.swift */,
 				AC1000000000000000000003 /* RecordingFormComponents.swift */,
 				FA9DB0A82FD49ED4000B9211 /* CreateAccountView.swift */,
 				FAB4BAFB2FE11F9700702F49 /* ProfileEditSheet.swift */,
@@ -555,6 +564,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AD2000000000000000000006 /* RecordingIntervalPresentationTests.swift in Sources */,
 				AC1000000000000000000006 /* SleepRecordingFlowTests.swift in Sources */,
                 AC2000000000000000000002,
 				FA04E41D30325A6900EFF932 /* TimeFormatTests.swift in Sources */,
@@ -592,6 +602,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AD2000000000000000000004 /* RecordingIntervalRing.swift in Sources */,
+				AD2000000000000000000002 /* CoachDesignSystem.swift in Sources */,
 				AC1000000000000000000004 /* RecordingFormComponents.swift in Sources */,
 				AC1000000000000000000002 /* SleepRecordingFlow.swift in Sources */,
 				FAEF106A2F4E5D0100E76FD4 /* DayDetailViewModel.swift in Sources */,

@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct SleepListSheetRouter: View {
+    @Environment(\.dismiss) private var dismiss
     let sheet: SleepListView.ActiveSheet
     let records: [SleepRecord]
     let todayWakeTime: Date?
@@ -26,7 +27,21 @@ struct SleepListSheetRouter: View {
                              existingBreaks: records.filter { $0.parentNapID == parent.id && $0.kind == .break },
                              onSave: onBreakSaved)
             } else {
-                Text("This sleep session is no longer available.")
+                NavigationStack {
+                    Text("This sleep session is no longer available.")
+                        .padding(24)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(RecordingColor.background)
+                        .navigationTitle("Add Awake Break")
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("Cancel") { dismiss() }
+                                    .accessibilityIdentifier("recording.cancel")
+                            }
+                        }
+                }
+                .tint(RecordingColor.accent)
             }
 
         case .dayDetail(let selected):
