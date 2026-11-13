@@ -41,16 +41,22 @@ final class HomeDashboardCardUITests: XCTestCase {
             if card.exists && card.isHittable {
                 let frame = card.frame
                 let visible = frame.intersection(viewport)
-                // At maximum Dynamic Type the card can exceed the SE viewport.
-                // Its visible portion remains a real button; navigation below must succeed.
+                // Require a real 44-point target clear of the floating tab controls.
                 if !visible.isNull && visible.width >= 44 && visible.height >= 44 {
                     card.coordinate(withNormalizedOffset: .zero)
                         .withOffset(CGVector(dx: visible.midX - frame.minX, dy: visible.midY - frame.minY)).tap()
                     return
                 }
             }
-            if card.exists && card.frame.midY < viewport.midY { app.swipeDown() }
-            else { app.swipeUp() }
+            // Full-screen flicks overshoot the standalone hero action on SE at AX XXXL
+            // and alternate above/below it. Move toward its measured position without inertia.
+            let distance = card.exists ? card.frame.midY - viewport.midY : viewport.height
+            let step = min(abs(distance), viewport.height * 0.4)
+            let start = app.coordinate(withNormalizedOffset: .zero)
+                .withOffset(CGVector(dx: viewport.midX, dy: viewport.midY))
+            let end = start.withOffset(CGVector(dx: 0, dy: distance < 0 ? step : -step))
+            start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow,
+                        thenHoldForDuration: 0.1)
         }
         XCTFail("Recording card has no visible, hittable 44-point tap area within eight scroll gestures.")
     }
@@ -81,21 +87,21 @@ final class HomeDashboardCardUITests: XCTestCase {
         XCTAssertTrue(app.buttons["home.wake.add"].exists)
     }
     func testLikelyNapAndNightVisualFixtures() {
-        for (scenario, label) in [("first-nap", "LIKELY FIRST NAP"), ("night", "LIKELY NIGHT SLEEP")] {
+        for (scenario, label) in [("first-nap", "Likely next sleep"), ("night", "Likely next sleep")] {
             let app = launch(scenario)
             let summary = app.descendants(matching: .any).matching(identifier: "home.sleep.summary").firstMatch
             XCTAssertTrue(summary.waitForExistence(timeout: 5))
             XCTAssertTrue(summary.label.contains(label), summary.label)
-            XCTAssertTrue(summary.label.contains("estimated"))
+            XCTAssertTrue(summary.label.localizedCaseInsensitiveContains("estimated"))
             screenshot(scenario, app: app)
             app.terminate()
         }
     }
-    func testConfirmedSessionPreservesAddBreakNavigation() {
-        let app = launch("confirmed")
+    func testConfirmedNapPreservesAddBreakNavigation() {
+        let app = launch("confirmed-nap")
         let summary = app.descendants(matching: .any).matching(identifier: "home.sleep.summary").firstMatch
         XCTAssertTrue(summary.waitForExistence(timeout: 5))
-        XCTAssertTrue(summary.label.contains("LIVE NIGHT SLEEP"))
+        XCTAssertTrue(summary.label.contains("Sleeping now"))
         screenshot("confirmed-ongoing", app: app)
         app.buttons["sleep.current.addBreak"].tap()
         XCTAssertTrue(app.navigationBars["Add Awake Break"].waitForExistence(timeout: 5))
@@ -110,10 +116,8 @@ final class HomeDashboardCardUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Today's Wake-up"].waitForExistence(timeout: 5))
         app.buttons["home.wake.cancel"].tap()
         disappears(app.navigationBars["Today's Wake-up"])
-        // The former next-sleep card keeps its existing Add Sleep destination.
-        app.swipeDown()
-        app.swipeDown()
-        let add = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Ready to record")).firstMatch
+        // The hero's explicit Add Nap action keeps the existing recording destination.
+        let add = app.buttons["hero.addNap"]
         tapVisibleRecordingCard(add, app: app)
         XCTAssertTrue(app.navigationBars["Add Nap"].waitForExistence(timeout: 5))
     }

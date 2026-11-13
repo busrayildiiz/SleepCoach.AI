@@ -165,15 +165,33 @@ final class RecordingNavigationTests: XCTestCase {
         XCTAssertTrue(save.isEnabled)
         save.tap()
         waitForDismissal(of: app.navigationBars["Add Night Sleep"])
-        XCTAssertTrue(app.buttons["sleep.current.addBreak"].waitForExistence(timeout: 5))
-        let addBreak = app.buttons["sleep.current.addBreak"]
+        let summary = app.descendants(matching: .any).matching(identifier: "home.sleep.summary").firstMatch
+        XCTAssertTrue(summary.waitForExistence(timeout: 5))
+        XCTAssertTrue(summary.label.contains("Night sleep in progress"), summary.label)
+        XCTAssertTrue(app.buttons["hero.endSleep"].exists)
+        // Approved night heroes expose View details; Add Break remains on the parent record.
+        let details = app.buttons["hero.details"]
+        reveal(details, in: app)
+        details.tap()
+        let addBreak = app.buttons.matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND identifier != %@",
+            "sleep.addBreak.", "sleep.addBreak.\(parentID)"
+        )).firstMatch
         reveal(addBreak, in: app)
         addBreak.tap()
         XCTAssertTrue(app.navigationBars["Add Awake Break"].waitForExistence(timeout: 5))
+        let parent = app.buttons["recording.parent"]
+        XCTAssertTrue(parent.label.contains("Night Sleep"), parent.label)
+        XCTAssertTrue(parent.label.contains("still sleeping"), parent.label)
         capture("recording-awake-ongoing-accessibility", app: app)
         app.buttons["recording.cancel"].tap()
         waitForDismissal(of: app.navigationBars["Add Awake Break"])
         XCTAssertTrue(addBreak.waitForExistence(timeout: 5))
+        app.buttons["Done"].tap()
+        waitForDismissal(of: addBreak)
+        XCTAssertTrue(summary.waitForExistence(timeout: 5))
+        XCTAssertTrue(summary.label.contains("Night sleep in progress"), summary.label)
+        XCTAssertTrue(app.buttons["hero.endSleep"].exists)
     }
 
     func testRecordingVisualReviewInLightAndDarkAppearance() {

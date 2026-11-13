@@ -7,7 +7,9 @@ struct BabySleepTrackerApp: App {
     init() {
         #if DEBUG && targetEnvironment(simulator)
         // Explicit opt-in only in the UI-test runner's simulator app container.
-        if HomeCardTestFixture.enabled {
+        if HeroUITestFixture.enabled {
+            HeroUITestFixture.prepare()
+        } else if HomeCardTestFixture.enabled {
             HomeCardTestFixture.prepare()
         } else if ProcessInfo.processInfo.environment["RECORDING_UI_TESTS"] == "1" {
             let defaults = UserDefaults.standard
