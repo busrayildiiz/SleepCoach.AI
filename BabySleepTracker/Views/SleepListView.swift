@@ -65,45 +65,6 @@ struct SleepListView: View {
         }
     }
 
-    private struct TimelineItem: Identifiable {
-        typealias VisualState = SleepTimelineItem.VisualState
-
-        let id: String
-        let icon: String
-        let iconColor: Color
-        let time: String
-        let title: String
-        let detail: String
-        let visualState: VisualState
-        let isActive: Bool
-        let usesDashedConnector: Bool
-        var awakeBeforeMinutes: Int?
-        
-        init(
-            id: String,
-            icon: String,
-            iconColor: Color,
-            time: String,
-            title: String,
-            detail: String,
-            visualState: VisualState,
-            isActive: Bool,
-            usesDashedConnector: Bool,
-            awakeBeforeMinutes: Int? = nil
-        ) {
-            self.id                 = id
-            self.icon               = icon
-            self.iconColor          = iconColor
-            self.time               = time
-            self.title              = title
-            self.detail             = detail
-            self.visualState        = visualState
-            self.isActive           = isActive
-            self.usesDashedConnector = usesDashedConnector
-            self.awakeBeforeMinutes = awakeBeforeMinutes
-        }
-    }
-
     // MARK: - State
 
     @StateObject private var orchestrator = SleepCoachOrchestrator.shared
@@ -332,75 +293,20 @@ struct SleepListView: View {
             return profile.expectedNapCount.upperBound
         }
 
-    private func timelineItems(at now: Date) -> [TimelineItem] {
-        // Neither the older phase nor DQS verifies the approved eligibility policy.
-        // Keep estimates unavailable until the domain supplies an explicit verified source.
-        let calculator = SleepTimelineCalculator(records: records, wakeRecord: todayWakeRecord,
-            now: now, calendar: .current)
-        return calculator.calculate().map { item in
-            let icon: String
-            let color: Color
-            let title: String
-            switch item.kind {
-            case .wake:
-                icon = "sun.max.fill"
-                color = Color(red: 1.0, green: 0.68, blue: 0.20)
-                title = "Wake up"
-            case .nap(let index):
-                icon = "moon.fill"
-                color = timelineNapColor(state: item.visualState)
-                title = index.map { "Nap \($0)" } ?? "Nap"
-            case .bedtime:
-                icon = "moon.stars.fill"
-                color = Color.sleepPurpleDeep
-                if case .recorded = item.source { title = "Night sleep" }
-                else { title = "Bedtime" }
-            case .plan:
-                icon = "calendar"
-                color = Color(.secondaryLabel)
-                title = "Plan"
-            }
-            var detail: String
-            switch item.source {
-            case .recorded:
-                switch item.visualState {
-                case .active: detail = "Elapsed \(TimeFormat.minutes(item.elapsedMinutes ?? 0))"
-                case .completed: detail = item.durationMinutes.map(TimeFormat.minutes) ?? "Logged"
-                default: detail = "Unconfirmed interval"
-                }
-            case .estimate:
-                detail = item.unavailableReason == .overdue ? "Overdue estimate" :
-                    (item.visualState == .next ? "Next · estimated" :
-                        (item.visualState == .future ? "Future · estimated" : "Estimate unavailable"))
-            case .defaultValue: detail = "Default · not recorded"
-            case .guidance: detail = "General guidance"
-            case .unavailable:
-                detail = item.kind == .wake ? "Not recorded" : "Prediction unavailable"
-            }
-            if item.isCarryover { detail += " · Previous Sleep Day" }
-            let time = item.time.map { date in
-                Calendar.current.isDate(date, inSameDayAs: now) ? shortTime(date) :
-                    date.formatted(date: .abbreviated, time: .shortened)
-            } ?? "—"
-            return TimelineItem(id: item.id, icon: icon, iconColor: color, time: time,
-                title: title, detail: detail, visualState: item.visualState,
-                isActive: item.isActive, usesDashedConnector: item.usesDashedConnector,
-                awakeBeforeMinutes: item.awakeBeforeMinutes)
+    private func planPresentation(at actual: Date) -> TodayPlanPresentation {
+        let now = planNow(actual)
+        let hero = sleepHero(at: now)
+        let routine = TodaySleepHeroModel.Routine.load(defaults: .standard)
+        #if DEBUG && targetEnvironment(simulator)
+        if TodayPlanUITestFixture.enabled {
+            return TodayPlanUITestFixture.presentation(records: records, wakes: wakeRecords, hero: hero, routine: routine)
         }
+        #endif
+        // No verified provider exists. No legacy phase, DQS or LLM timestamp is used.
+        return TodayPlanPresentation.make(records: records, wakes: wakeRecords, hero: hero,
+            now: now, calendar: .current, routine: routine)
     }
 
-    private func timelineNapColor(state: TimelineItem.VisualState) -> Color {
-        switch state {
-        case .completed:
-            return Color(red: 0.55, green: 0.45, blue: 0.98).opacity(0.42)
-        case .active:
-            return Color.sleepPurpleDeep
-        case .next, .future:
-            return Color(red: 0.55, green: 0.45, blue: 0.98).opacity(0.58)
-        case .unavailable:
-            return Color(.secondaryLabel)
-        }
-    }
     // MARK: - Helpers
 
     private func shortTime(_ date: Date) -> String {
@@ -442,7 +348,7 @@ struct SleepListView: View {
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 12) {
                     #if DEBUG && targetEnvironment(simulator)
-                    if HomeCardTestFixture.enabled || HeroUITestFixture.enabled { Text("TEST FIXTURE — NOT A PREDICTION").font(.caption2).foregroundStyle(.secondary) }
+                    if HomeCardTestFixture.enabled || HeroUITestFixture.enabled || TodayPlanUITestFixture.enabled { Text("TEST FIXTURE — NOT A PREDICTION").font(.caption2).foregroundStyle(.secondary) }
                     #endif
                     headerSection
                     nextNapOrBedtimeCard
@@ -1022,6 +928,13 @@ struct SleepListView: View {
 
     private func sleepHero(at now: Date) -> TodaySleepHeroModel {
         #if DEBUG && targetEnvironment(simulator)
+        if TodayPlanUITestFixture.enabled {
+            return TodaySleepHeroModel.make(records: records, wakeRecords: wakeRecords,
+                now: TodayPlanUITestFixture.now, calendar: .current,
+                routine: TodaySleepHeroModel.Routine.load(defaults: .standard),
+                displayName: displayedParentName, babyName: babyName,
+                proposals: TodayPlanUITestFixture.wakePredictions(records: records))
+        }
         if HeroUITestFixture.enabled { return HeroUITestFixture.model(records: records, wakes: wakeRecords) }
         if HomeCardTestFixture.enabled { return HeroUITestFixture.legacyModel(records: records, wakes: wakeRecords) }
         #endif
@@ -1732,204 +1645,24 @@ struct SleepListView: View {
                 radius: 12, x: 0, y: 4)
     }
     
-    // MARK: - Timeline Card
+    // MARK: - Today's Plan
 
     private var todayTimelineCard: some View {
-        
-        VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Text(isStillInNightSleep ? "Plan for Today" : "Today's Timeline")
-                    .font(.system(size: 20, weight: .bold, design: .rounded))
-                    .foregroundStyle(Color(.label))
-                Spacer()
-                Button {
-                    activeSheet = .dayDetail(SelectedDay(day: Date()))
-                } label: {
-                    HStack(spacing: 5) {
-                        Text("View full timeline")
-                            .font(.system(size: 13, weight: .bold))
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 12, weight: .bold))
-                    }
-                    .foregroundStyle(Color(red: 0.45, green: 0.35, blue: 0.92))
-                }
-                .buttonStyle(.plain)
-            }
-
-            if isStillInNightSleep {
-                HStack(spacing: 7) {
-                    Image(systemName: "sparkles")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(Color(red: 0.55, green: 0.45, blue: 0.98))
-                    Text("The plan adjusts as the day goes on. Predictions refresh after every new record.")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(Color(.secondaryLabel))
-                }
-                .padding(10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Color(red: 0.55, green: 0.45, blue: 0.98).opacity(0.07))
-                )
-            }
-
-            TimelineView(.periodic(from: .now, by: 60)) { context in
-                let items = timelineItems(at: context.date)
-                if items.count > 4 {
-                    // Preserve every recorded event without expanding the existing node design.
-                    ScrollView(.horizontal) { timelineRow(items, scrolling: true) }
-                } else {
-                    timelineRow(items, scrolling: false)
-                }
-            }
-            .padding(.top, 4)
-        }
-        .padding(18)
-        .background(
-            ZStack {
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .fill(Color(.systemBackground))
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                Color(red: 0.55, green: 0.45, blue: 0.98).opacity(0.05),
-                                Color.clear
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .center
-                        )
-                    )
-            }
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .stroke(Color(red: 0.55, green: 0.45, blue: 0.98).opacity(0.12), lineWidth: 1)
-        )
-        .shadow(color: Color(red: 0.45, green: 0.35, blue: 0.92).opacity(0.08),
-                radius: 16, x: 0, y: 6)
-    }
-    private func timelineRow(_ items: [TimelineItem], scrolling: Bool) -> some View {
-        HStack(alignment: .top, spacing: 0) {
-            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                premiumTimelineNode(item)
-                if index < items.count - 1 {
-                    premiumTimelineSegment(
-                        awakeMinutes: items[index + 1].awakeBeforeMinutes,
-                        isDashed: items[index + 1].usesDashedConnector,
-                        fromColor: item.iconColor,
-                        toColor: items[index + 1].iconColor
-                    )
-                    .frame(width: scrolling ? 28 : nil)
-                }
+        TimelineView(.periodic(from: .now, by: 60)) { context in
+            let presentation = planPresentation(at: context.date)
+            TodayPlanCard(presentation: presentation, now: planNow(context.date)) {
+                activeSheet = .dayDetail(SelectedDay(day: presentation.focusedNightSleepDay ?? context.date))
             }
         }
     }
 
-    // MARK: - Premium Timeline Node
-
-    private func premiumTimelineNode(_ item: TimelineItem) -> some View {
-        let isActive = item.visualState == .active
-        let isCompleted = item.visualState == .completed
-        let fillOpacity = isActive ? 0.18 : (isCompleted ? 0.08 : 0.10)
-        let iconOpacity = isActive ? 1.0 : (isCompleted ? 0.48 : 0.62)
-        let textOpacity = isActive ? 1.0 : (isCompleted ? 0.52 : 0.72)
-
-        return VStack(spacing: 6) {
-            ZStack {
-                if isActive {
-                    Circle()
-                        .fill(item.iconColor.opacity(0.16))
-                        .frame(width: 46, height: 46)
-                        .blur(radius: 7)
-                }
-
-                Circle()
-                    .fill(item.iconColor.opacity(fillOpacity))
-                    .frame(width: 34, height: 34)
-
-                if item.visualState == .next || item.visualState == .future {
-                    Circle()
-                        .strokeBorder(
-                            item.iconColor.opacity(0.34),
-                            style: StrokeStyle(lineWidth: 1.5, dash: [3, 3])
-                        )
-                        .frame(width: 34, height: 34)
-                } else {
-                    Circle()
-                        .strokeBorder(item.iconColor.opacity(isActive ? 0.65 : 0.24), lineWidth: isActive ? 1.8 : 1)
-                        .frame(width: 34, height: 34)
-                }
-
-                Image(systemName: item.icon)
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(item.iconColor.opacity(iconOpacity))
-            }
-
-            VStack(spacing: 2) {
-                Text(item.time)
-                    .font(.system(size: 9, weight: .medium))
-                    .foregroundStyle(Color(.tertiaryLabel).opacity(textOpacity))
-                    .monospacedDigit()
-
-                Text(item.title)
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle((isActive ? Color(.label) : Color(.secondaryLabel)).opacity(textOpacity))
-                    .multilineTextAlignment(.center)
-
-                if !item.detail.isEmpty {
-                    Text(item.detail)
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(item.iconColor.opacity(isActive ? 0.9 : iconOpacity))
-                        .multilineTextAlignment(.center)
-                }
-            }
-        }
-        .frame(width: 58)
+    private func planNow(_ actual: Date) -> Date {
+        #if DEBUG && targetEnvironment(simulator)
+        if TodayPlanUITestFixture.enabled { return TodayPlanUITestFixture.now }
+        #endif
+        return actual
     }
 
-    // MARK: - Premium Timeline Segment
-
-    private func premiumTimelineSegment(
-        awakeMinutes: Int?,
-        isDashed:     Bool,
-        fromColor:    Color,
-        toColor:      Color
-    ) -> some View {
-        VStack(spacing: 3) {
-            if isDashed {
-                Rectangle()
-                    .fill(Color.clear)
-                    .frame(height: 1.5)
-                    .overlay(
-                        Rectangle()
-                            .strokeBorder(
-                                Color(red: 0.55, green: 0.45, blue: 0.98).opacity(0.25),
-                                style: StrokeStyle(lineWidth: 1.5, dash: [4, 3])
-                            )
-                    )
-            } else {
-                Rectangle()
-                    .fill(
-                        LinearGradient(
-                            colors: [fromColor.opacity(0.4), toColor.opacity(0.4)],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        )
-                    )
-                    .frame(height: 1.5)
-            }
-
-            if let awakeMinutes, awakeMinutes > 0 {
-                Text(TimeFormat.minutes(awakeMinutes))
-                    .font(.system(size: 8, weight: .semibold))
-                    .foregroundStyle(Color(.tertiaryLabel))
-                    .lineLimit(1)
-            }
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.top, 16)
-    }
     // MARK: - Recent Days
 
     private var groupedByDay: [(day: Date, items: [SleepRecord])] {

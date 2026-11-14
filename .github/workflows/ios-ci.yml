@@ -19,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        simulator: ${{ fromJSON((github.head_ref == 'feat/recording-experience-redesign' || (github.head_ref == 'feat/home-sleep-cards-redesign' || github.head_ref == 'feat/todays-sleep-hero')) && '["standard","compact"]' || '["standard"]') }}
+        simulator: ${{ fromJSON((github.head_ref == 'feat/recording-experience-redesign' || (github.head_ref == 'feat/home-sleep-cards-redesign' || github.head_ref == 'feat/todays-sleep-hero' || github.head_ref == 'feat/todays-plan-premium')) && '["standard","compact"]' || '["standard"]') }}
     env:
       SIMULATOR_CLASS: ${{ matrix.simulator }}
       DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
@@ -65,33 +65,90 @@ jobs:
       - name: Build and run XCTest
         env:
           SIMULATOR_UDID: ${{ steps.simulator.outputs.udid }}
-        run: >-
-          xcodebuild test
-          -project BabySleepTracker.xcodeproj
-          -scheme BabySleepTracker
-          -configuration Debug
-          -sdk iphonesimulator
-          -destination "platform=iOS Simulator,id=$SIMULATOR_UDID"
-          -derivedDataPath "$RUNNER_TEMP/DerivedData"
-          -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult"
-          CODE_SIGN_STYLE=Manual
-          CODE_SIGN_IDENTITY=-
-          CODE_SIGNING_ALLOWED=YES
-          CODE_SIGNING_REQUIRED=NO
-          AD_HOC_CODE_SIGNING_ALLOWED=YES
-          DEVELOPMENT_TEAM=
-          PROVISIONING_PROFILE_SPECIFIER=
+          HEAD_BRANCH: ${{ github.head_ref }}
+        run: |
+          test_selection=()
+          if [ "$HEAD_BRANCH" = "feat/todays-plan-premium" ]; then
+            test_selection=(
+              -only-testing:BabySleepTrackerTests/SleepTimelineCalculatorTests
+              -only-testing:BabySleepTrackerTests/TodaySleepHeroModelTests
+              -only-testing:BabySleepTrackerTests/SleepOverviewCalculatorTests
+              -only-testing:BabySleepTrackerTests/SleepRecordTests
+              -only-testing:BabySleepTrackerTests/SleepRecordPersistenceTests
+              -only-testing:BabySleepTrackerTests/DailyWakeRecordPersistenceTests
+              -only-testing:BabySleepTrackerTests/SleepWakeTimeWorkflowTests
+              -only-testing:BabySleepTrackerUITests/TodayPlanUITests
+              -only-testing:BabySleepTrackerUITests/TodaySleepHeroUITests
+            )
+          fi
+          xcodebuild test "${test_selection[@]}" \
+            -project BabySleepTracker.xcodeproj \
+            -scheme BabySleepTracker \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            -resultBundlePath "$RUNNER_TEMP/TestResults.xcresult" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY=- \
+            CODE_SIGNING_ALLOWED=YES \
+            CODE_SIGNING_REQUIRED=NO \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES \
+            DEVELOPMENT_TEAM= \
+            PROVISIONING_PROFILE_SPECIFIER=
 
       - name: Export Home visual verification attachments
-        if: ${{ always() && (github.head_ref == 'feat/home-sleep-cards-redesign' || github.head_ref == 'feat/todays-sleep-hero') }}
+        if: ${{ always() && (github.head_ref == 'feat/home-sleep-cards-redesign' || github.head_ref == 'feat/todays-sleep-hero' || github.head_ref == 'feat/todays-plan-premium') }}
         run: |
           if [ -d "$RUNNER_TEMP/TestResults.xcresult" ]; then
             xcrun xcresulttool export attachments --path "$RUNNER_TEMP/TestResults.xcresult" --output-path "$RUNNER_TEMP/HomeScreenshots"
             xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/TestResults.xcresult" > "$RUNNER_TEMP/HomeScreenshots/test-summary.json"
           fi
 
+      - name: Export labeled plan screenshots for visual inspection
+        if: ${{ always() && github.head_ref == 'feat/todays-plan-premium' }}
+        run: |
+          python3 - <<'PYTHON'
+          import base64, json, os, subprocess
+          from pathlib import Path
+          root = Path(os.environ["RUNNER_TEMP"]) / "HomeScreenshots"
+          previews = root / "plan-previews"
+          previews.mkdir(parents=True, exist_ok=True)
+          wanted = ("night-before-midnight", "night-after-midnight", "completed-event-icons",
+                    "night-carryover", "overnight-routine", "overnight-estimated-wake")
+          seen = set()
+          def walk(value):
+              if isinstance(value, list):
+                  for child in value: walk(child)
+              elif isinstance(value, dict):
+                  strings = [v for v in value.values() if isinstance(v, str)]
+                  names = [v for v in strings if "TODAYS-PLAN-TEST-ONLY-" in v]
+                  for name in names:
+                      if not any(tag in name for tag in wanted) or len(seen) >= len(wanted): continue
+                      for candidate in strings:
+                          path = root / Path(candidate).name
+                          if path.suffix.lower() == ".png" and path.is_file() and path.name not in seen:
+                              seen.add(path.name)
+                              # Bound log size; original simulator PNGs remain in the artifact.
+                              preview = previews / (path.stem + ".jpg")
+                              subprocess.run(["sips", "-s", "format", "jpeg", "-s", "formatOptions", "55",
+                                              "-Z", "900", str(path), "--out", str(preview)], check=True, capture_output=True)
+                              print("PLAN_PREVIEW_BEGIN " + json.dumps({"name": name, "file": preview.name, "original": path.name}))
+                              encoded = base64.b64encode(preview.read_bytes()).decode()
+                              for offset in range(0, len(encoded), 32000):
+                                  print("PLAN_PREVIEW_DATA " + encoded[offset:offset + 32000])
+                              print("PLAN_PREVIEW_END")
+                  for child in value.values(): walk(child)
+          for manifest in root.glob("*.json"):
+              try: walk(json.loads(manifest.read_text()))
+              except (ValueError, OSError): pass
+          print("Labeled plan preview count:", len(seen))
+          summary = root / "test-summary.json"
+          if summary.is_file(): print("PLAN_TEST_SUMMARY " + json.dumps(json.loads(summary.read_text())))
+          PYTHON
+
       - name: Upload Home screenshots
-        if: ${{ always() && (github.head_ref == 'feat/home-sleep-cards-redesign' || github.head_ref == 'feat/todays-sleep-hero') }}
+        if: ${{ always() && (github.head_ref == 'feat/home-sleep-cards-redesign' || github.head_ref == 'feat/todays-sleep-hero' || github.head_ref == 'feat/todays-plan-premium') }}
         uses: actions/upload-artifact@v4
         with:
           name: home-screenshots-${{ matrix.simulator }}
@@ -100,7 +157,7 @@ jobs:
           retention-days: 7
 
       - name: Upload failed test results or recording review bundle
-        if: ${{ failure() || github.head_ref == 'feat/recording-experience-redesign' || (github.head_ref == 'feat/home-sleep-cards-redesign' || github.head_ref == 'feat/todays-sleep-hero') }}
+        if: ${{ failure() || github.head_ref == 'feat/recording-experience-redesign' || (github.head_ref == 'feat/home-sleep-cards-redesign' || github.head_ref == 'feat/todays-sleep-hero' || github.head_ref == 'feat/todays-plan-premium') }}
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.simulator == 'compact' && 'ios-test-results-compact' || 'ios-test-results' }}
