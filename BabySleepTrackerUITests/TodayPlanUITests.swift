@@ -136,16 +136,18 @@ final class TodayPlanUITests: XCTestCase {
     func testOvernightCarryoverRemainsActiveAndKeepsOriginalDay() {
         let app = launch("carryover")
         let night = event("record:\(parentID)", app: app)
-        XCTAssertTrue(night.label.contains("Sleeping now"), night.label)
+        XCTAssertTrue(night.label.contains("Ongoing"), night.label)
         XCTAssertTrue((night.value as? String ?? "").contains("Previous Sleep Day"))
         XCTAssertTrue(night.label.contains("Yesterday"), night.label)
-        XCTAssertTrue(night.label.contains("7h 10m elapsed"), night.label)
-        XCTAssertTrue(night.label.contains("Sleeping now · 7h 10m elapsed"), "VoiceOver retains the full state despite the shorter visible overnight status.")
+        XCTAssertFalse(night.label.contains("elapsed"), "The duration appears only in the centered capsule.")
         let reference = app.descendants(matching: .any).matching(identifier: "home.plan.wakeReference").firstMatch
-        XCTAssertTrue(reference.label.contains("Morning wake") && reference.label.contains("Unavailable"), reference.label)
-        XCTAssertTrue(app.staticTexts["home.plan.title"].label.contains("Overnight"))
+        XCTAssertTrue(reference.label.contains("Morning wake") && reference.label.contains("Awaiting wake"), reference.label)
+        XCTAssertTrue(reference.label.contains("—"), "No routine must not invent a timestamp.")
         XCTAssertFalse(night.label.contains("Done"), night.label)
+        assertOvernightLayout(app: app, elapsed: "7h 10m")
         capture("night-carryover", app: app)
+        app.buttons["home.plan.details"].tap()
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Sleep Day:")).firstMatch.waitForExistence(timeout: 5))
     }
 
     func testExplicitOfflineReferenceFixtureShowsNextAndFutureAsEstimates() {
@@ -185,15 +187,17 @@ final class TodayPlanUITests: XCTestCase {
         for scenario in ["overnight-routine", "morning-grace"] {
             let app = launch(scenario)
             let night = event("record:\(parentID)", app: app)
-            XCTAssertTrue(night.label.contains("Sleeping now"), night.label)
+            XCTAssertTrue(night.label.contains(scenario == "morning-grace" ? "End unconfirmed" : "Ongoing"), night.label)
             XCTAssertFalse(night.label.contains("Done"), night.label)
             let reference = app.descendants(matching: .any).matching(identifier: "home.plan.wakeReference").firstMatch
-            XCTAssertTrue(reference.label.contains("Usual wake") && reference.label.contains("Routine"), reference.label)
+            XCTAssertTrue(reference.label.contains("Morning wake") && reference.label.contains("Usual ·") && reference.label.contains("Routine"), reference.label)
             XCTAssertFalse(reference.label.contains("Done") || reference.label.contains("Estimated"), reference.label)
             if scenario == "morning-grace" {
+                XCTAssertFalse(night.label.contains("Ongoing") || night.label.contains("Sleeping now"))
                 let hero = app.descendants(matching: .any).matching(identifier: "home.sleep.summary").firstMatch
                 XCTAssertTrue(hero.label.contains("Good morning"), hero.label)
             }
+            assertOvernightLayout(app: app, elapsed: scenario == "morning-grace" ? "12h 45m" : "7h 10m")
             assertCompactCard(app: app)
             capture(scenario, app: app)
             app.terminate()
@@ -203,10 +207,48 @@ final class TodayPlanUITests: XCTestCase {
     func testOvernightEstimatedWakeUsesExplicitVerifiedFixture() {
         let app = launch("overnight-estimate")
         let reference = app.descendants(matching: .any).matching(identifier: "home.plan.wakeReference").firstMatch
-        XCTAssertTrue(reference.label.contains("Estimated wake") && reference.label.contains("Estimated"), reference.label)
+        XCTAssertTrue(reference.label.contains("Morning wake") && reference.label.contains("Estimated"), reference.label)
         XCTAssertFalse(reference.label.contains("Routine") || reference.label.contains("Done"), reference.label)
+        assertOvernightLayout(app: app, elapsed: "7h 10m")
         assertCompactCard(app: app)
         capture("overnight-estimated-wake", app: app)
+    }
+
+    func testOvernightDarkModeAndLargeTypeRetainBothNodesAndSingleElapsedCapsule() {
+        let dark = launch("overnight-routine", dark: true)
+        assertOvernightLayout(app: dark, elapsed: "7h 10m")
+        capture("overnight-dark-mode", app: dark)
+        dark.terminate()
+        let large = launch("overnight-routine", large: true)
+        XCTAssertTrue(large.buttons["home.plan.details"].isHittable)
+        capture("overnight-large-header", app: large)
+        let scroll = large.scrollViews["home.plan.scroll"]
+        XCTAssertTrue(scroll.exists)
+        reveal(scroll, app: large)
+        scroll.swipeLeft()
+        let reference = large.descendants(matching: .any).matching(identifier: "home.plan.wakeReference").firstMatch
+        XCTAssertTrue(reference.label.contains("Routine"))
+        XCTAssertEqual(large.descendants(matching: .any).matching(identifier: "home.plan.overnight.elapsed").count, 1)
+        capture("overnight-large-horizontal", app: large)
+    }
+
+    private func assertOvernightLayout(app: XCUIApplication, elapsed: String) {
+        let night = event("record:\(parentID)", app: app)
+        let wake = app.descendants(matching: .any).matching(identifier: "home.plan.wakeReference").firstMatch
+        let duration = app.descendants(matching: .any).matching(identifier: "home.plan.overnight.elapsed")
+        XCTAssertEqual(duration.count, 1, "Elapsed time is shown once on the overnight card.")
+        let badge = duration.firstMatch
+        XCTAssertTrue(badge.label.contains("Night sleep") && badge.label.contains(elapsed + " elapsed since recorded start"), badge.label)
+        XCTAssertEqual(app.staticTexts["home.plan.title"].label, "Today's Plan")
+        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "home.plan.overnightBadge").firstMatch.exists)
+        XCTAssertFalse(app.scrollViews["home.plan.scroll"].exists, "Both overnight nodes fit the default compact layout.")
+        let window = app.windows.firstMatch.frame
+        XCTAssertGreaterThan(wake.frame.midX - night.frame.midX, window.width * 0.4, "Spread the two nodes across the card.")
+        XCTAssertEqual(night.frame.minY, wake.frame.minY, accuracy: 2, "Both circles share a horizontal axis.")
+        XCTAssertEqual(badge.frame.midX, (night.frame.midX + wake.frame.midX) / 2, accuracy: 3)
+        XCTAssertGreaterThan(badge.frame.minY, night.frame.minY + 28, "Duration sits below the connector.")
+        XCTAssertFalse(night.label.contains("elapsed") || wake.label.contains("elapsed"))
+        assertCompactCard(app: app)
     }
 
     private func assertCompactCard(app: XCUIApplication) {

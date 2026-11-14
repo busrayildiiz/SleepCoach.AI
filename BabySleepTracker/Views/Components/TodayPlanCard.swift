@@ -7,6 +7,29 @@ private struct PlanNodeAnchors: PreferenceKey {
     }
 }
 
+/// Equal intrinsic column widths keep the two circles balanced at the card's ends.
+/// Wider accessibility captions retain their width and use the horizontal fallback.
+private struct OvernightPlanLayout: Layout {
+    let spacing: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let sizes = subviews.map { $0.sizeThatFits(.unspecified) }
+        let column = sizes.map(\.width).max() ?? 0
+        let proposedWidth = proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? 0
+        return CGSize(width: max(proposedWidth, column * 2 + spacing),
+                      height: sizes.map(\.height).max() ?? 0)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let column = subviews.map { $0.sizeThatFits(.unspecified).width }.max() ?? 0
+        for (index, view) in subviews.enumerated() {
+            let x = index == 0 ? bounds.minX + column / 2 : bounds.maxX - column / 2
+            view.place(at: CGPoint(x: x, y: bounds.minY), anchor: .top,
+                       proposal: ProposedViewSize(width: column, height: nil))
+        }
+    }
+}
+
 /// Only the compact top card from the approved design is product UI.
 struct TodayPlanCard: View {
     let presentation: TodayPlanPresentation
@@ -16,20 +39,42 @@ struct TodayPlanCard: View {
     @ScaledMetric(relativeTo: .body) private var minimumNodeWidth: CGFloat = 76
     @ScaledMetric(relativeTo: .body) private var nodeDiameter: CGFloat = 34
     @ScaledMetric(relativeTo: .body) private var connectorGap: CGFloat = 24
+    @ScaledMetric(relativeTo: .body) private var overnightNodeDiameter: CGFloat = 44
+    @ScaledMetric(relativeTo: .body) private var overnightCaptionSpacing: CGFloat = 14
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dynamicTypeSize) private var dynamicType
     private var items: [SleepTimelineItem] { presentation.items }
     private var accent: Color { RecordingColor.accent }
+    private var overnightNight: SleepTimelineItem? {
+        presentation.isOvernight ? items.first { $0.kind == .bedtime && $0.isActive } : nil
+    }
+    private var recordedCount: Int {
+        items.filter {
+            if case .recorded = $0.source { return $0.isActive || $0.visualState == .completed }
+            return false
+        }.count
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 8) { heading; Spacer(minLength: 4); detailsButton }
-                VStack(alignment: .leading, spacing: 4) { heading; detailsButton }
+            if presentation.isOvernight {
+                overnightHeader
+            } else {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) { heading; Spacer(minLength: 4); detailsButton }
+                    VStack(alignment: .leading, spacing: 4) { heading; detailsButton }
+                }
             }
             if items.isEmpty && presentation.morningWake == nil {
                 Text("No sleep recorded yet")
                     .recordingFont(12, weight: .medium).foregroundStyle(RecordingColor.secondary)
+            } else if let night = overnightNight {
+                ViewThatFits(in: .horizontal) {
+                    overnightTimeline(night)
+                    ScrollView(.horizontal) { overnightTimeline(night).fixedSize(horizontal: true, vertical: true) }
+                        .accessibilityElement(children: .contain)
+                        .accessibilityIdentifier("home.plan.scroll")
+                }
             } else {
                 ViewThatFits(in: .horizontal) {
                     timeline.fixedSize(horizontal: true, vertical: false)
@@ -60,17 +105,45 @@ struct TodayPlanCard: View {
         .shadow(color: CoachColor.purpleDeep.opacity(0.08), radius: 12, x: 0, y: 5)
     }
 
-    @ViewBuilder private var heading: some View {
-        if presentation.isOvernight {
-            Text("Today's Plan — Overnight")
-                .recordingFont(18, weight: .bold, rounded: true)
-                .fixedSize(horizontal: false, vertical: true)
-                .accessibilityAddTraits(.isHeader).accessibilityIdentifier("home.plan.title")
-        } else {
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 8) { title; progress }.fixedSize(horizontal: true, vertical: false)
-                VStack(alignment: .leading, spacing: 4) { title; progress }
+    private var overnightHeader: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) { title.fixedSize(); overnightBadge; Spacer(minLength: 4); overnightCount; detailsButton.fixedSize() }
+            HStack(spacing: 8) { title.fixedSize(); overnightBadge; Spacer(minLength: 4); detailsButton.fixedSize() }
+            VStack(alignment: .leading, spacing: 4) {
+                ViewThatFits(in: .horizontal) {
+                    HStack { title.fixedSize(); Spacer(minLength: 4); detailsButton.fixedSize() }
+                    VStack(alignment: .leading, spacing: 4) {
+                        title
+                        detailsButton.frame(maxWidth: .infinity, alignment: .trailing)
+                    }
+                }
+                ViewThatFits(in: .horizontal) {
+                    HStack { overnightBadge; Spacer(minLength: 4); overnightCount }
+                    overnightBadge
+                }
             }
+        }
+    }
+    private var overnightBadge: some View {
+        Label("Overnight", systemImage: "moon.fill")
+            .recordingFont(11, weight: .semibold).foregroundStyle(accent)
+            .padding(.horizontal, 8).padding(.vertical, 4)
+            .background(CoachColor.purple.opacity(0.11), in: Capsule()).fixedSize()
+            .accessibilityIdentifier("home.plan.overnightBadge")
+    }
+    @ViewBuilder private var overnightCount: some View {
+        if recordedCount > 0 {
+            Text("\(recordedCount) recorded").recordingFont(11, weight: .bold).foregroundStyle(accent)
+                .padding(.horizontal, 8).padding(.vertical, 4)
+                .background(CoachColor.purple.opacity(0.11), in: Capsule()).fixedSize()
+                .accessibilityLabel("\(recordedCount) recorded events")
+                .accessibilityIdentifier("home.plan.progress")
+        }
+    }
+    private var heading: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) { title; progress }.fixedSize(horizontal: true, vertical: false)
+            VStack(alignment: .leading, spacing: 4) { title; progress }
         }
     }
     private var title: some View {
@@ -129,15 +202,51 @@ struct TodayPlanCard: View {
             .allowsHitTesting(false).accessibilityHidden(true)
         }
     }
-    private func node(_ item: SleepTimelineItem) -> some View {
+    private func overnightTimeline(_ night: SleepTimelineItem) -> some View {
+        OvernightPlanLayout(spacing: connectorGap) {
+            node(night, overnight: true)
+            if let wake = presentation.morningWake { morningWakeNode(wake) }
+            else if let observed = items.first(where: { $0.kind == .wake }) { node(observed, overnight: true) }
+        }
+        .backgroundPreferenceValue(PlanNodeAnchors.self) { anchors in
+            GeometryReader { proxy in
+                let wakeID = presentation.morningWake?.id ?? items.first(where: { $0.kind == .wake })?.id
+                if let left = anchors[night.id], let wakeID, let right = anchors[wakeID] {
+                    let from = proxy[left]
+                    let to = proxy[right]
+                    connector(from: from, to: to, confirmed: false, gap: nil).accessibilityHidden(true)
+                    if let elapsed = night.elapsedMinutes {
+                        Text(TimeFormat.minutes(elapsed)).recordingFont(11, weight: .bold)
+                            .foregroundStyle(RecordingColor.secondary)
+                            .padding(.horizontal, 8).padding(.vertical, 4)
+                            .background(CoachColor.purple.opacity(0.11), in: Capsule()).fixedSize()
+                            .accessibilityLabel(presentation.overnightEndUnconfirmed ?
+                                "Night sleep, end unconfirmed, \(TimeFormat.minutes(elapsed)) elapsed since recorded start" :
+                                "Night sleep, \(TimeFormat.minutes(elapsed)) elapsed since recorded start")
+                            .accessibilityIdentifier("home.plan.overnight.elapsed")
+                            .position(x: (from.midX + to.midX) / 2, y: from.midY + overnightNodeDiameter / 2)
+                    }
+                }
+            }
+            .allowsHitTesting(false)
+        }
+        .accessibilityElement(children: .contain)
+    }
+    private func node(_ item: SleepTimelineItem, overnight: Bool = false) -> some View {
         VStack(spacing: 3) {
-            symbol(state: item.visualState, icon: icon(item))
+            symbol(state: item.visualState, icon: overnight && item.kind == .wake ? "sunrise.fill" : icon(item), overnight: overnight)
                 .anchorPreference(key: PlanNodeAnchors.self, value: .bounds) { [item.id: $0] }
                 .padding(.vertical, 6)
+                .padding(.bottom, overnight ? overnightCaptionSpacing : 0)
             eventTime(item).recordingFont(12, weight: .semibold)
                 .foregroundStyle(RecordingColor.secondary).monospacedDigit().fixedSize()
-            eventTitle(item).recordingFont(13, weight: .bold).fixedSize()
-            status(item).recordingFont(11, weight: .semibold).fixedSize()
+            Group {
+                if overnight && item.kind == .wake { Text("Morning wake") }
+                else { eventTitle(item) }
+            }.recordingFont(13, weight: .bold).fixedSize()
+            if overnight && item.isActive {
+                overnightPill(presentation.overnightEndUnconfirmed ? "End unconfirmed" : "Ongoing", emphasized: true)
+            } else { status(item).recordingFont(11, weight: .semibold).fixedSize() }
         }
         // Intrinsic text width is intentional: scroll rather than wrap metadata vertically.
         .frame(minWidth: minimumNodeWidth)
@@ -171,7 +280,7 @@ struct TodayPlanCard: View {
         case .plan: return "calendar"
         }
     }
-    private func symbol(state: SleepTimelineItem.VisualState, icon: String) -> some View {
+    private func symbol(state: SleepTimelineItem.VisualState, icon: String, overnight: Bool = false, muted: Bool = false) -> some View {
         let active = state == .active
         let completed = state == .completed
         let next = state == .next
@@ -186,10 +295,11 @@ struct TodayPlanCard: View {
             Circle().strokeBorder(active ? Color.white.opacity(0.7) : CoachColor.purple.opacity(next ? 0.85 : 0.35),
                 style: StrokeStyle(lineWidth: next ? 1.8 : 1.4, dash: state == .future || state == .unavailable ? [4, 3] : []))
             Image(systemName: completed ? "checkmark" : icon)
-                .recordingFont(17, weight: .semibold)
-                .foregroundStyle(active ? Color.white : (completed ? CoachColor.muted : accent))
+                .recordingFont(overnight ? 22 : 17, weight: .semibold)
+                .foregroundStyle(active ? Color.white : (completed || muted ? CoachColor.muted : accent))
         }
-        .frame(width: nodeDiameter, height: nodeDiameter).accessibilityHidden(true)
+        .frame(width: overnight ? overnightNodeDiameter : nodeDiameter,
+               height: overnight ? overnightNodeDiameter : nodeDiameter).accessibilityHidden(true)
     }
     @ViewBuilder private func status(_ item: SleepTimelineItem) -> some View {
         switch item.visualState {
@@ -223,33 +333,38 @@ struct TodayPlanCard: View {
     }
     private func morningWakeNode(_ wake: TodayPlanPresentation.MorningWake) -> some View {
         VStack(spacing: 3) {
-            symbol(state: wake.source == .estimated ? .next : .unavailable, icon: "sun.max.fill")
+            symbol(state: .unavailable, icon: "sunrise.fill", overnight: true, muted: true)
                 .anchorPreference(key: PlanNodeAnchors.self, value: .bounds) { [wake.id: $0] }
                 .padding(.vertical, 6)
+                .padding(.bottom, overnightCaptionSpacing)
             Group {
-                if let time = wake.time { Text(time, format: .dateTime.hour().minute()) }
+                if let time = wake.time {
+                    if wake.source == .routine {
+                        Text("Usual · ") + Text(time, format: .dateTime.hour().minute())
+                    } else { Text(time, format: .dateTime.hour().minute()) }
+                }
                 else { Text("—") }
             }
             .recordingFont(12, weight: .semibold).foregroundStyle(RecordingColor.secondary).fixedSize()
+            Text("Morning wake").recordingFont(13, weight: .bold).fixedSize()
             Group {
                 switch wake.source {
-                case .estimated: Text("Estimated wake")
-                case .routine: Text("Usual wake")
-                case .unavailable: Text("Morning wake")
+                case .estimated: overnightPill("Estimated")
+                case .routine: overnightPill("Routine")
+                case .unavailable: overnightPill("Awaiting wake")
                 }
-            }.recordingFont(13, weight: .bold).fixedSize()
-            Group {
-                switch wake.source {
-                case .estimated: Text("Estimated").foregroundStyle(accent)
-                case .routine: Text("Routine").foregroundStyle(RecordingColor.secondary)
-                case .unavailable: Text("Unavailable").foregroundStyle(RecordingColor.secondary)
-                }
-            }.recordingFont(11, weight: .semibold).fixedSize()
+            }
         }
         .frame(minWidth: minimumNodeWidth).fixedSize(horizontal: true, vertical: true)
         .accessibilityElement(children: .combine)
-        .accessibilityValue(wake.time.map { Text("Unconfirmed planning reference: \($0.formatted(date: .abbreviated, time: .shortened)).") } ?? Text("Morning wake unavailable. No wake has been confirmed."))
+        .accessibilityValue(wake.time.map { Text("Unconfirmed planning reference: \($0.formatted(date: .abbreviated, time: .shortened)).") } ?? Text("No routine or eligible prediction is available. No wake has been confirmed."))
         .accessibilityIdentifier("home.plan.wakeReference")
+    }
+    private func overnightPill(_ label: LocalizedStringKey, emphasized: Bool = false) -> some View {
+        Text(label).recordingFont(11, weight: .semibold)
+            .foregroundStyle(emphasized ? accent : RecordingColor.secondary)
+            .padding(.horizontal, 8).padding(.vertical, 4)
+            .background(CoachColor.purple.opacity(emphasized ? 0.13 : 0.08), in: Capsule()).fixedSize()
     }
     private func connector(from left: CGRect, to right: CGRect, confirmed: Bool, gap: Int?) -> some View {
         ZStack(alignment: .topLeading) {

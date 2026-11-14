@@ -109,9 +109,13 @@ jobs:
         if: ${{ always() && github.head_ref == 'feat/todays-plan-premium' }}
         run: |
           python3 - <<'PYTHON'
-          import base64, json, os
+          import base64, json, os, subprocess
           from pathlib import Path
           root = Path(os.environ["RUNNER_TEMP"]) / "HomeScreenshots"
+          previews = root / "plan-previews"
+          previews.mkdir(parents=True, exist_ok=True)
+          wanted = ("night-carryover", "overnight-routine", "morning-grace",
+                    "overnight-estimated-wake", "overnight-dark-mode", "overnight-large-horizontal")
           seen = set()
           def walk(value):
               if isinstance(value, list):
@@ -120,12 +124,17 @@ jobs:
                   strings = [v for v in value.values() if isinstance(v, str)]
                   names = [v for v in strings if "TODAYS-PLAN-TEST-ONLY-" in v]
                   for name in names:
+                      if not any(tag in name for tag in wanted) or len(seen) >= len(wanted): continue
                       for candidate in strings:
                           path = root / Path(candidate).name
                           if path.suffix.lower() == ".png" and path.is_file() and path.name not in seen:
                               seen.add(path.name)
-                              print("PLAN_PREVIEW_BEGIN " + json.dumps({"name": name, "file": path.name}))
-                              encoded = base64.b64encode(path.read_bytes()).decode()
+                              # Bound log size; original simulator PNGs remain in the artifact.
+                              preview = previews / (path.stem + ".jpg")
+                              subprocess.run(["sips", "-s", "format", "jpeg", "-s", "formatOptions", "55",
+                                              "-Z", "900", str(path), "--out", str(preview)], check=True, capture_output=True)
+                              print("PLAN_PREVIEW_BEGIN " + json.dumps({"name": name, "file": preview.name, "original": path.name}))
+                              encoded = base64.b64encode(preview.read_bytes()).decode()
                               for offset in range(0, len(encoded), 32000):
                                   print("PLAN_PREVIEW_DATA " + encoded[offset:offset + 32000])
                               print("PLAN_PREVIEW_END")
@@ -134,6 +143,8 @@ jobs:
               try: walk(json.loads(manifest.read_text()))
               except (ValueError, OSError): pass
           print("Labeled plan preview count:", len(seen))
+          summary = root / "test-summary.json"
+          if summary.is_file(): print("PLAN_TEST_SUMMARY " + json.dumps(json.loads(summary.read_text())))
           PYTHON
 
       - name: Upload Home screenshots

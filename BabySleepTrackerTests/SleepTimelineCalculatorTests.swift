@@ -429,6 +429,7 @@ final class SleepTimelineCalculatorTests: XCTestCase {
         let record = night()
         let display = homePlan([record], now: overnightNow, routine: .init(wakeHour: 7))
         XCTAssertTrue(display.isOvernight)
+        XCTAssertFalse(display.overnightEndUnconfirmed)
         XCTAssertEqual(display.items.count, 1)
         let event = try XCTUnwrap(display.items.first)
         XCTAssertEqual(event.id, "record:\(record.id.uuidString)")
@@ -490,6 +491,7 @@ final class SleepTimelineCalculatorTests: XCTestCase {
             XCTAssertEqual(hero.mode, .morningUnconfirmed)
             let display = TodayPlanPresentation.make(records: [record], wakes: [], hero: hero,
                 now: now, calendar: calendar, routine: routine)
+            XCTAssertTrue(display.overnightEndUnconfirmed, "The wording follows the Hero's existing morning grace state.")
             XCTAssertEqual(display.items.first?.visualState, .active)
             XCTAssertNil(display.items.first?.observedEnd)
             XCTAssertEqual(display.morningWake?.source, .routine)
@@ -504,6 +506,7 @@ final class SleepTimelineCalculatorTests: XCTestCase {
         let display = homePlan([record], wakes: [wake], now: at(32), routine: .init(wakeHour: 7))
         XCTAssertTrue(display.isOvernight)
         XCTAssertNil(display.morningWake)
+        XCTAssertTrue(display.overnightEndUnconfirmed, "An observed wake does not silently close an unresolved sleep.")
         XCTAssertEqual(display.items.map(\.source), [.recorded(record.id), .recorded(wake.id)])
         XCTAssertEqual(display.items.map(\.visualState), [.active, .completed])
         XCTAssertNil(display.items[0].observedEnd)
@@ -614,5 +617,40 @@ final class SleepTimelineCalculatorTests: XCTestCase {
             XCTAssertEqual(local.component(.hour, from: morning), 7)
             XCTAssertEqual(local.component(.minute, from: morning), 0)
         }
+    }
+
+    func testOvernightWordingDistinguishesMorningGraceFromExplicitStillSleepingConfirmation() {
+        let record = night()
+        let routine = TodaySleepHeroModel.Routine(wakeHour: 7, bedHour: 19)
+        for confirmation in [nil, TodaySleepHeroModel.StillSleepingConfirmation(recordID: record.id, date: at(31.75))] {
+            let hero = TodaySleepHeroModel.make(records: [record], wakeRecords: [], now: at(32),
+                calendar: calendar, routine: routine, displayName: "Parent", babyName: "Baby", confirmation: confirmation)
+            let display = TodayPlanPresentation.make(records: [record], wakes: [], hero: hero,
+                now: at(32), calendar: calendar, routine: routine)
+            XCTAssertEqual(display.overnightEndUnconfirmed, confirmation == nil)
+            XCTAssertEqual(hero.mode, confirmation == nil ? .morningUnconfirmed : .nightActive)
+            XCTAssertEqual(display.items.first?.source, .recorded(record.id))
+            XCTAssertEqual(display.items.first?.elapsedMinutes, 795)
+            XCTAssertNil(display.items.first?.observedEnd)
+            XCTAssertEqual(display.completedEventCount, 0)
+        }
+    }
+
+    func testPersistedProfileWakeComponentsReachOvernightReferenceWithoutFallback() throws {
+        let suite = "TodayPlanRoutineTests.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let record = night()
+        XCTAssertNil(TodaySleepHeroModel.Routine.load(defaults: defaults))
+        // These are the same keys and Double values written by ProfileEditSheet.
+        defaults.set(6.0, forKey: "typicalWakeHour")
+        defaults.set(35.0, forKey: "typicalWakeMinute")
+        let routine = try XCTUnwrap(TodaySleepHeroModel.Routine.load(defaults: defaults))
+        let display = homePlan([record], now: overnightNow, routine: routine)
+        XCTAssertEqual(display.morningWake?.source, .routine)
+        XCTAssertEqual(display.morningWake?.time, at(30).addingTimeInterval(35 * 60))
+        XCTAssertEqual(display.items.count, 1)
+        XCTAssertNil(display.items.first?.observedEnd)
+        XCTAssertEqual(display.completedEventCount, 0)
     }
 }

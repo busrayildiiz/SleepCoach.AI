@@ -14,8 +14,11 @@ struct TodayPlanPresentation {
     let isOvernight: Bool
     let morningWake: MorningWake?
     let predictionsUnavailable: Bool
+    /// Presentation wording follows the existing Hero, never a new wake-time rule.
+    let overnightEndUnconfirmed: Bool
 
-    init(items: [SleepTimelineItem], isOvernight: Bool = false, morningWake: MorningWake? = nil) {
+    init(items: [SleepTimelineItem], isOvernight: Bool = false, morningWake: MorningWake? = nil,
+         overnightEndUnconfirmed: Bool = false) {
         // Unavailable/default predictions are an indicator, never a scheduled node.
         self.items = items.filter { item in
             switch item.source {
@@ -26,6 +29,7 @@ struct TodayPlanPresentation {
         }
         self.isOvernight = isOvernight
         self.morningWake = morningWake
+        self.overnightEndUnconfirmed = overnightEndUnconfirmed
         predictionsUnavailable = !isOvernight && items.contains {
             $0.kind == .plan || $0.source == .defaultValue || $0.source == .guidance ||
                 ($0.source == .estimate && $0.visualState == .unavailable)
@@ -54,9 +58,10 @@ struct TodayPlanPresentation {
         if let context = hero.record, let night = records.first(where: { $0.id == context.id }),
            night.isOngoing, night.kind == .nightSleep, night.date < day,
            let event = projected(night) {
+            let endUnconfirmed = hero.mode == .morningUnconfirmed || hero.mode == .morningConfirmed
             // A separately saved wake never silently closes an unresolved sleep.
             if let confirmedWake, let observed = today.first(where: { $0.source == .recorded(confirmedWake.id) }) {
-                return Self(items: [event, observed], isOvernight: true)
+                return Self(items: [event, observed], isOvernight: true, overnightEndUnconfirmed: endUnconfirmed)
             }
             let predicted = hero.predictions.first {
                 $0.kind == .morningWake && $0.unavailableReason(now: now, record: night, wake: nil) == nil
@@ -76,7 +81,8 @@ struct TodayPlanPresentation {
             } else {
                 reference = .init(id: id, source: .unavailable, time: nil)
             }
-            return Self(items: [event], isOvernight: true, morningWake: reference)
+            return Self(items: [event], isOvernight: true, morningWake: reference,
+                        overnightEndUnconfirmed: endUnconfirmed)
         }
         // The planning horizon may retain the completed overnight context after wake
         // confirmation. Ownership/accounting still belongs to its original start day.
