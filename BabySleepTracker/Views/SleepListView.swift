@@ -1649,8 +1649,9 @@ struct SleepListView: View {
 
     private var todayTimelineCard: some View {
         TimelineView(.periodic(from: .now, by: 60)) { context in
-            TodayPlanCard(presentation: planPresentation(at: context.date), now: planNow(context.date)) {
-                activeSheet = .dayDetail(SelectedDay(day: context.date))
+            let presentation = planPresentation(at: context.date)
+            TodayPlanCard(presentation: presentation, now: planNow(context.date)) {
+                activeSheet = .dayDetail(SelectedDay(day: presentation.focusedNightSleepDay ?? context.date))
             }
         }
     }

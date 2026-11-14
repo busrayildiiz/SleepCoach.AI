@@ -556,6 +556,8 @@ final class SleepTimelineCalculatorTests: XCTestCase {
         XCTAssertEqual(after.items.first?.elapsedMinutes, 45)
         XCTAssertEqual(before.morningWake?.id, after.morningWake?.id)
         XCTAssertEqual(before.morningWake?.time, after.morningWake?.time)
+        XCTAssertEqual(before.focusedNightSleepDay, day)
+        XCTAssertEqual(after.focusedNightSleepDay, day)
     }
 
     func testActiveNapCrossingUsualBedtimeDoesNotBecomeNightOrOvernight() {
@@ -694,6 +696,7 @@ final class SleepTimelineCalculatorTests: XCTestCase {
         XCTAssertEqual(display.morningWake?.source, .routine)
         XCTAssertEqual(display.morningWake?.time, at(31))
         XCTAssertEqual(display.completedEventCount, 0)
+        XCTAssertEqual(display.focusedNightSleepDay, day)
         let fullTimeline = calculate(records: records, wake: wake, now: now)
         XCTAssertTrue(fullTimeline.contains { $0.source == .recorded(nap.id) && $0.visualState == .completed })
         XCTAssertTrue(fullTimeline.contains { $0.source == .recorded(wake.id) && $0.visualState == .completed })
@@ -717,6 +720,7 @@ final class SleepTimelineCalculatorTests: XCTestCase {
                 XCTAssertEqual(display.morningWake?.time, source == 0 ? nil : at(source == 1 ? 31 : 31.25))
                 XCTAssertEqual(display.items.map(\.source), [.recorded(night.id)])
                 XCTAssertEqual(display.items.first?.sleepDay, day)
+                XCTAssertEqual(display.focusedNightSleepDay, day)
                 XCTAssertEqual(display.items.first?.elapsedMinutes, now == before ? 86 : 410)
                 XCTAssertEqual(display.items.first?.isCarryover, now == after)
                 XCTAssertNil(display.items.first?.observedEnd)
@@ -737,6 +741,7 @@ final class SleepTimelineCalculatorTests: XCTestCase {
         XCTAssertFalse(display.isOvernight)
         XCTAssertNil(display.morningWake)
         XCTAssertEqual(display.items.count, 2)
+        XCTAssertNil(display.focusedNightSleepDay, "The daytime plan keeps its existing current-day destination.")
         XCTAssertEqual(display.items.filter { $0.source == .recorded(night.id) }.count, 1)
         XCTAssertEqual(display.items.first { $0.source == .recorded(night.id) }?.sleepDay, day)
         XCTAssertEqual(display.items.first { $0.source == .recorded(night.id) }?.observedEnd, at(31.25))

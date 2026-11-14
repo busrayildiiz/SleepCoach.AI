@@ -129,6 +129,11 @@ struct TodayPlanPresentation {
             return false
         }.count
     }
+    /// The full plan for a focused night retains its original daytime history.
+    var focusedNightSleepDay: Date? {
+        guard isOvernight else { return nil }
+        return items.first { $0.kind == .bedtime && $0.isActive }?.sleepDay
+    }
     func isConfirmedConnector(after index: Int) -> Bool {
         guard items.indices.contains(index), items.indices.contains(index + 1) else { return false }
         let previous = items[index]

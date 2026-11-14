@@ -151,6 +151,7 @@ final class TodayPlanUITests: XCTestCase {
         assertOvernightLayout(app: app, elapsed: "7h 10m")
         app.buttons["home.plan.details"].tap()
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Sleep Day:")).firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["sleep.addBreak.\(parentID)"].waitForExistence(timeout: 5), "The full plan opens the carried night's original Sleep Day.")
     }
 
     func testExplicitOfflineReferenceFixtureShowsNextAndFutureAsEstimates() {
