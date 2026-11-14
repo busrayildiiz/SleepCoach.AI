@@ -11,7 +11,7 @@
 
 The pinned destinations are Xcode 16.4 (16F6), iOS 18.5, iPhone 16 Pro and iPhone SE (3rd generation). Missing or ambiguous devices fail validation. A runner-image change may require an explicit toolchain/device update.
 
-Full validation has no test filters and keeps the shared scheme's coverage settings and existing signing overrides. App/test source, scheme membership and screenshot scenarios are unchanged. Only Swift package downloads/checkouts are cached, keyed by OS, architecture, toolchain and committed Package.resolved hash. There is no DerivedData cache or build artifact reuse. Artifact bundles contain build/package logs, xcresult, JSON summary and exported screenshots for UI tiers, retained for 30 days. Missing result bundles, zero passing tests, failed exports and missing UI screenshots fail the job. Failures still attempt artifact upload; force cancellation can prevent complete export/upload.
+Full validation has no test filters and keeps the shared scheme's coverage settings and existing signing overrides. App/test source, scheme membership and screenshot scenarios are unchanged. Only Swift package downloads/checkouts are cached, keyed by OS, architecture, toolchain and committed Package.resolved hash. There is no DerivedData cache or build artifact reuse. Each job explicitly boots its selected destination and runs test execution serially (`-parallel-testing-enabled NO`) to avoid extra simulator clones and competing app hosts; both device jobs remain independent. The job budget is 45 minutes, with a 35-minute build/test timeout and a bounded result-export step. Artifact bundles contain build/package logs, xcresult, JSON summary and exported screenshots for UI tiers, retained for 30 days. Missing result bundles, zero passing tests, failed exports and missing UI screenshots fail the job. Failures still attempt artifact upload; force cancellation can prevent complete export/upload.
 
 ## Required GitHub configuration
 
@@ -47,3 +47,9 @@ The new workflow writes package-resolution and combined build/test step duration
 ## Local verification
 
 Run `actionlint` and `python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v` before changing routing or gates. Tests cover feature routing, unknown/shared changes, invalid diff fallback and the fail-closed gate across success/failure/cancelled/skipped/missing outcomes. XCTest/XCUITest requires macOS/Xcode and must be validated by the PR run.
+
+## First rollout failure and correction
+
+Run 43532365270 exposed two issues: compact failed the existing Still Sleeping end-editor assertion after a center tap on a SwiftUI switch row at accessibility XXXL; standard passed all 15 UI tests but reached the 30-minute job limit after a long simulator startup delay. The compact log also reported a cloned unit-test app host launch failure (NSMachErrorDomain -308). Results and screenshot artifacts were successfully exported for both jobs, and all merge gates correctly remained non-successful.
+
+The correction explicitly boots the destination, serializes test execution to avoid cloned test hosts, and separates the build/test budget from artifact cleanup. It does not retry failed tests or remove coverage. The recording test now taps the trailing switch control, asserts its initial and final values, waits for the end-editor visibility transition, and retains every existing persistence/navigation assertion and screenshot scenario. Build/test timing summaries now include failed command exit codes too. These changes require confirmation from the next macOS run; Linux checks cannot establish simulator success.

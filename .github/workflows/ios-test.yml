@@ -19,7 +19,7 @@ permissions:
 jobs:
   test:
     runs-on: macos-15
-    timeout-minutes: 30
+    timeout-minutes: 45
     env:
       DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
       TIER: ${{ inputs.tier }}
@@ -52,6 +52,15 @@ jobs:
               f.write('udid=' + matches[0]['udid'] + '\n')
           print(model, runtime, matches[0]['udid'])
           PY
+      - name: Boot selected simulator
+        timeout-minutes: 5
+        env:
+          SIMULATOR_UDID: ${{ steps.simulator.outputs.udid }}
+        run: |
+          set -o pipefail
+          # bootstatus boots a shutdown destination and waits until it is usable.
+          xcrun simctl bootstatus "$SIMULATOR_UDID" -b \
+            2>&1 | tee "$RUNNER_TEMP/CIArtifacts/simulator-boot.log"
       - name: Cache pinned Swift packages
         uses: actions/cache@v4
         with:
@@ -71,6 +80,7 @@ jobs:
           echo "Package resolution: $((SECONDS-started)) seconds" >> "$GITHUB_STEP_SUMMARY"
           git diff --exit-code -- BabySleepTracker.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
       - name: Build and test selected coverage
+        timeout-minutes: 35
         env:
           SIMULATOR_UDID: ${{ steps.simulator.outputs.udid }}
         run: |
@@ -98,8 +108,10 @@ jobs:
             *) echo 'Unknown tier'; exit 1 ;;
           esac
           started=$SECONDS
+          set +e
           xcodebuild test -project BabySleepTracker.xcodeproj -scheme BabySleepTracker \
             -configuration Debug -sdk iphonesimulator \
+            -parallel-testing-enabled NO \
             -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
             -clonedSourcePackagesDirPath "$RUNNER_TEMP/SourcePackages" \
@@ -111,8 +123,12 @@ jobs:
             CODE_SIGNING_REQUIRED=NO AD_HOC_CODE_SIGNING_ALLOWED=YES \
             DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER= \
             2>&1 | tee "$RUNNER_TEMP/CIArtifacts/xcodebuild.log"
-          echo "$TIER / $SIMULATOR_CLASS build and test: $((SECONDS-started)) seconds" >> "$GITHUB_STEP_SUMMARY"
+          test_status=${PIPESTATUS[0]}
+          set -e
+          echo "$TIER / $SIMULATOR_CLASS build and test: $((SECONDS-started)) seconds (exit $test_status)" >> "$GITHUB_STEP_SUMMARY"
+          exit "$test_status"
       - name: Export results and screenshots
+        timeout-minutes: 5
         if: always()
         run: |
           bundle="$RUNNER_TEMP/CIArtifacts/TestResults.xcresult"
