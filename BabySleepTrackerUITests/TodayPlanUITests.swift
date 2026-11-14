@@ -250,10 +250,10 @@ final class TodayPlanUITests: XCTestCase {
         XCTAssertEqual(badge.frame.midX, (night.frame.midX + wake.frame.midX) / 2, accuracy: 3)
         XCTAssertGreaterThan(badge.frame.minY, night.frame.minY + 28, "Duration sits below the connector.")
         XCTAssertFalse(night.label.contains("elapsed") || wake.label.contains("elapsed"))
-        assertCompactCard(app: app)
+        assertCompactCard(app: app, maximumHeight: 220)
     }
 
-    private func assertCompactCard(app: XCUIApplication) {
+    private func assertCompactCard(app: XCUIApplication, maximumHeight: CGFloat = 250) {
         let title = app.staticTexts["home.plan.title"]
         let nodes = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "home.plan.event."))
         var bottom = title.frame.maxY
@@ -264,7 +264,7 @@ final class TodayPlanUITests: XCTestCase {
         let reference = app.descendants(matching: .any).matching(identifier: "home.plan.wakeReference").firstMatch
         if reference.exists { bottom = max(bottom, reference.frame.maxY) }
         let height = bottom - title.frame.minY + 28
-        XCTAssertLessThanOrEqual(height, 250, "Default-size card must stay compact; actual content height: \(height)")
+        XCTAssertLessThanOrEqual(height, maximumHeight, "Default-size card must stay compact; actual content height: \(height)")
     }
 
     private func assertUnavailableIsDetailOnly(app: XCUIApplication) {

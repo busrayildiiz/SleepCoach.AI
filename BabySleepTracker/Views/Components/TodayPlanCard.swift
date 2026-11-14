@@ -41,10 +41,14 @@ struct TodayPlanCard: View {
     @ScaledMetric(relativeTo: .body) private var connectorGap: CGFloat = 24
     @ScaledMetric(relativeTo: .body) private var overnightNodeDiameter: CGFloat = 44
     @ScaledMetric(relativeTo: .body) private var overnightCaptionSpacing: CGFloat = 14
+    @ScaledMetric(relativeTo: .body) private var compactOvernightCaptionSpacing: CGFloat = 4
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dynamicTypeSize) private var dynamicType
     private var items: [SleepTimelineItem] { presentation.items }
     private var accent: Color { RecordingColor.accent }
+    private var overnightCaptionPadding: CGFloat {
+        dynamicType.isAccessibilitySize ? overnightCaptionSpacing : compactOvernightCaptionSpacing
+    }
     private var overnightNight: SleepTimelineItem? {
         presentation.isOvernight ? items.first { $0.kind == .bedtime && $0.isActive } : nil
     }
@@ -109,6 +113,9 @@ struct TodayPlanCard: View {
         ViewThatFits(in: .horizontal) {
             HStack(spacing: 8) { title.fixedSize(); overnightBadge; Spacer(minLength: 4); overnightCount; detailsButton.fixedSize() }
             HStack(spacing: 8) { title.fixedSize(); overnightBadge; Spacer(minLength: 4); detailsButton.fixedSize() }
+            HStack(spacing: 4) {
+                compactOvernightTitle; overnightBadge; Spacer(minLength: 0); detailsButton.fixedSize()
+            }
             VStack(alignment: .leading, spacing: 4) {
                 ViewThatFits(in: .horizontal) {
                     HStack { title.fixedSize(); Spacer(minLength: 4); detailsButton.fixedSize() }
@@ -130,6 +137,10 @@ struct TodayPlanCard: View {
             .padding(.horizontal, 8).padding(.vertical, 4)
             .background(CoachColor.purple.opacity(0.11), in: Capsule()).fixedSize()
             .accessibilityIdentifier("home.plan.overnightBadge")
+    }
+    private var compactOvernightTitle: some View {
+        Text("Today's Plan").recordingFont(18, weight: .bold, rounded: true).fixedSize()
+            .accessibilityAddTraits(.isHeader).accessibilityIdentifier("home.plan.title")
     }
     @ViewBuilder private var overnightCount: some View {
         if recordedCount > 0 {
@@ -237,7 +248,7 @@ struct TodayPlanCard: View {
             symbol(state: item.visualState, icon: overnight && item.kind == .wake ? "sunrise.fill" : icon(item), overnight: overnight)
                 .anchorPreference(key: PlanNodeAnchors.self, value: .bounds) { [item.id: $0] }
                 .padding(.vertical, 6)
-                .padding(.bottom, overnight ? overnightCaptionSpacing : 0)
+                .padding(.bottom, overnight ? overnightCaptionPadding : 0)
             eventTime(item).recordingFont(12, weight: .semibold)
                 .foregroundStyle(RecordingColor.secondary).monospacedDigit().fixedSize()
             Group {
@@ -336,7 +347,7 @@ struct TodayPlanCard: View {
             symbol(state: .unavailable, icon: "sunrise.fill", overnight: true, muted: true)
                 .anchorPreference(key: PlanNodeAnchors.self, value: .bounds) { [wake.id: $0] }
                 .padding(.vertical, 6)
-                .padding(.bottom, overnightCaptionSpacing)
+                .padding(.bottom, overnightCaptionPadding)
             Group {
                 if let time = wake.time {
                     if wake.source == .routine {
