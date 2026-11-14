@@ -36,6 +36,16 @@ struct TodayPlanPresentation {
         }
     }
 
+    /// Event identity is independent of completion; state is conveyed separately.
+    static func eventSymbol(for item: SleepTimelineItem) -> String {
+        switch item.kind {
+        case .wake: return "sunrise.fill"
+        case .nap: return "moon.fill"
+        case .bedtime: return "moon.zzz.fill"
+        case .plan: return "calendar"
+        }
+    }
+
     /// The Hero supplies the current confirmed context, including its morning transition.
     /// Historical projection reuses SleepTimelineCalculator to retain IDs and Sleep Days.
     static func make(records: [SleepRecord], wakes: [DailyWakeRecord], hero: TodaySleepHeroModel,
@@ -56,11 +66,13 @@ struct TodayPlanPresentation {
             return result
         }
         if let context = hero.record, let night = records.first(where: { $0.id == context.id }),
-           night.isOngoing, night.kind == .nightSleep, night.date < day,
-           let event = projected(night) {
+           night.isOngoing, night.kind == .nightSleep,
+           let event = projected(night), event.isActive {
             let endUnconfirmed = hero.mode == .morningUnconfirmed || hero.mode == .morningConfirmed
-            // A separately saved wake never silently closes an unresolved sleep.
-            if let confirmedWake, let observed = today.first(where: { $0.source == .recorded(confirmedWake.id) }) {
+            // A daytime wake before this night belongs to history, not its morning.
+            // A separately saved later wake never silently closes an unresolved sleep.
+            if let confirmedWake, confirmedWake.wakeTime > night.date,
+               let observed = today.first(where: { $0.source == .recorded(confirmedWake.id) }) {
                 return Self(items: [event, observed], isOvernight: true, overnightEndUnconfirmed: endUnconfirmed)
             }
             let predicted = hero.predictions.first {

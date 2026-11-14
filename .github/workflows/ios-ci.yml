@@ -114,8 +114,8 @@ jobs:
           root = Path(os.environ["RUNNER_TEMP"]) / "HomeScreenshots"
           previews = root / "plan-previews"
           previews.mkdir(parents=True, exist_ok=True)
-          wanted = ("night-carryover", "overnight-routine", "morning-grace",
-                    "overnight-estimated-wake", "overnight-dark-mode", "overnight-large-horizontal")
+          wanted = ("night-before-midnight", "night-after-midnight", "completed-event-icons",
+                    "night-carryover", "overnight-routine", "overnight-estimated-wake")
           seen = set()
           def walk(value):
               if isinstance(value, list):

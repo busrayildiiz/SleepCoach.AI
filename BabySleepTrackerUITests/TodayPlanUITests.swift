@@ -3,6 +3,9 @@ import XCTest
 @MainActor
 final class TodayPlanUITests: XCTestCase {
     private let parentID = "33333333-3333-3333-3333-333333333333"
+    private let historicalNapID = "44444444-4444-4444-4444-444444444444"
+    private let completedNightID = "55555555-5555-5555-5555-555555555555"
+    private let wakeID = "66666666-6666-6666-6666-666666666666"
 
     private func launch(_ scenario: String, dark: Bool = false, large: Bool = false) -> XCUIApplication {
         continueAfterFailure = false
@@ -230,6 +233,49 @@ final class TodayPlanUITests: XCTestCase {
         XCTAssertTrue(reference.label.contains("Routine"))
         XCTAssertEqual(large.descendants(matching: .any).matching(identifier: "home.plan.overnight.elapsed").count, 1)
         capture("overnight-large-horizontal", app: large)
+    }
+
+    func testNightStartsFocusedBeforeMidnightAndKeepsDayHistoryAccessible() {
+        let app = launch("night-before-midnight")
+        capture("night-before-midnight", app: app)
+        let night = event("record:\(parentID)", app: app)
+        XCTAssertTrue(night.label.contains("Today ·") && night.label.contains("Ongoing"), night.label)
+        XCTAssertFalse(night.label.contains("Yesterday") || night.label.contains("Done"), night.label)
+        XCTAssertFalse(event("record:\(historicalNapID)", app: app).exists)
+        XCTAssertFalse(event("record:\(wakeID)", app: app).exists)
+        let nodes = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "home.plan.event."))
+        XCTAssertEqual(nodes.count, 1, "Only the active night is an observed event in the focused Home horizon.")
+        let reference = app.descendants(matching: .any).matching(identifier: "home.plan.wakeReference").firstMatch
+        XCTAssertTrue(reference.label.contains("Routine") && reference.label.contains("Morning wake"))
+        XCTAssertFalse(reference.label.contains("Done"))
+        assertOvernightLayout(app: app, elapsed: "1h 26m")
+        app.buttons["home.plan.details"].tap()
+        XCTAssertTrue(app.buttons["sleep.addBreak.\(historicalNapID)"].waitForExistence(timeout: 5), "The recorded daytime nap stays in the full plan.")
+    }
+
+    func testSameNightRemainsFocusedAfterMidnightWithYesterdayCaption() {
+        let app = launch("night-after-midnight")
+        capture("night-after-midnight", app: app)
+        let night = event("record:\(parentID)", app: app)
+        XCTAssertTrue(night.label.contains("Yesterday ·") && night.label.contains("Ongoing"), night.label)
+        XCTAssertFalse(night.label.contains("Today ·") || night.label.contains("Done"), night.label)
+        XCTAssertTrue((night.value as? String ?? "").contains("Previous Sleep Day"))
+        assertOvernightLayout(app: app, elapsed: "6h 50m")
+    }
+
+    func testCompletedDayEventsKeepTheirEventTypesAndDoneState() {
+        let app = launch("completed-event-icons")
+        capture("completed-event-icons", app: app)
+        for (id, title) in [(completedNightID, "Night sleep"), (wakeID, "Wake up"), (parentID, "Nap 1")] {
+            let node = event("record:\(id)", app: app)
+            XCTAssertTrue(node.label.contains(title) && node.label.contains("Done"), node.label)
+            XCTAssertFalse(node.label.contains("Sleeping now") || node.label.contains("Ongoing"), node.label)
+        }
+        XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "home.plan.overnightBadge").firstMatch.exists)
+        XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "home.plan.wakeReference").firstMatch.exists)
+        let progress = app.descendants(matching: .any).matching(identifier: "home.plan.progress").firstMatch
+        XCTAssertEqual(progress.label, "3 recorded events")
+        assertUnavailableIsDetailOnly(app: app)
     }
 
     private func assertOvernightLayout(app: XCUIApplication, elapsed: String) {

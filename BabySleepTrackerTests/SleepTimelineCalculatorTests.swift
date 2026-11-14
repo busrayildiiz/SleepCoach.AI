@@ -544,16 +544,18 @@ final class SleepTimelineCalculatorTests: XCTestCase {
         XCTAssertTrue(display.isConfirmedConnector(after: 0))
     }
 
-    func testMidnightChangesHorizonWithoutChangingRecordIdentityOrOwningDay() throws {
+    func testMidnightKeepsFocusedNightHorizonWithoutChangingIdentityOrOwningDay() throws {
         let record = SleepRecord(date: at(23.5), duration: 0, kind: .nightSleep, isOngoing: true, createdAt: at(23.5))
         let before = homePlan([record], now: at(23.75), routine: .init(wakeHour: 7))
         let after = homePlan([record], now: at(24.25), routine: .init(wakeHour: 7))
-        XCTAssertFalse(before.isOvernight)
+        XCTAssertTrue(before.isOvernight)
         XCTAssertTrue(after.isOvernight)
         XCTAssertEqual(before.items.first?.id, after.items.first?.id)
         XCTAssertEqual(after.items.first?.sleepDay, day)
         XCTAssertEqual(after.items.first?.time, record.date)
         XCTAssertEqual(after.items.first?.elapsedMinutes, 45)
+        XCTAssertEqual(before.morningWake?.id, after.morningWake?.id)
+        XCTAssertEqual(before.morningWake?.time, after.morningWake?.time)
     }
 
     func testActiveNapCrossingUsualBedtimeDoesNotBecomeNightOrOvernight() {
@@ -652,5 +654,92 @@ final class SleepTimelineCalculatorTests: XCTestCase {
         XCTAssertEqual(display.items.count, 1)
         XCTAssertNil(display.items.first?.observedEnd)
         XCTAssertEqual(display.completedEventCount, 0)
+    }
+
+    func testCompletedEventSymbolsRetainTypeAndAgreeWithActiveSymbols() throws {
+        let nap = SleepRecord(date: at(9), duration: 60)
+        let night = SleepRecord(date: at(2), duration: 315, kind: .nightSleep, endDate: at(7.25))
+        let wake = DailyWakeRecord(day: day, wakeTime: at(7.25))
+        let events = calculate(records: [night, nap], wake: wake)
+        let recorded = events.filter { $0.visualState == .completed }
+        XCTAssertEqual(recorded.count, 3)
+        XCTAssertEqual(TodayPlanPresentation.eventSymbol(for: try item(night, in: events)), "moon.zzz.fill")
+        XCTAssertEqual(TodayPlanPresentation.eventSymbol(for: try item(nap, in: events)), "moon.fill")
+        let wakeEvent = try XCTUnwrap(recorded.first { $0.kind == .wake })
+        XCTAssertEqual(TodayPlanPresentation.eventSymbol(for: wakeEvent), "sunrise.fill")
+        XCTAssertFalse(recorded.contains { TodayPlanPresentation.eventSymbol(for: $0) == "checkmark" })
+        for (kind, expected) in [(SleepKind.dayNap, "moon.fill"), (.nightSleep, "moon.zzz.fill")] {
+            let active = SleepRecord(date: at(11), duration: 0, kind: kind, isOngoing: true)
+            let event = try item(active, in: calculate(records: [active]))
+            XCTAssertEqual(event.visualState, .active)
+            XCTAssertEqual(TodayPlanPresentation.eventSymbol(for: event), expected)
+        }
+    }
+
+    func testEveningNightFocusExcludesEarlierWakeAndNapWithoutRemovingHistory() throws {
+        let start = at(19).addingTimeInterval(5 * 60)
+        let now = at(20).addingTimeInterval(31 * 60)
+        let night = SleepRecord(date: start, duration: 0, kind: .nightSleep, isOngoing: true, createdAt: start)
+        let nap = SleepRecord(date: at(9), duration: 60)
+        let wake = DailyWakeRecord(day: day, wakeTime: at(7.25))
+        let records = [nap, night]
+        let display = homePlan(records, wakes: [wake], now: now, routine: .init(wakeHour: 7, bedHour: 19))
+        XCTAssertTrue(display.isOvernight)
+        XCTAssertFalse(display.overnightEndUnconfirmed)
+        XCTAssertEqual(display.items.map(\.source), [.recorded(night.id)])
+        XCTAssertEqual(display.items.first?.elapsedMinutes, 86)
+        XCTAssertEqual(display.items.first?.sleepDay, day)
+        XCTAssertFalse(display.items.first?.isCarryover ?? true)
+        XCTAssertNil(display.items.first?.observedEnd)
+        XCTAssertEqual(display.morningWake?.source, .routine)
+        XCTAssertEqual(display.morningWake?.time, at(31))
+        XCTAssertEqual(display.completedEventCount, 0)
+        let fullTimeline = calculate(records: records, wake: wake, now: now)
+        XCTAssertTrue(fullTimeline.contains { $0.source == .recorded(nap.id) && $0.visualState == .completed })
+        XCTAssertTrue(fullTimeline.contains { $0.source == .recorded(wake.id) && $0.visualState == .completed })
+        XCTAssertEqual(fullTimeline.filter { if case .recorded = $0.source { return true }; return false }.count, 3)
+        XCTAssertTrue(night.isOngoing)
+    }
+
+    func testNightMorningReferencePriorityStaysAnchoredAcrossMidnight() {
+        let start = at(19).addingTimeInterval(5 * 60)
+        let night = SleepRecord(date: start, duration: 0, kind: .nightSleep, isOngoing: true, createdAt: start)
+        let before = at(20).addingTimeInterval(31 * 60)
+        let after = at(25).addingTimeInterval(55 * 60)
+        for now in [before, after] {
+            for source in 0...2 {
+                let routine: TodaySleepHeroModel.Routine? = source == 0 ? nil : .init(wakeHour: 7)
+                let predictions = source == 2 ? [wakePrediction(night, now: now)] : []
+                let display = homePlan([night], now: now, routine: routine, predictions: predictions)
+                let expected: TodayPlanPresentation.MorningWake.Source = source == 0 ? .unavailable : (source == 1 ? .routine : .estimated)
+                XCTAssertTrue(display.isOvernight)
+                XCTAssertEqual(display.morningWake?.source, expected)
+                XCTAssertEqual(display.morningWake?.time, source == 0 ? nil : at(source == 1 ? 31 : 31.25))
+                XCTAssertEqual(display.items.map(\.source), [.recorded(night.id)])
+                XCTAssertEqual(display.items.first?.sleepDay, day)
+                XCTAssertEqual(display.items.first?.elapsedMinutes, now == before ? 86 : 410)
+                XCTAssertEqual(display.items.first?.isCarryover, now == after)
+                XCTAssertNil(display.items.first?.observedEnd)
+                XCTAssertEqual(display.completedEventCount, 0)
+                XCTAssertFalse(display.isConfirmedConnector(after: 0))
+            }
+        }
+    }
+
+    func testEveningNightReturnsToDayPlanOnlyWithObservedCompletionAndWake() {
+        let start = at(19).addingTimeInterval(5 * 60)
+        let night = SleepRecord(date: start, duration: 0, kind: .nightSleep, isOngoing: true, createdAt: start)
+        XCTAssertTrue(homePlan([night], now: at(20.5), routine: .init(wakeHour: 7)).isOvernight)
+        let closed = SleepRecord(id: night.id, date: start, duration: 730, kind: .nightSleep,
+            createdAt: start, endDate: at(31.25))
+        let wake = DailyWakeRecord(day: at(24), wakeTime: at(31.25))
+        let display = homePlan([closed], wakes: [wake], now: at(32), routine: .init(wakeHour: 7))
+        XCTAssertFalse(display.isOvernight)
+        XCTAssertNil(display.morningWake)
+        XCTAssertEqual(display.items.count, 2)
+        XCTAssertEqual(display.items.filter { $0.source == .recorded(night.id) }.count, 1)
+        XCTAssertEqual(display.items.first { $0.source == .recorded(night.id) }?.sleepDay, day)
+        XCTAssertEqual(display.items.first { $0.source == .recorded(night.id) }?.observedEnd, at(31.25))
+        XCTAssertEqual(display.completedEventCount, 2)
     }
 }

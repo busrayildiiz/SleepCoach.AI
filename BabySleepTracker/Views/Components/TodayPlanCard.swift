@@ -245,7 +245,7 @@ struct TodayPlanCard: View {
     }
     private func node(_ item: SleepTimelineItem, overnight: Bool = false) -> some View {
         VStack(spacing: 3) {
-            symbol(state: item.visualState, icon: overnight && item.kind == .wake ? "sunrise.fill" : icon(item), overnight: overnight)
+            symbol(state: item.visualState, icon: TodayPlanPresentation.eventSymbol(for: item), overnight: overnight)
                 .anchorPreference(key: PlanNodeAnchors.self, value: .bounds) { [item.id: $0] }
                 .padding(.vertical, 6)
                 .padding(.bottom, overnight ? overnightCaptionPadding : 0)
@@ -269,6 +269,8 @@ struct TodayPlanCard: View {
     private func eventTime(_ item: SleepTimelineItem) -> Text {
         guard let time = item.time else { return Text("—") }
         let short = time.formatted(.dateTime.hour().minute())
+        if !dynamicType.isAccessibilitySize, presentation.isOvernight, item.kind == .bedtime,
+           calendar.isDate(time, inSameDayAs: now) { return Text("Today · \(short)") }
         if !dynamicType.isAccessibilitySize, let yesterday = calendar.date(byAdding: .day, value: -1, to: now),
            calendar.isDate(time, inSameDayAs: yesterday) { return Text("Yesterday · \(short)") }
         return Text(time, format: .dateTime.hour().minute())
@@ -281,14 +283,6 @@ struct TodayPlanCard: View {
             if case .recorded = item.source { return Text("Night sleep") }
             return Text("Bedtime")
         case .plan: return Text("Plan")
-        }
-    }
-    private func icon(_ item: SleepTimelineItem) -> String {
-        switch item.kind {
-        case .wake: return "sun.max.fill"
-        case .nap: return "moon.fill"
-        case .bedtime: return "moon.zzz.fill"
-        case .plan: return "calendar"
         }
     }
     private func symbol(state: SleepTimelineItem.VisualState, icon: String, overnight: Bool = false, muted: Bool = false) -> some View {
@@ -305,7 +299,7 @@ struct TodayPlanCard: View {
                 AnyShapeStyle(CoachColor.purple.opacity(completed ? 0.09 : 0.025)))
             Circle().strokeBorder(active ? Color.white.opacity(0.7) : CoachColor.purple.opacity(next ? 0.85 : 0.35),
                 style: StrokeStyle(lineWidth: next ? 1.8 : 1.4, dash: state == .future || state == .unavailable ? [4, 3] : []))
-            Image(systemName: completed ? "checkmark" : icon)
+            Image(systemName: icon)
                 .recordingFont(overnight ? 22 : 17, weight: .semibold)
                 .foregroundStyle(active ? Color.white : (completed || muted ? CoachColor.muted : accent))
         }
@@ -399,12 +393,26 @@ enum TodayPlanUITestFixture {
     static var enabled: Bool { ProcessInfo.processInfo.environment["TODAY_PLAN_UI_TESTS"] == "1" }
     static var scenario: String { ProcessInfo.processInfo.environment["TODAY_PLAN_SCENARIO"] ?? "empty" }
     static var now: Date {
+        if scenario == "night-before-midnight" {
+            return Calendar.current.date(bySettingHour: 20, minute: 31, second: 0, of: eveningSessionStart)!
+        }
+        if scenario == "night-after-midnight" {
+            let morning = Calendar.current.date(byAdding: .day, value: 1, to: eveningSessionStart)!
+            return Calendar.current.date(bySettingHour: 1, minute: 55, second: 0, of: morning)!
+        }
         let hour = scenario == "morning-grace" ? 7 :
             (["carryover", "overnight-routine", "overnight-estimate"].contains(scenario) ? 1 : 12)
         let minute = scenario == "morning-grace" ? 30 : (hour == 1 ? 55 : 7)
         return Calendar.current.date(bySettingHour: hour, minute: minute, second: 0, of: Date())!
     }
     static let parentID = UUID(uuidString: "33333333-3333-3333-3333-333333333333")!
+    static let historicalNapID = UUID(uuidString: "44444444-4444-4444-4444-444444444444")!
+    static let completedNightID = UUID(uuidString: "55555555-5555-5555-5555-555555555555")!
+    static let wakeID = UUID(uuidString: "66666666-6666-6666-6666-666666666666")!
+    /// Both screenshots use the same persisted ID/start, with clocks on either side of midnight.
+    private static var eveningSessionStart: Date {
+        Calendar.current.date(bySettingHour: 19, minute: 5, second: 0, of: Date())!
+    }
     static func at(_ hour: Int, _ minute: Int = 0) -> Date {
         Calendar.current.date(bySettingHour: hour, minute: minute, second: 0, of: now)!
     }
@@ -418,13 +426,17 @@ enum TodayPlanUITestFixture {
         defaults.set(ProcessInfo.processInfo.environment["TODAY_PLAN_DARK"] == "1" ? "dark" : "light", forKey: "appAppearance")
         var records: [SleepRecord] = []
         var wakes: [DailyWakeRecord] = []
-        if ["completed", "active", "reference", "many"].contains(scenario) {
-            wakes = [DailyWakeRecord(day: Calendar.current.startOfDay(for: now), wakeTime: at(7, 15))]
+        if ["completed", "completed-event-icons", "active", "reference", "many"].contains(scenario) {
+            wakes = [DailyWakeRecord(id: wakeID, day: Calendar.current.startOfDay(for: now), wakeTime: at(7, 15))]
         }
         switch scenario {
-        case "completed":
+        case "completed", "completed-event-icons":
             let nap = SleepRecord(id: parentID, date: at(9), duration: 60, createdAt: at(9))
             records = [nap, SleepRecord(date: at(9, 15), duration: 10, kind: .break, parentNapID: parentID)]
+            if scenario == "completed-event-icons" {
+                records.append(SleepRecord(id: completedNightID, date: at(2), duration: 315,
+                    kind: .nightSleep, createdAt: at(2), endDate: at(7, 15)))
+            }
         case "active", "reference":
             records = [SleepRecord(id: parentID, date: at(11, 41), duration: 0, isOngoing: true, createdAt: at(11, 41))]
         case "many":
@@ -434,9 +446,16 @@ enum TodayPlanUITestFixture {
             let yesterday = Calendar.current.date(byAdding: .day, value: -1, to: now)!
             let start = Calendar.current.date(bySettingHour: 18, minute: 45, second: 0, of: yesterday)!
             records = [SleepRecord(id: parentID, date: start, duration: 0, kind: .nightSleep, isOngoing: true, createdAt: start)]
+        case "night-before-midnight", "night-after-midnight":
+            let base = eveningSessionStart
+            let wake = Calendar.current.date(bySettingHour: 7, minute: 15, second: 0, of: base)!
+            let nap = Calendar.current.date(bySettingHour: 9, minute: 0, second: 0, of: base)!
+            wakes = [DailyWakeRecord(id: wakeID, day: Calendar.current.startOfDay(for: base), wakeTime: wake)]
+            records = [SleepRecord(id: historicalNapID, date: nap, duration: 60, createdAt: nap),
+                       SleepRecord(id: parentID, date: base, duration: 0, kind: .nightSleep, isOngoing: true, createdAt: base)]
         default: break
         }
-        if ["overnight-routine", "overnight-estimate", "morning-grace"].contains(scenario) {
+        if ["overnight-routine", "overnight-estimate", "morning-grace", "night-before-midnight", "night-after-midnight"].contains(scenario) {
             defaults.set(7.0, forKey: "typicalWakeHour")
             defaults.set(0.0, forKey: "typicalWakeMinute")
             defaults.set(19.0, forKey: "typicalBedHour")
