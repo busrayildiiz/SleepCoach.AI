@@ -29,6 +29,16 @@ Before merging this CI PR, an administrator must:
 
 GitHub can accept skipped required jobs, so the compatibility gates and merge-validation explicitly fail when required work did not succeed. Do not replace them with a conditional job that skips on drafts.
 
+## CodeQL setup transition
+
+`.github/workflows/codeql.yml` is the advanced setup: Swift uses a traced manual Xcode build, and Actions and Python use build mode `none`. All three use `security-extended` (the default security queries plus additional queries), without path exclusions. Analysis runs on main pushes, PRs to main, merge groups, manual dispatch and weekly on Monday at 04:23 UTC. Scheduled runs start after this workflow reaches the default branch.
+
+GitHub rejects advanced SARIF processing while repository-level CodeQL default setup is enabled. This is a repository setting; changing workflow YAML alone cannot resolve it. An administrator must inspect the current default setup's languages/query suite, preserve any additional coverage, then switch the repository to advanced setup in Settings → Code security → CodeQL analysis. Keep the advanced workflow and every required check enabled. Do not disable uploads, ignore analysis errors, remove required checks, or treat a generated SARIF file as successful processing.
+
+Re-run the complete CodeQL workflow after the setting transition, including the cancelled Swift job, and verify successful server-side processing for `/language:swift`, `/language:actions` and `/language:python` on the current PR revision. Verify iOS CI's full validation on both simulators and all merge gates independently. Before merging, account for any interval before the advanced workflow reaches main; after merging, verify its main-push analysis and weekly schedule. PR #25 is not to be merged automatically.
+
+During this repair, the CLI default-setup/protection endpoints returned Forbidden and the available GitHub connector did not expose setup/protection settings. The browser could not navigate because its runtime returned “Browser Use could not read requirements”. The repository setting transition therefore remains unverified until an administrator completes it and real CodeQL runs process successfully.
+
 ## Release validation
 
 A tag push validates the tagged commit, but does not itself prevent publishing. This repository currently has no release deployment job to attach a dependency to. Before publishing/distributing, manually dispatch iOS CI on the exact release candidate ref and require successful full validation of that SHA. Any future release publication workflow must depend on full validation of the same SHA. Protect release tags/rules and publishing permissions to enforce that process; do not interpret a post-tag run as an enforced pre-publication gate.
