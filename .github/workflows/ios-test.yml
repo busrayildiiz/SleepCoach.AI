@@ -1,0 +1,166 @@
+name: iOS test runner
+
+on:
+  workflow_call:
+    inputs:
+      tier:
+        required: true
+        type: string
+      simulator:
+        required: true
+        type: string
+      suites:
+        default: '[]'
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+      TIER: ${{ inputs.tier }}
+      SIMULATOR_CLASS: ${{ inputs.simulator }}
+      SUITES: ${{ inputs.suites }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Select pinned toolchain and simulator
+        id: simulator
+        run: |
+          mkdir -p "$RUNNER_TEMP/CIArtifacts"
+          xcodebuild -version | tee "$RUNNER_TEMP/CIArtifacts/toolchain.log"
+          xcrun simctl list devices available --json > "$RUNNER_TEMP/CIArtifacts/devices.json"
+          python3 - <<'PY'
+          import json, os
+          runtime = 'com.apple.CoreSimulator.SimRuntime.iOS-18-5'
+          models = {'standard': 'iPhone 16 Pro', 'compact': 'iPhone SE (3rd generation)'}
+          model = models[os.environ['SIMULATOR_CLASS']]
+          with open(os.environ['RUNNER_TEMP'] + '/CIArtifacts/devices.json') as f:
+              devices = json.load(f)['devices'].get(runtime, [])
+          matches = [d for d in devices if d.get('isAvailable') and d['name'] == model]
+          if len(matches) != 1:
+              raise SystemExit(f'Required unique {model} on {runtime}; found {len(matches)}')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write('udid=' + matches[0]['udid'] + '\n')
+          print(model, runtime, matches[0]['udid'])
+          PY
+      - name: Boot selected simulator
+        timeout-minutes: 5
+        env:
+          SIMULATOR_UDID: ${{ steps.simulator.outputs.udid }}
+        run: |
+          set -o pipefail
+          # bootstatus boots a shutdown destination and waits until it is usable.
+          xcrun simctl bootstatus "$SIMULATOR_UDID" -b \
+            2>&1 | tee "$RUNNER_TEMP/CIArtifacts/simulator-boot.log"
+      - name: Cache pinned Swift packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/SourcePackages
+          key: spm-${{ runner.os }}-${{ runner.arch }}-xcode-16.4-16F6-${{ hashFiles('BabySleepTracker.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+      - name: Resolve pinned packages
+        run: |
+          set -o pipefail
+          test -s BabySleepTracker.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
+          started=$SECONDS
+          xcodebuild -resolvePackageDependencies \
+            -project BabySleepTracker.xcodeproj -scheme BabySleepTracker \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            -clonedSourcePackagesDirPath "$RUNNER_TEMP/SourcePackages" \
+            -onlyUsePackageVersionsFromResolvedFile \
+            2>&1 | tee "$RUNNER_TEMP/CIArtifacts/packages.log"
+          echo "Package resolution: $((SECONDS-started)) seconds" >> "$GITHUB_STEP_SUMMARY"
+          git diff --exit-code -- BabySleepTracker.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
+      - name: Build and test selected coverage
+        timeout-minutes: 35
+        env:
+          SIMULATOR_UDID: ${{ steps.simulator.outputs.udid }}
+        run: |
+          set -o pipefail
+          selection=()
+          coverage=NO
+          case "$TIER" in
+            fast) selection=(-only-testing:BabySleepTrackerTests) ;;
+            focused)
+              python3 - <<'PY' > "$RUNNER_TEMP/ui-selection.txt"
+          import json, os
+          suites = json.loads(os.environ['SUITES'])
+          allowed = {'ALL', 'HomeDashboardCardUITests', 'TodaySleepHeroUITests', 'RecordingNavigationTests'}
+          if not isinstance(suites, list) or not suites or any(s not in allowed for s in suites):
+              raise SystemExit('Invalid or empty focused selection; refusing a no-test success')
+          if 'ALL' in suites:
+              print('-only-testing:BabySleepTrackerUITests')
+          else:
+              for suite in suites:
+                  print('-only-testing:BabySleepTrackerUITests/' + suite)
+          PY
+              while IFS= read -r item; do selection+=("$item"); done < "$RUNNER_TEMP/ui-selection.txt"
+              ;;
+            full) coverage=YES ;;
+            *) echo 'Unknown tier'; exit 1 ;;
+          esac
+          started=$SECONDS
+          set +e
+          xcodebuild test -project BabySleepTracker.xcodeproj -scheme BabySleepTracker \
+            -configuration Debug -sdk iphonesimulator \
+            -parallel-testing-enabled NO \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            -clonedSourcePackagesDirPath "$RUNNER_TEMP/SourcePackages" \
+            -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile \
+            -enableCodeCoverage "$coverage" \
+            -resultBundlePath "$RUNNER_TEMP/CIArtifacts/TestResults.xcresult" \
+            "${selection[@]}" \
+            CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- CODE_SIGNING_ALLOWED=YES \
+            CODE_SIGNING_REQUIRED=NO AD_HOC_CODE_SIGNING_ALLOWED=YES \
+            DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER= \
+            2>&1 | tee "$RUNNER_TEMP/CIArtifacts/xcodebuild.log"
+          test_status=${PIPESTATUS[0]}
+          set -e
+          echo "$TIER / $SIMULATOR_CLASS build and test: $((SECONDS-started)) seconds (exit $test_status)" >> "$GITHUB_STEP_SUMMARY"
+          exit "$test_status"
+      - name: Export results and screenshots
+        timeout-minutes: 5
+        if: always()
+        run: |
+          bundle="$RUNNER_TEMP/CIArtifacts/TestResults.xcresult"
+          if [[ ! -d "$bundle" ]]; then
+            echo 'No result bundle was produced; inspect setup/build logs.'
+            exit 1
+          fi
+          xcrun xcresulttool get test-results summary --path "$bundle" \
+            > "$RUNNER_TEMP/CIArtifacts/test-summary.json"
+          python3 - <<'PY'
+          import json, os
+          with open(os.environ['RUNNER_TEMP'] + '/CIArtifacts/test-summary.json') as f:
+              summary = json.load(f)
+          if summary.get('passedTests', 0) < 1:
+              raise SystemExit('No passing tests recorded; refusing empty validation')
+          PY
+          if [[ "$TIER" != fast ]]; then
+            xcrun xcresulttool export attachments --path "$bundle" \
+              --output-path "$RUNNER_TEMP/CIArtifacts/Screenshots"
+            test -n "$(find "$RUNNER_TEMP/CIArtifacts/Screenshots" -type f -name '*.png' -print -quit)"
+          fi
+      - name: Upload test evidence
+        if: always()
+        id: artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-${{ inputs.tier }}-${{ inputs.simulator }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/CIArtifacts
+          if-no-files-found: error
+          retention-days: 30
+      - name: Link evidence
+        if: always()
+        env:
+          ARTIFACT_URL: ${{ steps.artifacts.outputs.artifact-url }}
+        run: echo "[$TIER / $SIMULATOR_CLASS test evidence]($ARTIFACT_URL)" >> "$GITHUB_STEP_SUMMARY"
