@@ -82,10 +82,11 @@ struct TodayPlanPresentation {
             let id = "morning-wake:\(night.id.uuidString)"
             if let predicted {
                 reference = .init(id: id, source: .estimated, time: predicted)
-            } else if let routine, (0...23).contains(routine.wakeHour), (0...59).contains(routine.wakeMinute),
+            } else if let routine, let wakeHour = routine.wakeHour,
+                      (0...23).contains(wakeHour), (0...59).contains(routine.wakeMinute),
                       let morning = calendar.date(byAdding: .day, value: 1,
                           to: calendar.startOfDay(for: night.date)),
-                      let time = calendar.date(bySettingHour: routine.wakeHour, minute: routine.wakeMinute,
+                      let time = calendar.date(bySettingHour: wakeHour, minute: routine.wakeMinute,
                           second: 0, of: morning) {
                 // Anchor to this night, not "the next time after now". A missed routine
                 // wake remains an unconfirmed past reference after the grace boundary.
