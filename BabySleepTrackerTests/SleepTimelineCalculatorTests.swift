@@ -455,6 +455,22 @@ final class SleepTimelineCalculatorTests: XCTestCase {
         XCTAssertFalse(display.items.contains { $0.kind == .wake || $0.kind == .plan })
     }
 
+    func testOvernightBedtimeOnlyRoutineHasNoInventedMorningTimestamp() throws {
+        let record = night()
+        let routine = TodaySleepHeroModel.Routine(wakeHour: nil, bedHour: 19)
+        for now in [overnightNow, at(32)] {
+            let display = homePlan([record], now: now, routine: routine)
+            XCTAssertTrue(display.isOvernight)
+            let morning = try XCTUnwrap(display.morningWake)
+            XCTAssertEqual(morning.source, .unavailable)
+            XCTAssertNil(morning.time)
+            XCTAssertEqual(display.items.map(\.source), [.recorded(record.id)])
+            XCTAssertNil(display.items.first?.observedEnd)
+            XCTAssertEqual(display.availableEventCount, 1)
+            XCTAssertEqual(display.completedEventCount, 0)
+        }
+    }
+
     func testVerifiedWakePredictionTakesPriorityOverRoutine() {
         let record = night()
         let display = homePlan([record], now: overnightNow, routine: .init(wakeHour: 7),
