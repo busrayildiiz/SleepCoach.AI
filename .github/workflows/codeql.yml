@@ -1,0 +1,81 @@
+name: CodeQL
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  merge_group:
+    types: [checks_requested]
+  workflow_dispatch:
+  schedule:
+    - cron: '23 4 * * 1'
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  swift:
+    runs-on: macos-15
+    timeout-minutes: 40
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: swift
+          build-mode: manual
+          queries: security-extended
+      - name: Resolve Swift packages
+        run: |
+          xcodebuild -resolvePackageDependencies \
+            -project BabySleepTracker.xcodeproj -scheme BabySleepTracker \
+            -derivedDataPath "$RUNNER_TEMP/CodeQLDerivedData"
+      - name: Build app for Swift analysis
+        run: |
+          xcodebuild build \
+            -project BabySleepTracker.xcodeproj -scheme BabySleepTracker \
+            -configuration Debug -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/CodeQLDerivedData" \
+            -disableAutomaticPackageResolution \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:swift
+
+  actions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: actions
+          build-mode: none
+          queries: security-extended
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:actions
+
+  python:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: python
+          build-mode: none
+          queries: security-extended
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:python
