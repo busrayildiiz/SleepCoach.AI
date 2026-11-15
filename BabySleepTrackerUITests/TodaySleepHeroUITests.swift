@@ -90,7 +90,7 @@ final class TodaySleepHeroUITests: XCTestCase {
         let plan = app.buttons["hero.plan"]
         reveal(plan, app: app)
         plan.tap()
-        let timeline = app.buttons["View full timeline"]
+        let timeline = app.buttons["home.plan.details"]
         XCTAssertTrue(timeline.waitForExistence(timeout: 5))
         let reached = XCTNSPredicateExpectation(predicate: NSPredicate(format: "hittable == true"), object: timeline)
         XCTAssertEqual(XCTWaiter.wait(for: [reached], timeout: 5), .completed)
