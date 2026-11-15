@@ -144,22 +144,40 @@ final class RecordingNavigationTests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Add Nap"].exists)
     }
 
+    private func setOngoing(_ enabled: Bool, in app: XCUIApplication) {
+        let toggle = app.switches["recording.ongoing"]
+        reveal(toggle, in: app)
+        XCTAssertEqual(toggle.value as? String, enabled ? "0" : "1",
+                       "The test must exercise a real Still Sleeping transition.")
+        // SwiftUI exposes the label and switch as one wide accessibility frame.
+        // Tap the trailing switch thumb rather than the row center at AX XXXL.
+        toggle.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 0.5))
+            .withOffset(CGVector(dx: -20, dy: 0)).tap()
+        let changed = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", enabled ? "1" : "0"), object: toggle
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [changed], timeout: 5), .completed,
+                       "Still Sleeping did not reach the requested value.")
+        let endUpdated = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == %@", NSNumber(value: !enabled)),
+            object: app.buttons["recording.end.edit"]
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [endUpdated], timeout: 5), .completed,
+                       "The end-time editor did not reflect Still Sleeping.")
+    }
+
     func testOngoingNightHidesEndAndRemainsOngoingAfterSave() {
         let app = launch(accessibilitySize: true)
         app.buttons["recording.addSleep"].tap()
         app.buttons["recording.kind.night"].tap()
         XCTAssertTrue(app.navigationBars["Add Night Sleep"].waitForExistence(timeout: 5))
-        let ongoing = app.switches["recording.ongoing"]
-        reveal(ongoing, in: app)
-        ongoing.tap()
+        setOngoing(true, in: app)
         XCTAssertFalse(app.buttons["recording.end.edit"].exists)
         XCTAssertTrue(app.descendants(matching: .any)["recording.ongoingNotice"].firstMatch.exists)
         capture("recording-night-accessibility-ongoing", app: app)
-        reveal(ongoing, in: app)
-        ongoing.tap()
+        setOngoing(false, in: app)
         XCTAssertTrue(app.buttons["recording.end.edit"].exists)
-        reveal(ongoing, in: app)
-        ongoing.tap()
+        setOngoing(true, in: app)
         let save = app.buttons["recording.save"]
         reveal(save, in: app)
         XCTAssertTrue(save.isEnabled)

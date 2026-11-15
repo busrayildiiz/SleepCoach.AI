@@ -393,4 +393,29 @@ final class TodaySleepHeroModelTests: XCTestCase {
         XCTAssertNil(DailyWakeRecordPersistence(defaults: defaults).load())
         XCTAssertEqual(model(try XCTUnwrap(persistence.load()), now: 21, routine: routine).mode, .bedtimeRoutine)
     }
+    func testBedtimeSavePersistsActualStartAcrossMidnightAndMorning() throws {
+        let name = "BedtimeActualStart.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let persistence = SleepRecordPersistence(defaults: defaults)
+        let routine = TodaySleepHeroModel.Routine(wakeHour: 7, bedHour: 19)
+        XCTAssertEqual(model(now: 24.5, routine: routine).mode, .bedtimeRoutine)
+        var draft = SleepRecordingDraft(defaultDate: at(24.5), now: at(24.5))
+        draft.start = at(23.75)
+        draft.isOngoing = true
+        var submission = RecordingSubmission()
+        var dismissed = false
+        submission.submit(draft.record(kind: .nightSleep, now: at(24.5)),
+                          save: { persistence.save([$0]) }, dismiss: { dismissed = true })
+        XCTAssertTrue(dismissed)
+        let records = try XCTUnwrap(persistence.load())
+        let saved = try XCTUnwrap(records.first)
+        XCTAssertEqual(saved.date, at(23.75))
+        XCTAssertNil(saved.observedEnd)
+        XCTAssertEqual(model(records, now: 25, routine: routine).mode, .nightActive)
+        XCTAssertEqual(model(records, now: 25, routine: routine).sleepDay, day)
+        XCTAssertEqual(model(records, now: 31.5, routine: routine).mode, .morningUnconfirmed)
+        XCTAssertEqual(try XCTUnwrap(persistence.load()).first?.date, at(23.75))
+    }
+
 }

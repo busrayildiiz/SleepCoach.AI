@@ -169,8 +169,13 @@ final class TodaySleepHeroUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Add Night Sleep"].waitForExistence(timeout: 5))
         let ongoing = app.switches["recording.ongoing"]
         reveal(ongoing, app: app)
-        ongoing.tap()
-        XCTAssertFalse(app.buttons["recording.end.edit"].exists)
+        XCTAssertEqual(ongoing.value as? String, "0")
+        ongoing.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 0.5))
+            .withOffset(CGVector(dx: -20, dy: 0)).tap()
+        let toggled = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "1"), object: ongoing)
+        XCTAssertEqual(XCTWaiter.wait(for: [toggled], timeout: 5), .completed)
+        let hidden = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: app.buttons["recording.end.edit"])
+        XCTAssertEqual(XCTWaiter.wait(for: [hidden], timeout: 5), .completed)
         let save = app.buttons["recording.save"]
         reveal(save, app: app)
         XCTAssertTrue(save.isEnabled)
