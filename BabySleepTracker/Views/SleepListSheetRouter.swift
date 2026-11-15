@@ -21,6 +21,10 @@ struct SleepListSheetRouter: View {
                 onSave: onRecordUpsert
             )
 
+        case .addNightSleep(let date):
+            AddRecordView(defaultDate: date, vm: AddRecordViewModel(), initialKind: .nightSleep,
+                          onSave: onRecordUpsert)
+
         case .endSleep(let parentID):
             if let parent = records.first(where: { $0.id == parentID && $0.kind != .break && $0.isOngoing }) {
                 AddRecordView(defaultDate: parent.date, editingRecord: parent,

@@ -19,6 +19,9 @@ final class SleepRecordingFlowTests: XCTestCase {
     @MainActor
     func testOnlyRecordingRoutesUseFullScreenPresentation() {
         XCTAssertTrue(SleepListView.ActiveSheet.addSleep(editing: nil, defaultDate: start).isRecording)
+        XCTAssertTrue(SleepListView.ActiveSheet.addNightSleep(defaultDate: start).isRecording)
+        XCTAssertNotEqual(SleepListView.ActiveSheet.addNightSleep(defaultDate: start).id,
+                          SleepListView.ActiveSheet.addSleep(editing: nil, defaultDate: start).id)
         XCTAssertTrue(SleepListView.ActiveSheet.addBreak(parentID: parent.id).isRecording)
         XCTAssertFalse(SleepListView.ActiveSheet.dayDetail(.init(day: start)).isRecording)
         XCTAssertFalse(SleepListView.ActiveSheet.wakeTime.isRecording)
