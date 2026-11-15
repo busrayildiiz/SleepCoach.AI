@@ -183,10 +183,6 @@ struct TodaySleepHeroModel {
                 return record.date >= window.start || end >= window.bedtime
             }
         } ?? false
-        let showsBedtime = bedtime.map { window in
-            active == nil && !morning && !nightAlreadyRecorded &&
-                observedWake.map { $0 >= window.bedtime } != true
-        } ?? false
         let recentConfirmation = active.map { record in
             guard let transition else { return true }
             if record.date >= transition || (record.createdAt >= transition && record.createdAt <= now) { return true }
@@ -201,9 +197,18 @@ struct TodaySleepHeroModel {
                calendar.isDate(confirmation.date, inSameDayAs: now) { dates.append(confirmation.date) }
             return dates.max()!
         }
+        // A later observed wake supersedes an old open record for presentation.
+        // Use the same confirmation rule for active precedence and routine eligibility.
+        let confirmedActive = active.flatMap { record in
+            observedWake.map { $0 > (explicitSleepObservation ?? record.date) } == true ? nil : record
+        }
+        let showsBedtime = bedtime.map { window in
+            confirmedActive == nil && !morning && !nightAlreadyRecorded &&
+                observedWake.map { $0 >= window.bedtime } != true
+        } ?? false
         let mode: Mode
         let context: SleepRecord?
-        if let active, observedWake.map({ $0 > (explicitSleepObservation ?? active.date) }) != true {
+        if let active = confirmedActive {
             context = active
             mode = active.kind == .dayNap ? .napActive :
                 (morning && !recentConfirmation ? .morningUnconfirmed : .nightActive)

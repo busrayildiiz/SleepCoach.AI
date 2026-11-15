@@ -418,4 +418,19 @@ final class TodaySleepHeroModelTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(persistence.load()).first?.date, at(23.75))
     }
 
+    func testMorningWakeSupersedesOldOpenRecordForNextBedtime() {
+        let routine = TodaySleepHeroModel.Routine(wakeHour: 7, bedHour: 19)
+        for kind in [SleepKind.dayNap, .nightSleep] {
+            let old = sleep(-4, minutes: 0, kind: kind, ongoing: true)
+            let result = model([old, sleep(16)], wakes: [wake(7)], now: 20, routine: routine)
+            XCTAssertEqual(result.mode, .bedtimeRoutine)
+            XCTAssertNil(result.record)
+            XCTAssertNil(result.sleepDay)
+            // A new explicit observation still takes priority over the routine cue.
+            let confirmation = TodaySleepHeroModel.StillSleepingConfirmation(recordID: old.id, date: at(19.5))
+            XCTAssertEqual(model([old], wakes: [wake(7)], now: 20, routine: routine,
+                                 confirmation: confirmation).mode, kind == .dayNap ? .napActive : .nightActive)
+        }
+    }
+
 }
