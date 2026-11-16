@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		B10000000000000000000006 /* LearningEligibilityEvaluatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000005 /* LearningEligibilityEvaluatorTests.swift */; };
+		B10000000000000000000004 /* LearningEligibilityEvaluator.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000003 /* LearningEligibilityEvaluator.swift */; };
+		B10000000000000000000002 /* LearningEligibility.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000001 /* LearningEligibility.swift */; };
 		AF3000000000000000000002 /* TodayPlanUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF3000000000000000000001; };
 		AF2000000000000000000002 /* TodayPlanCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF2000000000000000000001; };
 		AF1000000000000000000002 /* TodayPlanPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF1000000000000000000001; };
@@ -121,6 +124,9 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		B10000000000000000000005 /* LearningEligibilityEvaluatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LearningEligibilityEvaluatorTests.swift; sourceTree = "<group>"; };
+		B10000000000000000000003 /* LearningEligibilityEvaluator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LearningEligibilityEvaluator.swift; sourceTree = "<group>"; };
+		B10000000000000000000001 /* LearningEligibility.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LearningEligibility.swift; sourceTree = "<group>"; };
 		AF3000000000000000000001 /* TodayPlanUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodayPlanUITests.swift; sourceTree = "<group>"; };
 		AF2000000000000000000001 /* TodayPlanCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components/TodayPlanCard.swift; sourceTree = "<group>"; };
 		AF1000000000000000000001 /* TodayPlanPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodayPlanPresentation.swift; sourceTree = "<group>"; };
@@ -249,6 +255,7 @@
 		FA5488D12FAEB964002BC18B /* BabySleepTrackerTests */ = {
 			isa = PBXGroup;
 			children = (
+				B10000000000000000000005 /* LearningEligibilityEvaluatorTests.swift */,
 				AD2000000000000000000005 /* RecordingIntervalPresentationTests.swift */,
 				AC1000000000000000000005 /* SleepRecordingFlowTests.swift */,
                 AC2000000000000000000001,
@@ -388,6 +395,7 @@
 		FAEF105E2F4E269E00E76FD4 /* Models */ = {
 			isa = PBXGroup;
 			children = (
+				B10000000000000000000001 /* LearningEligibility.swift */,
 				AF1000000000000000000001 /* TodayPlanPresentation.swift */,
 				FA75A60C2FE60671008CA09C /* DailyWakeRecord.swift */,
 				FAEF106B2F4FA0C800E76FD4 /* SegmentKind.swift */,
@@ -439,6 +447,7 @@
 		FAEF10612F4E26CE00E76FD4 /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				B10000000000000000000003 /* LearningEligibilityEvaluator.swift */,
 				AC1000000000000000000001 /* SleepRecordingFlow.swift */,
 				FA2947243046678A00BE2E20 /* SleepWakeTimeWorkflow.swift */,
 				FAEF10732F530D3100E76FD4 /* SleepTimelineCalculator.swift */,
@@ -587,6 +596,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B10000000000000000000006 /* LearningEligibilityEvaluatorTests.swift in Sources */,
 				AD2000000000000000000006 /* RecordingIntervalPresentationTests.swift in Sources */,
 				AC1000000000000000000006 /* SleepRecordingFlowTests.swift in Sources */,
                 AC2000000000000000000002,
@@ -626,6 +636,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B10000000000000000000004 /* LearningEligibilityEvaluator.swift in Sources */,
+				B10000000000000000000002 /* LearningEligibility.swift in Sources */,
 				AF1000000000000000000002 /* TodayPlanPresentation.swift in Sources */,
 				AF2000000000000000000002 /* TodayPlanCard.swift in Sources */,
 				AD2000000000000000000004 /* RecordingIntervalRing.swift in Sources */,
