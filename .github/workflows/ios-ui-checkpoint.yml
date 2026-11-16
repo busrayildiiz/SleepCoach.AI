@@ -1,0 +1,98 @@
+name: iOS UI checkpoint
+run-name: UI checkpoint PR #${{ inputs.pr_number }} @ ${{ inputs.head_sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Open draft PR number (same repository)
+        required: true
+        type: string
+      head_sha:
+        description: Exact 40-character current PR head SHA; select its head branch above
+        required: true
+        type: string
+      devices:
+        description: Simulator coverage for this checkpoint
+        type: choice
+        default: standard
+        options: [standard, both]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: ui-checkpoint-${{ inputs.pr_number }}
+  cancel-in-progress: true
+
+jobs:
+  validate-request:
+    runs-on: ubuntu-latest
+    outputs:
+      head: ${{ steps.request.outputs.head }}
+      suites: ${{ steps.select.outputs.suites }}
+      devices: ${{ steps.select.outputs.devices }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: request
+        uses: actions/github-script@v7
+        env:
+          PR_NUMBER: ${{ inputs.pr_number }}
+          EXPECTED_SHA: ${{ inputs.head_sha }}
+        with:
+          script: await require('./.github/scripts/check-ui-request.js').run({github, context, core})
+      - id: select
+        env:
+          BASE_SHA: ${{ steps.request.outputs.base }}
+          HEAD_SHA: ${{ steps.request.outputs.head }}
+          DEVICES: ${{ inputs.devices }}
+        run: |
+          suites=$(python3 .github/scripts/classify-ios.py "$BASE_SHA" "$HEAD_SHA")
+          python3 .github/scripts/ui-selection.py "$suites"
+          echo "suites=$suites" >> "$GITHUB_OUTPUT"
+          case "$DEVICES" in
+            standard) echo 'devices=["standard"]' >> "$GITHUB_OUTPUT" ;;
+            both) echo 'devices=["standard","compact"]' >> "$GITHUB_OUTPUT" ;;
+            *) echo 'Invalid device selection'; exit 1 ;;
+          esac
+          echo "Requested UI suites: $suites; devices: $DEVICES; SHA: $HEAD_SHA" >> "$GITHUB_STEP_SUMMARY"
+
+  focused-ui:
+    needs: validate-request
+    strategy:
+      fail-fast: false
+      matrix:
+        simulator: ${{ fromJSON(needs.validate-request.outputs.devices) }}
+    uses: ./.github/workflows/ios-test.yml
+    with:
+      tier: focused
+      simulator: ${{ matrix.simulator }}
+      suites: ${{ needs.validate-request.outputs.suites }}
+      checkout_sha: ${{ needs.validate-request.outputs.head }}
+
+  checkpoint-result:
+    if: always()
+    needs: [validate-request, focused-ui]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Revalidate current PR head and draft state
+        uses: actions/github-script@v7
+        env:
+          PR_NUMBER: ${{ inputs.pr_number }}
+          EXPECTED_SHA: ${{ inputs.head_sha }}
+        with:
+          script: await require('./.github/scripts/check-ui-request.js').run({github, context, core})
+      - name: Require successful checkpoint work
+        env:
+          REQUEST_RESULT: ${{ needs.validate-request.result }}
+          TEST_RESULT: ${{ needs.focused-ui.result }}
+        run: |
+          test "$REQUEST_RESULT" = success
+          test "$TEST_RESULT" = success

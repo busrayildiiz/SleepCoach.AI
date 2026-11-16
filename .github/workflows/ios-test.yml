@@ -9,6 +9,9 @@ on:
       simulator:
         required: true
         type: string
+      checkout_sha:
+        default: ''
+        type: string
       suites:
         default: '[]'
         type: string
@@ -32,10 +35,13 @@ jobs:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
+          ref: ${{ inputs.checkout_sha || github.sha }}
       - name: Select pinned toolchain and simulator
         id: simulator
         run: |
           mkdir -p "$RUNNER_TEMP/CIArtifacts"
+          git rev-parse HEAD | tee "$RUNNER_TEMP/CIArtifacts/revision.txt"
+          echo "$TIER / $SIMULATOR_CLASS revision: $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
           xcodebuild -version | tee "$RUNNER_TEMP/CIArtifacts/toolchain.log"
           xcrun simctl list devices available --json > "$RUNNER_TEMP/CIArtifacts/devices.json"
           python3 - <<'PY'
@@ -77,7 +83,7 @@ jobs:
             -clonedSourcePackagesDirPath "$RUNNER_TEMP/SourcePackages" \
             -onlyUsePackageVersionsFromResolvedFile \
             2>&1 | tee "$RUNNER_TEMP/CIArtifacts/packages.log"
-          echo "Package resolution: $((SECONDS-started)) seconds" >> "$GITHUB_STEP_SUMMARY"
+          echo "Package resolution: $((SECONDS-started)) seconds" | tee -a "$GITHUB_STEP_SUMMARY"
           git diff --exit-code -- BabySleepTracker.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
       - name: Build and test selected coverage
         timeout-minutes: 35
@@ -90,18 +96,7 @@ jobs:
           case "$TIER" in
             fast) selection=(-only-testing:BabySleepTrackerTests) ;;
             focused)
-              python3 - <<'PY' > "$RUNNER_TEMP/ui-selection.txt"
-          import json, os
-          suites = json.loads(os.environ['SUITES'])
-          allowed = {'ALL', 'HomeDashboardCardUITests', 'TodaySleepHeroUITests', 'RecordingNavigationTests'}
-          if not isinstance(suites, list) or not suites or any(s not in allowed for s in suites):
-              raise SystemExit('Invalid or empty focused selection; refusing a no-test success')
-          if 'ALL' in suites:
-              print('-only-testing:BabySleepTrackerUITests')
-          else:
-              for suite in suites:
-                  print('-only-testing:BabySleepTrackerUITests/' + suite)
-          PY
+              python3 .github/scripts/ui-selection.py "$SUITES" > "$RUNNER_TEMP/ui-selection.txt"
               while IFS= read -r item; do selection+=("$item"); done < "$RUNNER_TEMP/ui-selection.txt"
               ;;
             full) coverage=YES ;;
@@ -125,7 +120,7 @@ jobs:
             2>&1 | tee "$RUNNER_TEMP/CIArtifacts/xcodebuild.log"
           test_status=${PIPESTATUS[0]}
           set -e
-          echo "$TIER / $SIMULATOR_CLASS build and test: $((SECONDS-started)) seconds (exit $test_status)" >> "$GITHUB_STEP_SUMMARY"
+          echo "$TIER / $SIMULATOR_CLASS build and test: $((SECONDS-started)) seconds (exit $test_status)" | tee -a "$GITHUB_STEP_SUMMARY"
           exit "$test_status"
       - name: Export results and screenshots
         timeout-minutes: 5

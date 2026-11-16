@@ -23,7 +23,6 @@ jobs:
     outputs:
       full: ${{ steps.select.outputs.full }}
       suites: ${{ steps.select.outputs.suites }}
-      focused: ${{ steps.select.outputs.focused }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -42,15 +41,11 @@ jobs:
             echo 'full=false' >> "$GITHUB_OUTPUT"
             suites=$(python3 .github/scripts/classify-ios.py "$BASE_SHA" "$HEAD_SHA")
             echo "suites=$suites" >> "$GITHUB_OUTPUT"
-            if [[ "$suites" == '[]' ]]; then
-              echo 'focused=false' >> "$GITHUB_OUTPUT"
-            else
-              echo 'focused=true' >> "$GITHUB_OUTPUT"
-            fi
+            echo "Draft XCTest only; deferred UI checkpoint coverage: $suites" >> "$GITHUB_STEP_SUMMARY"
+            echo 'UI coverage is deferred, not approved. Ready PRs require the full two-device scheme.' >> "$GITHUB_STEP_SUMMARY"
           else
             echo 'full=true' >> "$GITHUB_OUTPUT"
             echo 'suites=[]' >> "$GITHUB_OUTPUT"
-            echo 'focused=false' >> "$GITHUB_OUTPUT"
           fi
 
   fast-xctest:
@@ -60,19 +55,6 @@ jobs:
     with:
       tier: fast
       simulator: standard
-
-  focused-ui:
-    needs: classify
-    if: needs.classify.outputs.full == 'false' && needs.classify.outputs.focused == 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        simulator: [standard, compact]
-    uses: ./.github/workflows/ios-test.yml
-    with:
-      tier: focused
-      simulator: ${{ matrix.simulator }}
-      suites: ${{ needs.classify.outputs.suites }}
 
   full-validation:
     needs: classify
