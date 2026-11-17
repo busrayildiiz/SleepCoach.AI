@@ -29,8 +29,7 @@ struct HistoryView: View {
 
 
     private func loadRecords() {
-        if let data = UserDefaults.standard.data(forKey: "sleepRecords"),
-           let decoded = try? JSONDecoder().decode([SleepRecord].self, from: data) {
+        if let decoded = SleepRecordPersistence().load() {
             records = decoded
         }
     }

@@ -28,37 +28,21 @@ final class SleepMemoryStore {
     // MARK: - Sleep Records
 
     func loadSleepRecords() -> [SleepRecord] {
-        guard let data = defaults.data(forKey: Keys.sleepRecords.rawValue),
-              let records = try? JSONDecoder().decode([SleepRecord].self, from: data)
-        else { return [] }
-        return records
+        SleepRecordPersistence(defaults: defaults).load() ?? []
     }
 
     func saveSleepRecords(_ records: [SleepRecord]) {
-        if let data = try? JSONEncoder().encode(records) {
-            defaults.set(data, forKey: Keys.sleepRecords.rawValue)
-            NotificationCenter.default.post(
-                name: NSNotification.Name("sleepRecordsDidChange"), object: nil
-            )
-        }
+        SleepRecordPersistence(defaults: defaults).save(records)
     }
 
     // MARK: - Daily Wake Records
 
     func loadDailyWakeRecords() -> [DailyWakeRecord] {
-        guard let data = defaults.data(forKey: Keys.dailyWakeRecords.rawValue),
-              let records = try? JSONDecoder().decode([DailyWakeRecord].self, from: data)
-        else { return [] }
-        return records
+        DailyWakeRecordPersistence(defaults: defaults).load() ?? []
     }
 
     func saveDailyWakeRecords(_ records: [DailyWakeRecord]) {
-        if let data = try? JSONEncoder().encode(records) {
-            defaults.set(data, forKey: Keys.dailyWakeRecords.rawValue)
-            NotificationCenter.default.post(
-                name: NSNotification.Name("dailyWakeRecordsDidChange"), object: nil
-            )
-        }
+        DailyWakeRecordPersistence(defaults: defaults).save(records)
     }
 
     // MARK: - Baby Info

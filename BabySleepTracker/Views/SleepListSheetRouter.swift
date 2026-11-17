@@ -9,7 +9,7 @@ struct SleepListSheetRouter: View {
     let onRecordUpsert: (SleepRecord) -> Bool
     let onBreakSaved: (SleepRecord) -> Bool
     let onDeleteRecords: (Set<UUID>) -> Void
-    let onWakeTimeSave: (Date) -> Bool
+    let onWakeTimeSave: (Date, WakeObservationCapture?) -> Bool
 
     var body: some View {
         switch sheet {
@@ -73,6 +73,8 @@ struct SleepListSheetRouter: View {
         case .wakeTime:
             WakeTimeEditorView(
                 initialTime: todayWakeTime ?? defaultWakeTime,
+                nightRecords: records,
+                existing: DailyWakeRecordPersistence().load()?.first { $0.wakeTime == todayWakeTime },
                 onSave: onWakeTimeSave
             )
         }
@@ -82,14 +84,15 @@ struct SleepListSheetRouter: View {
 // MARK: - Wake Time Editor
 
 private struct WakeTimeEditorView: View {
-    let onSave: (Date) -> Bool
+    let onSave: (Date, WakeObservationCapture?) -> Bool
     @Environment(\.dismiss) private var dismiss
-    @State private var selectedTime: Date
+    @State private var draft: WakeObservationDraft
     @State private var saveFailed = false
+    @State private var cancellationFailed = false
 
-    init(initialTime: Date, onSave: @escaping (Date) -> Bool) {
+    init(initialTime: Date, nightRecords: [SleepRecord], existing: DailyWakeRecord?, onSave: @escaping (Date, WakeObservationCapture?) -> Bool) {
         self.onSave   = onSave
-        _selectedTime = State(initialValue: initialTime)
+        _draft = State(initialValue: WakeObservationDraft(initial: initialTime, existing: existing, nightRecords: nightRecords))
     }
 
     var body: some View {
@@ -114,7 +117,7 @@ private struct WakeTimeEditorView: View {
                 }
                 DatePicker(
                     "Wake-up time",
-                    selection: $selectedTime,
+                    selection: $draft.selected,
                     displayedComponents: .hourAndMinute
                 )
                 .datePickerStyle(.wheel).labelsHidden()
@@ -127,21 +130,30 @@ private struct WakeTimeEditorView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") { dismiss() }.accessibilityIdentifier("home.wake.cancel")
+                    Button("Cancel") {
+                        if draft.abandon() { dismiss() } else { cancellationFailed = true; saveFailed = true }
+                    }.accessibilityIdentifier("home.wake.cancel")
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Save") {
-                        if onSave(selectedTime) { dismiss() } else { saveFailed = true }
+                        cancellationFailed = false
+                        if draft.submit(save: onSave) { dismiss() } else { saveFailed = true }
                     }.accessibilityIdentifier("home.wake.save")
                         .fontWeight(.semibold)
                 }
             }
         }
-        .alert("Could not save wake time", isPresented: $saveFailed) {
+        .alert(cancellationFailed ? "Could not cancel wake time" : "Could not save wake time", isPresented: $saveFailed) {
             Button("OK", role: .cancel) { }
-        } message: { Text("Your wake time has not been saved. Please try again.") }
+        } message: {
+            Text(cancellationFailed
+                 ? "Cancellation could not be saved. Your entry is still open; try Cancel again."
+                 : "Saving did not finish. Review your wake time and try again.")
+        }
         .tint(Color.sleepPurpleDeep)
         .presentationDetents([.height(390)])
         .presentationDragIndicator(.visible)
+        .interactiveDismissDisabled(draft.requiresExplicitCancellation)
+        .onDisappear { _ = draft.abandon() }
     }
 }

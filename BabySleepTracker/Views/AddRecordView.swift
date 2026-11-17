@@ -10,6 +10,7 @@ struct AddRecordView: View {
     @State private var draft: SleepRecordingDraft
     @State private var submission = RecordingSubmission()
     @State private var saveFailed = false
+    @State private var cancellationFailed = false
     @State private var breakParent: SleepRecord?
     @State private var existingBreaks: [SleepRecord] = []
 
@@ -37,7 +38,7 @@ struct AddRecordView: View {
             RecordingScreen(title: title,
                             saveTitle: editingRecord == nil ? (vm.kind == .nightSleep ? "Save Night Sleep" : "Save Nap") : "Save Changes",
                             saveEnabled: !submission.isSubmitted && draft.validationMessage(now: Date()) == nil,
-                            onCancel: { dismiss() }, onSave: save, spacing: 28) {
+                            onCancel: cancel, onSave: save, spacing: 28) {
                 RecordingKindPicker(selection: $vm.kind)
                     .padding(.horizontal, 2)
                     .padding(.top, 8)
@@ -61,12 +62,16 @@ struct AddRecordView: View {
                     .accessibilityIdentifier("recording.addBreak")
                 }
             }
-            .alert("Could Not Save", isPresented: $saveFailed) {
+            .alert(cancellationFailed ? "Could Not Cancel" : "Could Not Save", isPresented: $saveFailed) {
                 Button("OK", role: .cancel) { }
             } message: {
-                Text("The sleep session may have changed or this interval is already recorded. Your changes are still here; review the record and try again.")
+                Text(cancellationFailed
+                     ? "Cancellation could not be saved. Your entry is still open; try Cancel again."
+                     : "The sleep session may have changed or this interval is already recorded. Your changes are still here; review the record and try again.")
             }
             .onAppear(perform: loadBreaks)
+            .onDisappear { if breakParent == nil { _ = draft.abandon() } }
+            .interactiveDismissDisabled(draft.requiresExplicitCancellation)
             .onReceive(NotificationCenter.default.publisher(for: .sleepRecordsDidChange)) { _ in loadBreaks() }
             .fullScreenCover(item: $breakParent) { parent in
                 AddBreakView(parent: parent, existingBreaks: existingBreaks, onSave: onSave)
@@ -92,7 +97,8 @@ struct AddRecordView: View {
     }
 
     private func save() {
-        submission.submit(draft.record(kind: vm.kind, editing: editingRecord, now: Date()), save: { record in
+        cancellationFailed = false
+        submission.submit(draft: draft, kind: vm.kind, editing: editingRecord, now: Date(), save: { record in
             let saved = onSave(record)
             if saved && record.isOngoing {
                 NotificationCenter.default.post(name: .sleepStillSleepingConfirmed, object: record.id,
@@ -101,6 +107,9 @@ struct AddRecordView: View {
             saveFailed = !saved
             return saved
         }, dismiss: { dismiss() })
+    }
+    private func cancel() {
+        if draft.abandon() { dismiss() } else { cancellationFailed = true; saveFailed = true }
     }
 
     private func loadBreaks() {

@@ -81,7 +81,9 @@ final class SleepWakeTimeWorkflowTests: XCTestCase {
     }
 
     private func workflow(selected: Date, wakeRecords: [DailyWakeRecord] = [], sleepRecords: [SleepRecord] = []) -> SleepWakeTimeWorkflow {
-        SleepWakeTimeWorkflow(selectedWakeTime: selected, now: now, calendar: calendar, wakeRecords: wakeRecords, sleepRecords: sleepRecords, wakePersistence: DailyWakeRecordPersistence(defaults: defaults), sleepPersistence: SleepRecordPersistence(defaults: defaults))
+        _ = DailyWakeRecordPersistence(defaults: defaults).save(wakeRecords)
+        _ = SleepRecordPersistence(defaults: defaults).save(sleepRecords)
+        return SleepWakeTimeWorkflow(selectedWakeTime: selected, now: now, calendar: calendar, wakeRecords: wakeRecords, sleepRecords: sleepRecords, wakePersistence: DailyWakeRecordPersistence(defaults: defaults), sleepPersistence: SleepRecordPersistence(defaults: defaults))
     }
 
     private func record(at date: Date, kind: SleepKind, ongoing: Bool, parent: UUID? = nil) -> SleepRecord {

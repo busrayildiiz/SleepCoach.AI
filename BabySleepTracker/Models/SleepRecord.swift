@@ -15,6 +15,15 @@ struct SleepRecord: Identifiable, Codable {
     let createdAt: Date
     /// Exact user-entered end; legacy records retain their duration-based end.
     let endDate: Date?
+    /// Transient capability from the audited recording submission; never decoded from disk.
+    var observationCapture: SleepObservationCapture? = nil
+    var recordingBaseline: String? = nil
+    var recordingDraft = false
+    var parentBaseline: String? = nil
+    var parentRevision: UUID? = nil
+    var persistedRevision: UUID? = nil
+    var recordingRevision: UUID? = nil
+    var creationIntent: ObservationCreationIntent? = nil
 
     init(
         id: UUID = UUID(),
