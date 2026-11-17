@@ -1886,3 +1886,27 @@ final class TrustedObservationCorrectionTests: XCTestCase {
         XCTAssertNotEqual(evaluate().status, .eligibleUnderPolicy)
     }
 }
+
+extension TrustedObservationCorrectionTests {
+    func testForwardCompletionPreservesUnrelatedDaytimeConfirmationAndWakeEditRevokesAffectedCoverage() throws {
+        let boundaries = try pair()
+        try confirm(boundaries)
+        let baseline = try XCTUnwrap(ObservationProvenance.load(defaults)?.daytime)
+        now = at(1, 12)
+        let original = try sleep(start: at(-1, 20), end: nil, kind: .nightSleep)
+        var draft = SleepRecordingDraft(defaultDate: original.date, editing: original, now: now)
+        draft.prepareForEnding(at: now); draft.end = at(0, 7)
+        var submission = RecordingSubmission()
+        submission.submit(draft: draft, kind: .nightSleep, editing: original, now: now, save: {
+            NightSleepCompletion(submitted: $0, now: self.now, calendar: self.calendar,
+                sleepPersistence: self.sleeps, wakePersistence: self.wakes).execute().succeeded
+        }, dismiss: {})
+        XCTAssertTrue(submission.isSubmitted)
+        XCTAssertEqual(Set(ObservationProvenance.load(defaults)?.daytime.keys.map { $0 } ?? []), Set(baseline.keys))
+        XCTAssertEqual(snapshot.daytime.first?.coverage, .confirmedComplete)
+        let corrected = DailyWakeRecord(id: boundaries.1.id, day: boundaries.1.day, wakeTime: boundaries.1.wakeTime.addingTimeInterval(60))
+        XCTAssertTrue(wakes.save([boundaries.0, corrected]))
+        XCTAssertTrue(ObservationProvenance.load(defaults)?.daytime.isEmpty == true)
+        XCTAssertTrue(snapshot.daytime.isEmpty)
+    }
+}

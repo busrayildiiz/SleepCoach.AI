@@ -39,7 +39,7 @@ struct SleepListView: View {
         case addSleep(editing: SleepRecord?, defaultDate: Date)
         case addNightSleep(defaultDate: Date)
         case addBreak(parentID: UUID)
-        case endSleep(parentID: UUID)
+        case endSleep(parent: SleepRecord)
         case dayDetail(SelectedDay)
         case wakeTime
 
@@ -58,8 +58,8 @@ struct SleepListView: View {
                 return "addNightSleep-\(date.timeIntervalSince1970)"
             case .addBreak(let id):
                 return "addBreak-\(id)"
-            case .endSleep(let id):
-                return "endSleep-\(id)"
+            case .endSleep(let parent):
+                return "endSleep-\(parent.id)"
             case .dayDetail(let day):
                 return "dayDetail-\(day.id)"
             case .wakeTime:
@@ -92,6 +92,14 @@ struct SleepListView: View {
         loadRecords()
         return true
     }
+    private func completeNight(_ record: SleepRecord) -> NightSleepCompletionResult {
+        let result = NightSleepCompletion(submitted: record, now: Date(), calendar: .current,
+            sleepPersistence: sleepRecordPersistence, wakePersistence: dailyWakeRecordPersistence).execute()
+        loadRecords()
+        loadWakeRecords()
+        return result
+    }
+
     private func deleteRecords(_ ids: Set<UUID>) {
         if sleepRecordPersistence.delete(ids: ids) { loadRecords() }
     }
@@ -432,6 +440,7 @@ struct SleepListView: View {
             todayWakeTime: todayWakeRecord?.wakeTime,
             defaultWakeTime: defaultWakeTime,
             onRecordUpsert: upsert,
+            onNightCompletion: completeNight,
             onBreakSaved: upsert,
             onDeleteRecords: { ids in
                 deleteRecords(ids)
@@ -925,7 +934,7 @@ struct SleepListView: View {
             TodaySleepHeroCard(model: model,
                 addNap: { activeSheet = .addSleep(editing: nil, defaultDate: Date()) },
                 recordNight: { activeSheet = .addNightSleep(defaultDate: Date()) },
-                endSleep: { if let record = model.record { activeSheet = .endSleep(parentID: record.id) } },
+                endSleep: { if let record = model.record { activeSheet = .endSleep(parent: record) } },
                 addBreak: { if model.canAddBreak, let record = model.record { activeSheet = .addBreak(parentID: record.id) } },
                 viewDetails: { activeSheet = .dayDetail(SelectedDay(day: model.sleepDay ?? context.date)) },
                 viewPlan: { heroShowsPlan = true },

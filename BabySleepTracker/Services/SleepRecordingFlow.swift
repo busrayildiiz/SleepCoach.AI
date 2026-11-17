@@ -14,6 +14,7 @@ struct SleepRecordingDraft {
     private let creationIntent: ObservationCreationIntent?
     private let initialStart: Date
     private var initialEnd: Date
+    private var nightCompletionIntent: ObservationCreationIntent? = nil
 
     init(defaultDate: Date, editing: SleepRecord? = nil, now: Date = Date()) {
         observationID = editing?.id ?? UUID()
@@ -31,10 +32,17 @@ struct SleepRecordingDraft {
         isOngoing = false
         end = now
         initialEnd = end
+        if nightCompletionIntent == nil { nightCompletionIntent = ObservationCreationIntent(recordID: UUID()) }
     }
-    var requiresExplicitCancellation: Bool { creationIntent?.requiresExplicitCancellation == true }
+    var requiresExplicitCancellation: Bool {
+        creationIntent?.requiresExplicitCancellation == true || nightCompletionIntent?.requiresExplicitCancellation == true
+    }
     @discardableResult
-    func abandon() -> Bool { creationIntent?.abandon() ?? true }
+    func abandon() -> Bool {
+        let recording = creationIntent?.abandon() ?? true
+        let completion = nightCompletionIntent?.abandon() ?? true
+        return recording && completion
+    }
 
     func validationMessage(now: Date) -> String? {
         if start > now { return "Start must not be in the future." }
@@ -57,6 +65,7 @@ struct SleepRecordingDraft {
         record.recordingBaseline = editing.map(ObservationProvenance.sleepIdentity)
         record.recordingRevision = editing?.persistedRevision
         record.creationIntent = creationIntent
+        record.nightCompletionIntent = nightCompletionIntent
         return record
     }
 
@@ -156,6 +165,22 @@ enum RecordingSheet: Identifiable {
 /// Latches before callbacks run, so repeated taps cannot save or dismiss twice.
 struct RecordingSubmission {
     private(set) var isSubmitted = false
+
+    /// Shared Home form dispatch. Confirming Still Sleeping remains an ordinary
+    /// recording action and must not enter canonical night completion.
+    static func saveHomeRecord(_ record: SleepRecord, now: Date,
+                               onSave: (SleepRecord) -> Bool,
+                               onNightCompletion: ((SleepRecord) -> NightSleepCompletionResult)?) -> (succeeded: Bool, message: String?) {
+        if !record.isOngoing, let onNightCompletion {
+            let result = onNightCompletion(record)
+            return (result.succeeded, result.message)
+        }
+        let saved = onSave(record)
+        if saved && record.isOngoing {
+            NotificationCenter.default.post(name: .sleepStillSleepingConfirmed, object: record.id, userInfo: ["confirmedAt": now])
+        }
+        return (saved, nil)
+    }
 
     /// Audited observation form Save action. Building a draft or a record grants no trust.
     mutating func submit(draft: SleepRecordingDraft, kind: SleepKind, editing: SleepRecord? = nil,

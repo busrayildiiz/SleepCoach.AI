@@ -3,7 +3,9 @@
 
 Presentation-only SleepKind colors and view-owned notification declarations are
 replaced in the scratch package. One SwiftUI routing test is excluded explicitly.
-All persisted-observation, eligibility and accounting implementation is copied verbatim.
+Hero localization falls back to its English keys; Home card projections are
+copied without their SwiftUI view section. All persisted-observation, eligibility,
+calendar, accounting and planning logic is copied verbatim.
 """
 from pathlib import Path
 import os
@@ -46,6 +48,15 @@ files = [
 ]
 for file in files:
     shutil.copyfile(root / 'BabySleepTracker' / file, sources / Path(file).name)
+for file in ['Views/Components/TodaySleepHeroModel.swift', 'Models/TodayPlanPresentation.swift']:
+    content = (root / 'BabySleepTracker' / file).read_text()
+    # Linux Foundation lacks Apple's localized String initializer. Only wording
+    # uses this fallback; observation/projection logic remains unchanged.
+    content = content.replace('String(localized: ', 'String(')
+    (sources / Path(file).name).write_text(content)
+card = (root / 'BabySleepTracker/Views/Components/CurrentSleepSessionCard.swift').read_text()
+(sources / 'HomeCardProjections.swift').write_text(card[:card.index('private enum HomeCardColor')]
+    .replace('import SwiftUI', 'import Foundation'))
 legacy = (root / 'BabySleepTracker/Services/SleepCoachOrchestrator.swift').read_text()
 (sources / 'DataQualityReport.swift').write_text('import Foundation\n' + legacy[
     legacy.index('enum DataQuality:'):legacy.index('struct OrchestratedSnapshot')])
@@ -78,6 +89,7 @@ for name in [
     'TrustedObservationCorrectionTests', 'TrustedObservationTests', 'LearningEligibilityEvaluatorTests', 'SleepRecordPersistenceTests',
     'DailyWakeRecordPersistenceTests', 'SleepWakeTimeWorkflowTests', 'SleepRecordTests',
     'DailyWakeRecordTests', 'SleepOverviewCalculatorTests',
+    'TodaySleepHeroModelTests', 'HomeDashboardCardTests', 'SleepTimelineCalculatorTests',
     'SleepStateCalculatorTests', 'SleepStoreTests', 'SleepRecordingFlowTests',
 ]:
     content = (root / 'BabySleepTrackerTests' / (name + '.swift')).read_text()

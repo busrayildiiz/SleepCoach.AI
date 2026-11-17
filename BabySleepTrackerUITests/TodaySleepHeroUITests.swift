@@ -40,6 +40,55 @@ final class TodaySleepHeroUITests: XCTestCase {
         }
         XCTFail("Hero action is not reachable")
     }
+    private func revealPlanObservation(_ target: XCUIElement, app: XCUIApplication) {
+        // Bring the parent Home content into view before navigating its nested timeline.
+        reveal(app.buttons["home.plan.details"], app: app)
+        let scroll = app.scrollViews["home.plan.scroll"].firstMatch
+        var lastViewport = CGRect.null
+        for _ in 0..<8 {
+            let window = app.windows.firstMatch.frame
+            let navigation = app.navigationBars.firstMatch
+            let top = navigation.exists ? max(window.minY, navigation.frame.maxY) : window.minY
+            let tab = app.buttons["recording.addSleep"]
+            let bottom = tab.exists && tab.isHittable ? tab.frame.minY : window.maxY
+            let homeViewport = CGRect(x: window.minX, y: top,
+                                      width: window.width, height: max(0, bottom - top))
+            guard target.exists else { break }
+            let frame = target.frame
+            let viewport = scroll.exists ? homeViewport.intersection(scroll.frame) : homeViewport
+            lastViewport = viewport
+            let exposedInContainer = !scroll.exists || scroll.descendants(matching: .any)
+                .matching(identifier: target.identifier).firstMatch.exists
+            // This is combined readable text, not a button. Require its complete bounds
+            // in the visible container and its accessible label, rather than tap-hittability.
+            if exposedInContainer && !frame.isEmpty && !viewport.isNull && viewport.contains(frame) && !target.label.isEmpty { return }
+            if frame.minY < homeViewport.minY || frame.maxY > homeViewport.maxY {
+                let distance = frame.midY - homeViewport.midY
+                let step = min(abs(distance), homeViewport.height * 0.4)
+                guard step > 0 else { break }
+                let start = app.coordinate(withNormalizedOffset: .zero)
+                    .withOffset(CGVector(dx: homeViewport.midX, dy: homeViewport.midY))
+                start.press(forDuration: 0.05,
+                            thenDragTo: start.withOffset(CGVector(dx: 0, dy: distance < 0 ? step : -step)),
+                            withVelocity: .slow, thenHoldForDuration: 0.1)
+            } else if scroll.exists && !viewport.isEmpty {
+                if frame.maxX > viewport.maxX { scroll.swipeLeft() }
+                else if frame.minX < viewport.minX { scroll.swipeRight() }
+                else { break }
+            } else { break }
+        }
+        capture("recorded-wake-not-visible", app: app)
+        let hierarchy = XCTAttachment(string: app.debugDescription)
+        hierarchy.name = "Recorded wake accessibility hierarchy"
+        hierarchy.lifetime = .keepAlways
+        add(hierarchy)
+        let targetInfo = target.exists
+            ? "frame=\(target.frame), hittable=\(target.isHittable), label=\(target.label), value=\(String(describing: target.value))"
+            : "missing from accessibility hierarchy"
+        let scrollInfo = scroll.exists ? "frame=\(scroll.frame)" : "no horizontal fallback"
+        XCTFail("Recorded wake not visible: \(targetInfo); scroll=\(scrollInfo); " +
+                "viewport=\(lastViewport); window=\(app.windows.firstMatch.frame)")
+    }
     private func dismissed(_ navigation: XCUIElement) {
         XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: navigation)], timeout: 5), .completed)
     }
@@ -189,5 +238,68 @@ final class TodaySleepHeroUITests: XCTestCase {
         XCTAssertTrue(app.buttons["hero.endSleep"].exists)
         XCTAssertFalse(record.exists)
         capture("bedtime-confirmed-night-large-type", app: app)
+    }
+}
+
+extension TodaySleepHeroUITests {
+    private func finishNightAndVerifyCanonicalWake(large: Bool) {
+        // This fixture seeds only an ongoing night. The actual Home End Sleep Save
+        // must create the wake; no preconstructed completed/wake pair is supplied.
+        let app = launch("nightActive", live: true, large: large)
+        let end = app.buttons["hero.endSleep"]
+        reveal(end, app: app); end.tap()
+        let editor = app.navigationBars["Edit Night Sleep"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        let save = app.buttons["recording.save"]
+        reveal(save, app: app)
+        XCTAssertTrue(save.isEnabled); save.tap()
+        dismissed(editor)
+        let summary = app.descendants(matching: .any).matching(identifier: "home.sleep.summary").firstMatch
+        let morning = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "Good morning"), object: summary)
+        XCTAssertEqual(XCTWaiter.wait(for: [morning], timeout: 5), .completed)
+        XCTAssertFalse(app.buttons["hero.confirmWake"].exists)
+        XCTAssertFalse(app.buttons["home.wake.add"].exists)
+        let wake = app.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label CONTAINS[c] %@", "home.plan.event.record:", "wake")).firstMatch
+        revealPlanObservation(wake, app: app)
+        XCTAssertTrue(wake.exists)
+        XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "home.plan.wakeReference").firstMatch.exists)
+        capture(large ? "night-completed-canonical-wake-large" : "night-completed-canonical-wake", app: app)
+    }
+    func testHomeEndNightCreatesRecordedCanonicalWake() {
+        finishNightAndVerifyCanonicalWake(large: false)
+    }
+    func testHomeEndNightCreatesCanonicalWakeAtAccessibilitySize() {
+        finishNightAndVerifyCanonicalWake(large: true)
+    }
+}
+
+extension TodaySleepHeroUITests {
+    func testHomeEndNightStillSleepingConfirmsWithoutRecordingWake() {
+        let app = launch("nightActive", live: true, large: true)
+        let end = app.buttons["hero.endSleep"]
+        reveal(end, app: app); end.tap()
+        let editor = app.navigationBars["Edit Night Sleep"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        let ongoing = app.switches["recording.ongoing"]
+        reveal(ongoing, app: app)
+        XCTAssertEqual(ongoing.value as? String, "0")
+        XCTAssertTrue(ongoing.isEnabled)
+        XCTAssertTrue(ongoing.isHittable)
+        ongoing.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 0.5))
+            .withOffset(CGVector(dx: -20, dy: 0)).tap()
+        let selected = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "1"), object: ongoing)
+        XCTAssertEqual(XCTWaiter.wait(for: [selected], timeout: 5), .completed)
+        let save = app.buttons["recording.save"]
+        reveal(save, app: app); XCTAssertTrue(save.isEnabled); save.tap()
+        dismissed(editor)
+        let summary = app.descendants(matching: .any).matching(identifier: "home.sleep.summary").firstMatch
+        let confirmed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "Night sleep in progress"), object: summary)
+        XCTAssertEqual(XCTWaiter.wait(for: [confirmed], timeout: 5), .completed)
+        XCTAssertTrue(app.buttons["hero.endSleep"].exists)
+        let recordedWake = app.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label CONTAINS[c] %@", "home.plan.event.record:", "wake")).firstMatch
+        XCTAssertFalse(recordedWake.exists)
+        capture("night-still-sleeping-no-wake-large", app: app)
     }
 }

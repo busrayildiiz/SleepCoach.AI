@@ -45,6 +45,7 @@ struct ObservationProvenance: Codable {
         let wakeID: UUID
         let nightRevision: UUID
         let wakeRevision: UUID
+        var recordedCalendar: Calendar? = nil
     }
 
     static func sleepIdentity(_ r: SleepRecord) -> String {
@@ -108,6 +109,13 @@ struct ObservationProvenance: Codable {
             }
         }
         pruneLinks()
+        // Revoke before the wake collection write, including insertion of another
+        // candidate that leaves the linked wake's own content/revision untouched.
+        links = links.filter { _, link in
+            guard let wake = records.first(where: { $0.id == link.wakeID }) else { return false }
+            let calendar = link.recordedCalendar ?? .current
+            return records.filter { calendar.isDate($0.day, inSameDayAs: wake.day) }.count == 1
+        }
     }
     /// Remove affected assertions BEFORE record writes. Returning to an old membership
     /// cannot recreate a removed parent answer. Other cycles and logging-only edits survive.
@@ -165,6 +173,7 @@ final class ObservationCreationIntent {
     fileprivate(set) var isRetired = false
     fileprivate var storage: ObservationStorage?
     fileprivate var resumedOperations: Set<UUID> = []
+    fileprivate(set) var nightCompletionAcknowledgement: NightCompletionAcknowledgement? = nil
     init(recordID: UUID) { self.recordID = recordID }
     var requiresExplicitCancellation: Bool {
         ObservationStorage.lock.lock()
@@ -183,6 +192,19 @@ final class ObservationCreationIntent {
         }
         return retired
     }
+}
+
+/// Transient acknowledgement capability. It is bound to an adopted operation's
+/// persisted receipts and this editor's exact input; it grants no new attestation.
+struct NightCompletionAcknowledgement {
+    let operationID: UUID
+    let persistedInput: String
+    let submissionInput: String
+    let nightID: UUID
+    let wakeID: UUID
+    let nightRevision: UUID
+    let wakeRevision: UUID
+    let calendar: Calendar
 }
 
 struct ObservationCreationReservation: Codable, Equatable {
@@ -243,7 +265,16 @@ struct ObservationCompletionPending: Codable {
     var isCancelled = false
     var creation: ObservationCreationReservation? = nil
     var selectedInput: Date? = nil
+    /// Additive discriminator: forward End Sleep commands also recover ordinary,
+    /// unattested completions. Older wake-editor journals retain their contract.
+    var nightCompletionInput: String? = nil
 
+    static func completionInput(baseline: String, revision: UUID?, completed: SleepRecord) -> String {
+        ObservationProvenance.digest(LearningEvidenceIdentity.pack([
+            "night-completion-input-v1", baseline, revision?.uuidString ?? "",
+            ObservationProvenance.sleepIdentity(completed)
+        ]))
+    }
     var originalNightContent: String { ObservationProvenance.sleepIdentity(originalNight) }
     var night: SleepRecord {
         let minutes = wake.wakeTime.timeIntervalSince(originalNight.date) / 60
@@ -261,6 +292,10 @@ struct ObservationCompletionPending: Codable {
               selectedInput.map({ $0.timeIntervalSinceReferenceDate.isFinite }) ?? true,
               wake.day == recordedCalendar.startOfDay(for: wake.wakeTime),
               wake.wakeTime > originalNight.date, wake.wakeTime <= now, night.duration > 0 else { return false }
+        if let input = nightCompletionInput,
+           input != Self.completionInput(baseline: originalNightContent, revision: originalNightRevision, completed: night) {
+            return false
+        }
         if let creation {
             guard creation.recordID == wake.id, creation.collection == "dailyWakeRecords_v1",
                   creation.content == ObservationProvenance.wakeIdentity(wake) else { return false }
@@ -390,6 +425,16 @@ struct ObservationStorage {
     /// Cleanup hints only. Durable authority remains in the monotonic ledger and
     /// cancellation journals. Failed retirement is retried with the next writer.
     fileprivate static var retirementRequests: Set<UUID> = []
+    private final class WeakIntent {
+        weak var value: ObservationCreationIntent?
+        init(_ value: ObservationCreationIntent) { self.value = value }
+    }
+    // Only live form capabilities, never a second durable operation history.
+    private static var boundIntents: [UUID: WeakIntent] = [:]
+    private func track(_ intent: ObservationCreationIntent) {
+        Self.boundIntents = Self.boundIntents.filter { $0.value.value != nil }
+        Self.boundIntents[intent.operationID] = WeakIntent(intent)
+    }
     static func post(_ name: Notification.Name, userInfo: [AnyHashable: Any]? = nil) {
         lock.withoutLock { NotificationCenter.default.post(name: name, object: nil, userInfo: userInfo) }
     }
@@ -449,6 +494,7 @@ struct ObservationStorage {
         defer { Self.lock.unlock() }
         guard !intent.isRetired, drainRetirements(), var ledger = creationLedger() else { return nil }
         intent.storage = self
+        track(intent)
         let reservation: ObservationCreationReservation
         if let bound = intent.reservation {
             guard bound.ledgerID == ledger.id, bound.recordID == intent.recordID,
@@ -476,6 +522,7 @@ struct ObservationStorage {
         defer { Self.lock.unlock() }
         guard !intent.isRetired, drainRetirements() else { return false }
         intent.storage = self
+        track(intent)
         return true
     }
     func adopt(_ operation: UUID, by intent: ObservationCreationIntent?) {
@@ -522,12 +569,31 @@ struct ObservationStorage {
         }
         return true
     }
-    fileprivate func retireOperation(_ operation: UUID, reservation: ObservationCreationReservation?) -> Bool {
+    fileprivate func retireOperation(_ operation: UUID, reservation: ObservationCreationReservation?,
+                                      useJournalReservation: Bool = true) -> Bool {
         Self.retirementRequests.insert(operation)
-        let reservation = reservation ??
+        Self.boundIntents[operation]?.value?.isRetired = true
+        let reservation = reservation ?? (useJournalReservation ? (
             ObservationCompletionPending.load(defaults).flatMap { $0.operationID == operation ? $0.creation : nil } ??
-            StandaloneWakePending.load(defaults).flatMap { $0.operationID == operation ? $0.creation : nil }
+            StandaloneWakePending.load(defaults).flatMap { $0.operationID == operation ? $0.creation : nil }) : nil)
         guard cancelOperationJournals(operation) else { return false }
+        var sleepRevisionChanged = false
+        var wakeRevisionChanged = false
+        if let pending = ObservationCompletionPending.load(defaults), pending.operationID == operation,
+           pending.nightCompletionInput != nil {
+            // Cancellation and automatic retirement share the same repair. A failed
+            // record write may have left metadata for a record that never reached disk.
+            guard defaults.data(forKey: "sleepRecords") == nil || SleepRecordPersistence(defaults: defaults).load() != nil,
+                  defaults.data(forKey: "dailyWakeRecords_v1") == nil || DailyWakeRecordPersistence(defaults: defaults).load() != nil else { return false }
+            var metadata = ObservationProvenance.load(defaults) ?? ObservationProvenance()
+            let oldSleeps = metadata.sleeps
+            let oldWakes = metadata.wakes
+            metadata.reconcile(sleeps: SleepRecordPersistence(defaults: defaults).load() ?? [])
+            metadata.reconcile(wakes: DailyWakeRecordPersistence(defaults: defaults).load() ?? [])
+            sleepRevisionChanged = metadata.sleeps != oldSleeps
+            wakeRevisionChanged = metadata.wakes != oldWakes
+            guard self.metadata(metadata, notify: false) else { return false }
+        }
         if let reservation {
             guard let ledger = ObservationCreationLedger.load(defaults), ledger.id == reservation.ledgerID else { return false }
             // A full ledger or a failed allocation may leave a tentative, never-issued
@@ -538,6 +604,10 @@ struct ObservationStorage {
         }
         guard removeCancelledJournals(operation) else { return false }
         Self.retirementRequests.remove(operation)
+        Self.boundIntents.removeValue(forKey: operation)
+        // Generic refresh events, after durable retirement; no completion is claimed.
+        if sleepRevisionChanged { Self.post(.sleepRecordsDidChange) }
+        if wakeRevisionChanged { Self.post(.dailyWakeRecordsDidChange) }
         return true
     }
     private func removeCancelledJournals(_ operation: UUID) -> Bool {
@@ -553,6 +623,57 @@ struct ObservationStorage {
         }
         return true
     }
+    /// A nonresumable forward journal is retired, not repaired into fresh evidence.
+    /// Quarantine precedes durable cancellation and ledger consumption; a failed
+    /// boundary keeps the journal blocking until a later safe retirement attempt.
+    func retireInvalidForwardCompletion(now: Date) -> Bool {
+        Self.lock.lock()
+        defer { Self.lock.unlock() }
+        guard let raw = defaults.data(forKey: ObservationCompletionPending.key) else { return true }
+        guard let pending = ObservationCompletionPending.load(defaults) else {
+            // Existing B1 maintenance quarantines malformed/unsupported envelopes.
+            return pruneRecoveryArchives()
+        }
+        guard pending.nightCompletionInput != nil else { return true }
+        guard now.timeIntervalSinceReferenceDate.isFinite,
+              defaults.data(forKey: "sleepRecords") == nil || SleepRecordPersistence(defaults: defaults).load() != nil,
+              defaults.data(forKey: "dailyWakeRecords_v1") == nil || DailyWakeRecordPersistence(defaults: defaults).load() != nil else { return false }
+        // A clock rollback alone does not retire an otherwise legitimate operation.
+        let validationTime = pending.wake.wakeTime.timeIntervalSinceReferenceDate.isFinite ? max(now, pending.wake.wakeTime) : now
+        if pending.canResume(defaults: defaults, now: validationTime) { return true }
+        guard preserve(raw, recoveryKey: "nightWakeCompletionRecovery_v1"),
+              defaults.data(forKey: ObservationCompletionPending.key) == raw else { return false }
+        let ledger = ObservationCreationLedger.load(defaults)
+        guard defaults.data(forKey: ObservationCreationLedger.key) == nil || ledger != nil else { return false }
+        // Consult the actual ledger, rather than trusting a corrupt journal's
+        // reservation to retire some other form's serial or operation.
+        let reservations = ledger?.pending.filter { $0.operationID == pending.operationID } ?? []
+        guard reservations.count <= 1 else { return false }
+        return retireOperation(pending.operationID, reservation: reservations.first, useJournalReservation: false)
+    }
+
+    func rememberNightCompletion(_ pending: ObservationCompletionPending, submissionInput: String,
+                                 by intent: ObservationCreationIntent) {
+        Self.lock.lock()
+        defer { Self.lock.unlock() }
+        guard !intent.isRetired, intent.operationID == pending.operationID || intent.resumedOperations.contains(pending.operationID),
+              let input = pending.nightCompletionInput, let calendar = pending.recordedCalendar,
+              let metadata = ObservationProvenance.load(defaults),
+              let night = SleepRecordPersistence(defaults: defaults).load()?.first(where: { $0.id == pending.night.id }),
+              let wake = DailyWakeRecordPersistence(defaults: defaults).load()?.first(where: { $0.id == pending.wake.id }),
+              let nightEntry = metadata.sleeps[night.id.uuidString], let wakeEntry = metadata.wakes[wake.id.uuidString],
+              nightEntry.completedOperationID == pending.operationID, nightEntry.completedInput == input,
+              wakeEntry.completedOperationID == pending.operationID, wakeEntry.completedInput == input,
+              nightEntry.revision == night.persistedRevision, wakeEntry.revision == wake.persistedRevision,
+              nightEntry.content == ObservationProvenance.sleepIdentity(pending.night),
+              nightEntry.content == ObservationProvenance.sleepIdentity(night),
+              wakeEntry.content == ObservationProvenance.wakeIdentity(pending.wake),
+              wakeEntry.content == ObservationProvenance.wakeIdentity(wake) else { return }
+        intent.nightCompletionAcknowledgement = .init(operationID: pending.operationID, persistedInput: input,
+            submissionInput: submissionInput, nightID: night.id, wakeID: wake.id,
+            nightRevision: nightEntry.revision, wakeRevision: wakeEntry.revision, calendar: calendar)
+    }
+
     func finishCreation(_ reservation: ObservationCreationReservation) -> Bool {
         Self.lock.lock()
         defer { Self.lock.unlock() }
@@ -847,7 +968,8 @@ struct TrustedObservationAdapter {
                nightEntry.revision == link.nightRevision,
                let wakeEntry = metadata?.wakes[r.id.uuidString],
                wakeEntry.content == ObservationProvenance.wakeIdentity(r),
-               wakeEntry.revision == link.wakeRevision {
+               wakeEntry.revision == link.wakeRevision,
+               wakes.filter({ (link.recordedCalendar ?? .current).isDate($0.day, inSameDayAs: r.day) }).count == 1 {
                 linkedNight = night.id
             }
             return LearningWakeEvidence(record: r, source: wakeSource, completedNightID: linkedNight)
