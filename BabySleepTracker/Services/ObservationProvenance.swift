@@ -21,6 +21,7 @@ struct ObservationProvenance: Codable {
         let morningWakeID: UUID
         let followingWakeID: UUID
         var revision: UUID
+        var calendars: [Calendar]? = nil
     }
 
     struct Entry: Codable, Equatable {
@@ -39,6 +40,7 @@ struct ObservationProvenance: Codable {
         let coverage: String
         let binding: String
         let intent: String
+        var recordedCalendar: Calendar? = nil
     }
     struct NightWakeLink: Codable {
         let nightID: UUID
@@ -122,39 +124,50 @@ struct ObservationProvenance: Codable {
     private var trackedCoverage: [String: CoverageGeneration] {
         var tracked = coverageGenerations ?? [:]
         for (key, assertion) in daytime where tracked[key] == nil {
-            tracked[key] = .init(morningWakeID: assertion.morningWakeID, followingWakeID: assertion.followingWakeID, revision: UUID())
+            tracked[key] = .init(morningWakeID: assertion.morningWakeID, followingWakeID: assertion.followingWakeID, revision: UUID(),
+                                  calendars: assertion.recordedCalendar.map { [$0] })
         }
         return tracked
     }
     mutating func revokeCoverage(old: [SleepRecord], new: [SleepRecord], wakes: [DailyWakeRecord]) {
-        for (key, var generation) in trackedCoverage {
+        for (key, generation) in trackedCoverage {
             func state(_ records: [SleepRecord]) -> [String]? {
                 guard let morning = wakes.first(where: { $0.id == generation.morningWakeID }),
                       let following = wakes.first(where: { $0.id == generation.followingWakeID }) else { return nil }
-                let naps = records.filter { $0.kind == .dayNap && $0.date >= morning.wakeTime && $0.date < following.wakeTime }
+                let naps = records.filter {
+                    DaytimeReviewWindow.affectsCoverage($0, start: morning.wakeTime, end: following.wakeTime)
+                }
                 let ids = Set(naps.map(\.id))
-                return (naps + records.filter { $0.kind == .break && $0.parentNapID.map(ids.contains) == true })
-                    .map(Self.sleepCoverageIdentity).sorted()
+                let related = records.filter {
+                    $0.id == morning.id || $0.id == following.id ||
+                        DaytimeReviewWindow.isRelevantBreak($0, napIDs: ids, start: morning.wakeTime, end: following.wakeTime)
+                }
+                return (naps + related).map(Self.sleepCoverageIdentity).sorted()
             }
             if state(old) != state(new) || state(new) == nil {
-                generation.revision = UUID()
-                coverageGenerations = coverageGenerations ?? [:]
-                coverageGenerations?[key] = generation
-                daytime.removeValue(forKey: key)
+                rotateCoverage(key: key, generation: generation)
             }
         }
     }
     mutating func revokeCoverage(old: [DailyWakeRecord], new: [DailyWakeRecord]) {
-        let changed = Set((old + new).filter { record in
-            old.first(where: { $0.id == record.id }).map(Self.wakeIdentity) !=
-            new.first(where: { $0.id == record.id }).map(Self.wakeIdentity)
-        }.map(\.id))
-        for (key, var generation) in trackedCoverage where changed.contains(generation.morningWakeID) || changed.contains(generation.followingWakeID) {
-            generation.revision = UUID()
-            coverageGenerations = coverageGenerations ?? [:]
-            coverageGenerations?[key] = generation
-            daytime.removeValue(forKey: key)
+        for (key, generation) in trackedCoverage {
+            let calendars = generation.calendars ?? [.current]
+            func pair(_ records: [DailyWakeRecord], in calendar: Calendar) -> [String]? {
+                DaytimeReviewWindow.canonicalPair(in: records, morningID: generation.morningWakeID,
+                    followingID: generation.followingWakeID, calendar: calendar)?.map(Self.wakeIdentity)
+            }
+            if calendars.contains(where: { pair(old, in: $0) != pair(new, in: $0) }) {
+                rotateCoverage(key: key, generation: generation)
+            }
         }
+    }
+
+    mutating func rotateCoverage(key: String, generation: CoverageGeneration) {
+        var retired = generation
+        retired.revision = UUID()
+        coverageGenerations = coverageGenerations ?? [:]
+        coverageGenerations?[key] = retired
+        daytime.removeValue(forKey: key)
     }
     private mutating func pruneLinks() {
         links = links.filter { _, link in
@@ -885,62 +898,75 @@ struct ObservationStorage {
 struct TrustedObservationAdapter {
     let defaults: UserDefaults
 
-    /// B2 must call this before presenting a genuine parent confirmation, then submit
-    /// the explicit answer through the returned draft. Merely preparing it asserts nothing.
-    func beginDaytimeConfirmation(morningWakeID: UUID, followingWakeID: UUID) -> DaytimeCoverageDraft? {
+    func beginDaytimeConfirmation(morningWakeID: UUID, followingWakeID: UUID,
+                                  calendar: Calendar = .current) -> DaytimeCoverageDraft? {
+        prepareDaytimeReview(morningWakeID: morningWakeID, followingWakeID: followingWakeID,
+                             calendar: calendar)?.draft
+    }
+
+    /// Preparing registers a generation for invalidation. Dropping the draft defers review.
+    /// The presentation and its draft are projected from the same locked evidence snapshot.
+    func prepareDaytimeReview(morningWakeID: UUID, followingWakeID: UUID,
+                              calendar: Calendar = .current,
+                              using storage: ObservationStorage? = nil) -> DaytimeCoverageReview? {
         ObservationStorage.lock.lock()
         defer { ObservationStorage.lock.unlock() }
-        guard daytimeRevisionIdentity(morningWakeID: morningWakeID, followingWakeID: followingWakeID) != nil,
-              var metadata = ObservationProvenance.load(defaults) else { return nil }
-        let key = LearningEvidenceIdentity.pack([morningWakeID.uuidString, followingWakeID.uuidString])
-        if metadata.coverageGenerations?[key] == nil {
+        let storage = storage ?? ObservationStorage(defaults: defaults)
+        let calendar = DaytimeReviewWindow.capture(calendar)
+        guard storage.defaults === defaults,
+              let initial = reviewState(morning: morningWakeID, following: followingWakeID, calendar: calendar)
+        else { return nil }
+        let key = DaytimeReviewWindow.key(morningWakeID, followingWakeID)
+        var metadata = initial.metadata
+        var generation = metadata.coverageGenerations?[key] ??
+            .init(morningWakeID: morningWakeID, followingWakeID: followingWakeID, revision: UUID())
+        let current: DaytimeReviewState
+        if generation.calendars?.contains(calendar) != true {
+            generation.calendars = (generation.calendars ?? []) + [calendar]
             metadata.coverageGenerations = metadata.coverageGenerations ?? [:]
-            metadata.coverageGenerations?[key] = .init(morningWakeID: morningWakeID, followingWakeID: followingWakeID, revision: UUID())
-            guard ObservationStorage(defaults: defaults).metadata(metadata) else { return nil }
+            metadata.coverageGenerations?[key] = generation
+            // Maintenance notifications can release the lock. Re-read after registration.
+            guard storage.metadata(metadata, notify: false),
+                  let registered = reviewState(morning: morningWakeID, following: followingWakeID, calendar: calendar),
+                  registered.metadata.coverageGenerations?[key]?.calendars?.contains(calendar) == true
+            else { return nil }
+            current = registered
+        } else {
+            current = initial
         }
-        guard let binding = daytimeRevisionIdentity(morningWakeID: morningWakeID, followingWakeID: followingWakeID) else { return nil }
-        return DaytimeCoverageDraft(defaults: defaults, morning: morningWakeID, following: followingWakeID, binding: binding)
+        let draft = DaytimeCoverageDraft(defaults: defaults, morning: morningWakeID, following: followingWakeID,
+                                        calendar: calendar, binding: current.binding)
+        return DaytimeCoverageReview(day: current.window.day, calendar: calendar,
+            morningWakeTime: current.window.morning.record.wakeTime,
+            followingWakeTime: current.window.following.record.wakeTime,
+            naps: current.window.naps.map(DaytimeCoverageReview.Nap.init),
+            savedCoverage: current.coverage, draft: draft)
     }
 
-    /// Preserves Phase A exclusions: logging time and previous-night links are independent
-    /// of daytime coverage. Semantic revisions still detect a timing edit followed by revert.
-    func daytimeRevisionIdentity(morningWakeID: UUID, followingWakeID: UUID) -> String? {
+    func daytimeRevisionIdentity(morningWakeID: UUID, followingWakeID: UUID,
+                                 calendar: Calendar = .current) -> String? {
         ObservationStorage.lock.lock()
         defer { ObservationStorage.lock.unlock() }
-        guard let metadata = ObservationProvenance.load(defaults),
-              defaults.data(forKey: "sleepRecords") == nil || SleepRecordPersistence(defaults: defaults).load() != nil,
-              defaults.data(forKey: "dailyWakeRecords_v1") == nil || DailyWakeRecordPersistence(defaults: defaults).load() != nil else { return nil }
-        let evidence = snapshot(includeDaytime: false)
-        guard let morning = evidence.wakes.first(where: { $0.record.id == morningWakeID }),
-              let following = evidence.wakes.first(where: { $0.record.id == followingWakeID }),
-              morning.record.wakeTime < following.record.wakeTime else { return nil }
-        let naps = evidence.sleeps.filter { $0.record.kind == .dayNap &&
-            $0.record.date >= morning.record.wakeTime && $0.record.date < following.record.wakeTime }
-        let key = LearningEvidenceIdentity.pack([morningWakeID.uuidString, followingWakeID.uuidString])
-        var parts = ["daytime-revisions-v3", LearningDaytimeEvidence.identity(morning: morning, following: following, naps: naps),
-                     metadata.coverageGenerations?[key]?.revision.uuidString ?? "unprepared-membership"]
-        for wake in [morning, following] {
-            guard let entry = metadata.wakes[wake.record.id.uuidString],
-                  entry.content == ObservationProvenance.wakeIdentity(wake.record),
-                  let revision = entry.coverageRevision else { return nil }
-            parts.append(revision.uuidString)
-        }
-        let napIDs = Set(naps.map { $0.record.id })
-        let relevant = naps + evidence.sleeps.filter { $0.record.kind == .break && $0.record.parentNapID.map(napIDs.contains) == true }
-        for sleep in relevant.sorted(by: { $0.record.id.uuidString < $1.record.id.uuidString }) {
-            guard let entry = metadata.sleeps[sleep.record.id.uuidString],
-                  entry.content == ObservationProvenance.sleepIdentity(sleep.record),
-                  let revision = entry.coverageRevision else { return nil }
-            parts.append(revision.uuidString)
-        }
-        return ObservationProvenance.digest(LearningEvidenceIdentity.pack(parts))
+        return reviewState(morning: morningWakeID, following: followingWakeID, calendar: calendar)?.binding
     }
 
-    func snapshot(includeDaytime: Bool = true) -> LearningEvidenceSnapshot {
-        ObservationStorage.lock.lock()
-        defer { ObservationStorage.lock.unlock() }
-        let sleeps = SleepRecordPersistence(defaults: defaults).load() ?? []
-        let wakes = DailyWakeRecordPersistence(defaults: defaults).load() ?? []
+    // The caller holds the observation lock through any subsequent write.
+    fileprivate func reviewState(morning: UUID, following: UUID, calendar: Calendar,
+                                 matching recordedCalendar: Calendar? = nil) -> DaytimeReviewState? {
+        let input = loadEvidence()
+        guard input.readable, let metadata = input.metadata else { return nil }
+        return DaytimeReviewState(morning: morning, following: following, calendar: calendar,
+                                  evidence: input.evidence, metadata: metadata, matching: recordedCalendar)
+    }
+
+    private func loadEvidence()
+        -> (evidence: LearningEvidenceSnapshot, metadata: ObservationProvenance?, readable: Bool) {
+        let loadedSleeps = SleepRecordPersistence(defaults: defaults).load()
+        let loadedWakes = DailyWakeRecordPersistence(defaults: defaults).load()
+        let readable = (loadedSleeps != nil || defaults.data(forKey: "sleepRecords") == nil) &&
+            (loadedWakes != nil || defaults.data(forKey: "dailyWakeRecords_v1") == nil)
+        let sleeps = loadedSleeps ?? []
+        let wakes = loadedWakes ?? []
         let metadata = ObservationProvenance.load(defaults)
         func source(_ entry: ObservationProvenance.Entry?, content: String, intents: Set<String>) -> LearningEvidenceSource {
             guard let entry, entry.content == content,
@@ -974,23 +1000,194 @@ struct TrustedObservationAdapter {
             }
             return LearningWakeEvidence(record: r, source: wakeSource, completedNightID: linkedNight)
         }
-        var daytime: [LearningDaytimeEvidence] = []
-        if includeDaytime, let metadata {
-            for saved in metadata.daytime.values {
-                guard saved.intent == "parent-attested-daytime-coverage-v1",
-                      let coverage = LearningNapCoverage(rawValue: saved.coverage),
-                      coverage != .unknown,
-                      saved.binding == daytimeRevisionIdentity(morningWakeID: saved.morningWakeID, followingWakeID: saved.followingWakeID),
-                      let morning = wakeEvidence.first(where: { $0.record.id == saved.morningWakeID }),
-                      let following = wakeEvidence.first(where: { $0.record.id == saved.followingWakeID }) else { continue }
-                let naps = sleepEvidence.filter { $0.record.kind == .dayNap &&
-                    $0.record.date >= morning.record.wakeTime && $0.record.date < following.record.wakeTime }
-                daytime.append(LearningDaytimeEvidence(morning: morning, following: following,
-                    coverage: coverage, source: .verifiedObservation, naps: naps))
+        return (LearningEvidenceSnapshot(sleeps: sleepEvidence, wakes: wakeEvidence), metadata, readable)
+    }
+
+    func snapshot(includeDaytime: Bool = true, calendar: Calendar = .current) -> LearningEvidenceSnapshot {
+        ObservationStorage.lock.lock()
+        defer { ObservationStorage.lock.unlock() }
+        let input = loadEvidence()
+        var evidence = input.evidence
+        if includeDaytime, input.readable, let metadata = input.metadata {
+            evidence.daytime = metadata.daytime.keys.sorted().compactMap { key in
+                guard let saved = metadata.daytime[key],
+                      key == DaytimeReviewWindow.key(saved.morningWakeID, saved.followingWakeID),
+                      let state = DaytimeReviewState(morning: saved.morningWakeID, following: saved.followingWakeID,
+                          calendar: calendar, evidence: input.evidence, metadata: metadata),
+                      state.coverage != .unknown else { return nil }
+                return LearningDaytimeEvidence(morning: state.window.morning, following: state.window.following,
+                    coverage: state.coverage, source: .verifiedObservation, naps: state.window.naps)
             }
         }
-        return LearningEvidenceSnapshot(sleeps: sleepEvidence, wakes: wakeEvidence, daytime: daytime)
+        return evidence
     }
+}
+
+fileprivate struct DaytimeReviewWindow {
+    let day: LearningDay
+    let followingLabel: Date
+    let morning: LearningWakeEvidence
+    let following: LearningWakeEvidence
+    let naps: [LearningSleepEvidence]
+    let breaks: [LearningSleepEvidence]
+
+    static func capture(_ calendar: Calendar) -> Calendar {
+        var captured = Calendar(identifier: calendar.identifier)
+        captured.locale = calendar.locale
+        let zone = calendar.timeZone
+        captured.timeZone = TimeZone(identifier: zone.identifier) ?? zone
+        captured.firstWeekday = calendar.firstWeekday
+        captured.minimumDaysInFirstWeek = calendar.minimumDaysInFirstWeek
+        return captured
+    }
+
+    static func key(_ morning: UUID, _ following: UUID) -> String {
+        LearningEvidenceIdentity.pack([morning.uuidString, following.uuidString])
+    }
+
+    static func canonicalPair(in wakes: [DailyWakeRecord], morningID: UUID,
+                              followingID: UUID, calendar: Calendar) -> [DailyWakeRecord]? {
+        let mornings = wakes.filter { $0.id == morningID }
+        let followings = wakes.filter { $0.id == followingID }
+        guard mornings.count == 1, followings.count == 1,
+              let morning = mornings.first, let following = followings.first,
+              [morning.day, morning.wakeTime, following.day, following.wakeTime]
+                .allSatisfy({ $0.timeIntervalSinceReferenceDate.isFinite }),
+              morning.wakeTime < following.wakeTime else { return nil }
+        let label = calendar.startOfDay(for: morning.day)
+        guard let next = calendar.date(byAdding: .day, value: 1, to: label),
+              calendar.isDate(following.day, inSameDayAs: next),
+              [morning, following].allSatisfy({ wake in
+                  calendar.isDate(wake.day, inSameDayAs: wake.wakeTime) &&
+                  wakes.filter { calendar.isDate($0.day, inSameDayAs: wake.day) }.count == 1
+              }) else { return nil }
+        return [morning, following]
+    }
+
+    static func affectsCoverage(_ nap: SleepRecord, start: Date, end: Date) -> Bool {
+        nap.kind == .dayNap && nap.date < end &&
+            (nap.date >= start || nap.isOngoing || (nap.observedEnd ?? nap.date) > start)
+    }
+
+    static func isRelevantBreak(_ record: SleepRecord, napIDs: Set<UUID>, start: Date, end: Date) -> Bool {
+        record.kind == .break && (record.parentNapID.map(napIDs.contains) == true ||
+            crossesBoundary(record, start: start, end: end))
+    }
+
+    private static func crossesBoundary(_ record: SleepRecord, start: Date, end: Date) -> Bool {
+        [start, end].contains { boundary in
+            record.date < boundary && (record.isOngoing || (record.observedEnd ?? record.date) > boundary)
+        }
+    }
+
+    init?(morning morningID: UUID, following followingID: UUID,
+          calendar: Calendar, evidence: LearningEvidenceSnapshot) {
+        guard Self.canonicalPair(in: evidence.wakes.map(\.record), morningID: morningID,
+                                 followingID: followingID, calendar: calendar) != nil,
+              let morning = evidence.wakes.first(where: { $0.record.id == morningID }),
+              let following = evidence.wakes.first(where: { $0.record.id == followingID }),
+              morning.source == .verifiedObservation, following.source == .verifiedObservation,
+              !evidence.sleeps.contains(where: { $0.record.id == morningID || $0.record.id == followingID })
+        else { return nil }
+        let start = morning.record.wakeTime
+        let end = following.record.wakeTime
+        let naps = evidence.sleeps.filter { Self.affectsCoverage($0.record, start: start, end: end) }
+        guard naps.allSatisfy({ nap in
+            nap.record.date >= start && !nap.record.isOngoing &&
+                nap.record.observedEnd.map { $0 <= end } != false
+        }) else { return nil }
+        let napIDs = Set(naps.map { $0.record.id })
+        let breaks = evidence.sleeps.filter { Self.isRelevantBreak($0.record, napIDs: napIDs, start: start, end: end) }
+        guard !breaks.contains(where: { Self.crossesBoundary($0.record, start: start, end: end) }) else { return nil }
+        self.breaks = breaks
+        self.morning = morning
+        self.following = following
+        day = LearningDay(id: calendar.startOfDay(for: morning.record.day), morningWakeID: morningID,
+                          followingWakeID: followingID, nightID: nil)
+        followingLabel = calendar.startOfDay(for: following.record.day)
+        self.naps = naps.sorted {
+            $0.record.date == $1.record.date ? $0.record.id.uuidString < $1.record.id.uuidString :
+                $0.record.date < $1.record.date
+        }
+    }
+}
+
+fileprivate struct DaytimeReviewState {
+    let window: DaytimeReviewWindow
+    let metadata: ObservationProvenance
+    let binding: String
+    let coverage: LearningNapCoverage
+
+    init?(morning: UUID, following: UUID, calendar: Calendar,
+          evidence: LearningEvidenceSnapshot, metadata: ObservationProvenance,
+          matching recordedCalendar: Calendar? = nil) {
+        guard let window = DaytimeReviewWindow(morning: morning, following: following,
+                                              calendar: calendar, evidence: evidence) else { return nil }
+        func matches(_ recordedCalendar: Calendar) -> Bool {
+            if recordedCalendar == calendar { return true }
+            guard let recorded = DaytimeReviewWindow(morning: morning, following: following,
+                                                     calendar: recordedCalendar, evidence: evidence) else { return false }
+            return recorded.day == window.day && recorded.followingLabel == window.followingLabel
+        }
+        guard recordedCalendar.map(matches) != false else { return nil }
+        let key = DaytimeReviewWindow.key(morning, following)
+        var parts = ["daytime-revisions-v4",
+                     LearningEvidenceIdentity.date(window.day.id),
+                     LearningEvidenceIdentity.date(window.followingLabel),
+                     LearningDaytimeEvidence.identity(morning: window.morning, following: window.following, naps: window.naps),
+                     metadata.coverageGenerations?[key]?.revision.uuidString ?? "unprepared-membership"]
+        for wake in [window.morning, window.following] {
+            guard let revision = metadata.wakes[wake.record.id.uuidString]?.coverageRevision else { return nil }
+            parts.append(revision.uuidString)
+        }
+        let relevant = window.naps + window.breaks
+        let ids = relevant.map { $0.record.id }
+        guard Set(ids).count == ids.count else { return nil }
+        for sleep in relevant.sorted(by: { $0.record.id.uuidString < $1.record.id.uuidString }) {
+            guard let entry = metadata.sleeps[sleep.record.id.uuidString],
+                  entry.content == ObservationProvenance.sleepIdentity(sleep.record),
+                  let revision = entry.coverageRevision else { return nil }
+            parts.append(revision.uuidString)
+        }
+        self.window = window
+        self.metadata = metadata
+        binding = ObservationProvenance.digest(LearningEvidenceIdentity.pack(parts))
+        if let saved = metadata.daytime[key], saved.binding == binding,
+           saved.morningWakeID == morning, saved.followingWakeID == following,
+           saved.intent == ParentDaytimeAttestation.intent,
+           let recordedCalendar = saved.recordedCalendar,
+           metadata.coverageGenerations?[key]?.calendars?.contains(recordedCalendar) == true,
+           matches(recordedCalendar) {
+            coverage = LearningNapCoverage(rawValue: saved.coverage) ?? .unknown
+        } else {
+            coverage = .unknown
+        }
+    }
+}
+
+/// Immutable presentation of the daytime review. Night linkage is evaluated separately.
+struct DaytimeCoverageReview {
+    struct Nap: Equatable, Identifiable {
+        let id: UUID
+        let start: Date
+        let end: Date?
+        let source: LearningEvidenceSource
+
+        fileprivate init(_ evidence: LearningSleepEvidence) {
+            id = evidence.record.id
+            start = evidence.record.date
+            end = evidence.record.observedEnd
+            source = evidence.source
+        }
+    }
+
+    let day: LearningDay
+    let calendar: Calendar
+    let morningWakeTime: Date
+    let followingWakeTime: Date
+    let naps: [Nap]
+    let savedCoverage: LearningNapCoverage
+    let draft: DaytimeCoverageDraft
 }
 
 extension Notification.Name {
@@ -999,33 +1196,75 @@ extension Notification.Name {
     static let observationProvenanceDidChange = Notification.Name("observationProvenanceDidChange")
 }
 
-/// Explicit future parent answers, not inferred values or a completeness default.
-enum ParentDaytimeAttestation { case allNapsRecorded, notAllNapsRecorded }
+/// Deferral has no answer. Withdrawal is a separate action on an existing assertion.
+enum ParentDaytimeAttestation {
+    case allNapsRecorded, notAllNapsRecorded
+
+    fileprivate static let intent = "parent-attested-daytime-coverage-v1"
+
+    fileprivate var coverage: LearningNapCoverage {
+        self == .allNapsRecorded ? .confirmedComplete : .incomplete
+    }
+}
 
 /// Storage/domain pathway only. There is deliberately no production UI or provider caller.
 struct DaytimeCoverageDraft {
     private let defaults: UserDefaults
     private let morning: UUID
     private let following: UUID
+    private let calendar: Calendar
     private let binding: String
 
-    fileprivate init(defaults: UserDefaults, morning: UUID, following: UUID, binding: String) {
-        self.defaults = defaults; self.morning = morning; self.following = following; self.binding = binding
+    fileprivate init(defaults: UserDefaults, morning: UUID, following: UUID, calendar: Calendar, binding: String) {
+        self.defaults = defaults
+        self.morning = morning
+        self.following = following
+        self.calendar = calendar
+        self.binding = binding
+    }
+
+    private func currentState(calendar: Calendar) -> DaytimeReviewState? {
+        let adapter = TrustedObservationAdapter(defaults: defaults)
+        guard let current = adapter.reviewState(morning: morning, following: following, calendar: calendar, matching: self.calendar),
+              current.binding == binding else { return nil }
+        return current
     }
 
     @discardableResult
-    func submit(_ answer: ParentDaytimeAttestation, at now: Date, using storage: ObservationStorage) -> Bool {
+    func submit(_ answer: ParentDaytimeAttestation, at now: Date, using storage: ObservationStorage,
+                calendar: Calendar = .current) -> Bool {
         ObservationStorage.lock.lock()
         defer { ObservationStorage.lock.unlock() }
         guard storage.defaults === defaults, now.timeIntervalSinceReferenceDate.isFinite,
-              let end = DailyWakeRecordPersistence(defaults: defaults).load()?.first(where: { $0.id == following }),
-              end.wakeTime <= now,
-              let current = TrustedObservationAdapter(defaults: defaults).daytimeRevisionIdentity(morningWakeID: morning, followingWakeID: following),
-              current == binding, var metadata = ObservationProvenance.load(defaults) else { return false }
-        let coverage: LearningNapCoverage = answer == .allNapsRecorded ? .confirmedComplete : .incomplete
-        let key = LearningEvidenceIdentity.pack([morning.uuidString, following.uuidString])
+              let current = currentState(calendar: calendar),
+              current.window.following.record.wakeTime <= now else { return false }
+        var metadata = current.metadata
+        let key = DaytimeReviewWindow.key(morning, following)
         metadata.daytime[key] = .init(morningWakeID: morning, followingWakeID: following,
-            coverage: coverage.rawValue, binding: binding, intent: "parent-attested-daytime-coverage-v1")
-        return storage.metadata(metadata)
+            coverage: answer.coverage.rawValue, binding: binding,
+            intent: ParentDaytimeAttestation.intent, recordedCalendar: self.calendar)
+        return storage.metadata(metadata) && verifiesPersistedAnswer(answer, calendar: calendar)
+    }
+
+    /// Verifies the requested answer against this exact binding and current evidence.
+    func verifiesPersistedAnswer(_ answer: ParentDaytimeAttestation, calendar: Calendar = .current) -> Bool {
+        ObservationStorage.lock.lock()
+        defer { ObservationStorage.lock.unlock() }
+        return currentState(calendar: calendar)?.coverage == answer.coverage
+    }
+
+    @discardableResult
+    func withdraw(using storage: ObservationStorage, calendar: Calendar = .current) -> Bool {
+        ObservationStorage.lock.lock()
+        defer { ObservationStorage.lock.unlock() }
+        let key = DaytimeReviewWindow.key(morning, following)
+        guard storage.defaults === defaults, let current = currentState(calendar: calendar),
+              current.coverage != .unknown, let generation = current.metadata.coverageGenerations?[key]
+        else { return false }
+        var metadata = current.metadata
+        metadata.rotateCoverage(key: key, generation: generation)
+        guard storage.metadata(metadata), let persisted = ObservationProvenance.load(defaults) else { return false }
+        return persisted.daytime[key] == nil &&
+            persisted.coverageGenerations?[key]?.revision == metadata.coverageGenerations?[key]?.revision
     }
 }
