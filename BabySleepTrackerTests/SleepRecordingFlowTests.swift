@@ -116,9 +116,9 @@ final class SleepRecordingFlowTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         let persistence = SleepRecordPersistence(defaults: defaults)
         let sleep = SleepRecord(date: start, duration: 0, kind: .nightSleep, isOngoing: true)
-        var draft = AwakeBreakDraft(parent: sleep, now: now)
-        let record = try XCTUnwrap(draft.record(existing: [], now: now))
         XCTAssertTrue(persistence.save([sleep]))
+        var draft = AwakeBreakDraft(parent: try XCTUnwrap(persistence.load()?.first), now: now)
+        let record = try XCTUnwrap(draft.record(existing: [], now: now))
         XCTAssertTrue(persistence.saveRecording(record, now: now))
         let savedParent = try XCTUnwrap(persistence.load()?.first(where: { $0.id == sleep.id }))
         XCTAssertTrue(savedParent.isOngoing)
@@ -135,7 +135,7 @@ final class SleepRecordingFlowTests: XCTestCase {
         let sleep = parent
         let other = SleepRecord(date: now, duration: 10)
         XCTAssertTrue(persistence.save([sleep, other]))
-        let draft = AwakeBreakDraft(parent: sleep, now: now)
+        let draft = AwakeBreakDraft(parent: try XCTUnwrap(persistence.load()?.first { $0.id == sleep.id }), now: now)
         let record = try XCTUnwrap(draft.record(existing: [], now: now))
         let notification = expectation(forNotification: .sleepRecordsDidChange, object: nil) { _ in
             let loaded = persistence.load() ?? []
@@ -145,7 +145,14 @@ final class SleepRecordingFlowTests: XCTestCase {
         wait(for: [notification], timeout: 1)
         XCTAssertEqual(persistence.load()?.map(\.id), [sleep.id, other.id, record.id])
         // A second sheet with a different ID must not duplicate the same interval.
-        let duplicate = try XCTUnwrap(draft.record(existing: [], now: now))
+        let currentParent = try XCTUnwrap(persistence.load()?.first { $0.id == sleep.id })
+        let duplicateDraft = AwakeBreakDraft(parent: currentParent, now: now)
+        XCTAssertEqual(duplicateDraft.validationMessage(existing: persistence.load()!, now: now),
+                       "This interval overlaps an existing awake break. Review its start and end.")
+        let duplicate = try XCTUnwrap(duplicateDraft.record(existing: [], now: now))
+        XCTAssertEqual(duplicate.parentRevision, currentParent.persistedRevision)
+        XCTAssertNotNil(duplicate.parentRevision)
+        XCTAssertNotEqual(duplicate.id, record.id)
         XCTAssertFalse(persistence.saveRecording(duplicate, now: now))
         XCTAssertEqual(persistence.load()?.count, 3)
     }

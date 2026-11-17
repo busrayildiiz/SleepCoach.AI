@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		B20000000000000000000022 /* TrustedObservationCorrectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000021; };
+		B20000000000000000000012 /* TrustedObservationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000011; };
+		B20000000000000000000002 /* ObservationProvenance.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000001; };
 		B10000000000000000000006 /* LearningEligibilityEvaluatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000005 /* LearningEligibilityEvaluatorTests.swift */; };
 		B10000000000000000000004 /* LearningEligibilityEvaluator.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000003 /* LearningEligibilityEvaluator.swift */; };
 		B10000000000000000000002 /* LearningEligibility.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000001 /* LearningEligibility.swift */; };
@@ -124,6 +127,9 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		B20000000000000000000021 /* TrustedObservationCorrectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrustedObservationCorrectionTests.swift; sourceTree = "<group>"; };
+		B20000000000000000000011 /* TrustedObservationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrustedObservationTests.swift; sourceTree = "<group>"; };
+		B20000000000000000000001 /* ObservationProvenance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObservationProvenance.swift; sourceTree = "<group>"; };
 		B10000000000000000000005 /* LearningEligibilityEvaluatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LearningEligibilityEvaluatorTests.swift; sourceTree = "<group>"; };
 		B10000000000000000000003 /* LearningEligibilityEvaluator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LearningEligibilityEvaluator.swift; sourceTree = "<group>"; };
 		B10000000000000000000001 /* LearningEligibility.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LearningEligibility.swift; sourceTree = "<group>"; };
@@ -261,6 +267,8 @@
                 AC2000000000000000000001,
                 AE3000000000000000000001,
 				FA294726304667BD00BE2E20 /* SleepWakeTimeWorkflowTests.swift */,
+				B20000000000000000000011 /* TrustedObservationTests.swift */,
+				B20000000000000000000021 /* TrustedObservationCorrectionTests.swift */,
 				FA5488D22FAEB964002BC18B /* BabySleepTrackerTests.swift */,
 				FA5488D92FAEB98D002BC18B /* AddRecorViewModelTests.swift */,
 				FA5488DB2FAEBBD4002BC18B /* SleepAPITests.swift */,
@@ -450,6 +458,7 @@
 				B10000000000000000000003 /* LearningEligibilityEvaluator.swift */,
 				AC1000000000000000000001 /* SleepRecordingFlow.swift */,
 				FA2947243046678A00BE2E20 /* SleepWakeTimeWorkflow.swift */,
+				B20000000000000000000001 /* ObservationProvenance.swift */,
 				FAEF10732F530D3100E76FD4 /* SleepTimelineCalculator.swift */,
 				FAEF10752F530D3100E76FD4 /* SleepRecordPersistence.swift */,
 				FAEF10772F530D3100E76FD4 /* SleepOverviewCalculator.swift */,
@@ -608,6 +617,8 @@
 				FA04E41F30325C8700EFF932 /* AgeBasedSleepProfileTests.swift in Sources */,
 				FA41DF5E303380BF005F63A3 /* DaytimePredictionAgentTests.swift in Sources */,
 				FA294727304667BD00BE2E20 /* SleepWakeTimeWorkflowTests.swift in Sources */,
+				B20000000000000000000012 /* TrustedObservationTests.swift in Sources */,
+				B20000000000000000000022 /* TrustedObservationCorrectionTests.swift in Sources */,
 				FA5488DA2FAEB98D002BC18B /* AddRecorViewModelTests.swift in Sources */,
 				FA04E4173032567000EFF932 /* SleepListViewModelTests.swift in Sources */,
 				FA04E4213032567000EFF932 /* SleepTimelineCalculatorTests.swift in Sources */,
@@ -673,6 +684,7 @@
 				FAEF10782F530D3100E76FD4 /* SleepOverviewCalculator.swift in Sources */,
 				FAEF107A2F530D3100E76FD4 /* DailyWakeRecordPersistence.swift in Sources */,
 				FA2947253046678A00BE2E20 /* SleepWakeTimeWorkflow.swift in Sources */,
+				B20000000000000000000002 /* ObservationProvenance.swift in Sources */,
 				FAEF107C2F530D3100E76FD4 /* SleepStateCalculator.swift in Sources */,
 				FA7232E12FDCCB1D00647487 /* NightPredictionAgent.swift in Sources */,
 				FAEF10662F4E5A1E00E76FD4 /* SleepListViewModel.swift in Sources */,

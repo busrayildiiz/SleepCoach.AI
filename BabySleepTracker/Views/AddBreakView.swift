@@ -7,6 +7,7 @@ struct AddBreakView: View {
     @State private var draft: AwakeBreakDraft
     @State private var submission = RecordingSubmission()
     @State private var saveFailed = false
+    @State private var cancellationFailed = false
     @State private var showsParent = false
 
     init(parent: SleepRecord, editingBreak: SleepRecord? = nil, existingBreaks: [SleepRecord] = [], onSave: @escaping (SleepRecord) -> Bool) {
@@ -21,7 +22,7 @@ struct AddBreakView: View {
                 title: draft.editing == nil ? "Add Awake Break" : "Edit Awake Break",
                 saveTitle: draft.editing == nil ? "Save Awake Break" : "Save Changes",
                 saveEnabled: !submission.isSubmitted && draft.validationMessage(existing: existingBreaks, now: Date()) == nil,
-                onCancel: { dismiss() }, onSave: save
+                onCancel: cancel, onSave: save
             ) {
                 parentContext
                 VStack(alignment: .leading, spacing: 10) {
@@ -56,13 +57,20 @@ struct AddBreakView: View {
                 }
                 .tint(RecordingColor.accent)
             }
-            .alert("Could Not Save", isPresented: $saveFailed) {
+            .alert(cancellationFailed ? "Could Not Cancel" : "Could Not Save", isPresented: $saveFailed) {
                 Button("OK", role: .cancel) { }
             } message: {
-                Text("The sleep session may have changed or this interval is already recorded. Your changes are still here; review the record and try again.")
+                Text(cancellationFailed
+                     ? "Cancellation could not be saved. Your entry is still open; try Cancel again."
+                     : "The sleep session may have changed or this interval is already recorded. Your changes are still here; review the record and try again.")
             }
         }
         .tint(RecordingColor.accent)
+        .onDisappear { if !showsParent { _ = draft.abandon() } }
+        .interactiveDismissDisabled(draft.requiresExplicitCancellation)
+    }
+    private func cancel() {
+        if draft.abandon() { dismiss() } else { cancellationFailed = true; saveFailed = true }
     }
 
     private var parentContext: some View {
@@ -125,7 +133,8 @@ struct AddBreakView: View {
     }
 
     private func save() {
-        submission.submit(draft.record(existing: existingBreaks, now: Date()), save: { record in
+        cancellationFailed = false
+        submission.submit(draft: draft, existing: existingBreaks, now: Date(), save: { record in
             let saved = onSave(record)
             saveFailed = !saved
             return saved

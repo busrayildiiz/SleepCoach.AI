@@ -10,10 +10,18 @@ struct SleepRecordingDraft {
     var start: Date
     var end: Date
     var isOngoing: Bool
+    private let observationID: UUID
+    private let creationIntent: ObservationCreationIntent?
+    private let initialStart: Date
+    private var initialEnd: Date
 
     init(defaultDate: Date, editing: SleepRecord? = nil, now: Date = Date()) {
+        observationID = editing?.id ?? UUID()
+        creationIntent = ObservationCreationIntent(recordID: observationID)
         start = editing?.date ?? min(defaultDate, now.addingTimeInterval(-3600))
         end = editing.map { $0.observedEnd ?? $0.date } ?? min(start.addingTimeInterval(3600), now)
+        initialStart = start
+        initialEnd = end
         isOngoing = editing?.isOngoing ?? false
     }
 
@@ -22,7 +30,11 @@ struct SleepRecordingDraft {
         guard isOngoing else { return }
         isOngoing = false
         end = now
+        initialEnd = end
     }
+    var requiresExplicitCancellation: Bool { creationIntent?.requiresExplicitCancellation == true }
+    @discardableResult
+    func abandon() -> Bool { creationIntent?.abandon() ?? true }
 
     func validationMessage(now: Date) -> String? {
         if start > now { return "Start must not be in the future." }
@@ -35,27 +47,53 @@ struct SleepRecordingDraft {
 
     func record(kind: SleepKind, editing: SleepRecord? = nil, now: Date) -> SleepRecord? {
         guard kind != .break, validationMessage(now: now) == nil else { return nil }
-        return SleepRecord(
-            id: editing?.id ?? UUID(), date: start,
+        var record = SleepRecord(
+            id: observationID, date: start,
             duration: isOngoing ? 0 : Int(end.timeIntervalSince(start) / 60),
             kind: kind, parentNapID: editing?.parentNapID, isOngoing: isOngoing,
             createdAt: editing?.createdAt ?? now, endDate: isOngoing ? nil : end
         )
+        record.recordingDraft = true
+        record.recordingBaseline = editing.map(ObservationProvenance.sleepIdentity)
+        record.recordingRevision = editing?.persistedRevision
+        record.creationIntent = creationIntent
+        return record
+    }
+
+    fileprivate func captureForSubmission(_ record: SleepRecord, editing: SleepRecord?) -> SleepObservationCapture? {
+        // Save is an actual observation submission only when applicable boundaries were
+        // deliberately entered. Constructors and automatic End Sleep prefills never attest.
+        if (start != initialStart && (isOngoing || end != initialEnd)) ||
+            (editing?.isOngoing == true && start == initialStart && end != initialEnd) {
+            return SleepObservationCapture(record: record, previous: editing, confirmsStart: start != initialStart)
+        }
+        return nil
     }
 }
 
 struct AwakeBreakDraft {
     let parent: SleepRecord
     let editing: SleepRecord?
+    private let observationID: UUID
+    private let creationIntent: ObservationCreationIntent?
+    private let initialStart: Date
+    private let initialEnd: Date
     var start: Date
     var end: Date
+    var requiresExplicitCancellation: Bool { creationIntent?.requiresExplicitCancellation == true }
+    @discardableResult
+    func abandon() -> Bool { creationIntent?.abandon() ?? true }
 
     init(parent: SleepRecord, editing: SleepRecord? = nil, now: Date = Date()) {
         self.parent = parent
         self.editing = editing
+        observationID = editing?.id ?? UUID()
+        creationIntent = ObservationCreationIntent(recordID: observationID)
         start = editing?.date ?? parent.date
         end = editing.map { $0.observedEnd ?? $0.date }
             ?? min(parent.date.addingTimeInterval(300), parent.observedEnd ?? now, now)
+        initialStart = start
+        initialEnd = end
     }
 
     func validationMessage(existing: [SleepRecord], now: Date) -> String? {
@@ -78,9 +116,22 @@ struct AwakeBreakDraft {
 
     func record(existing: [SleepRecord], now: Date) -> SleepRecord? {
         guard validationMessage(existing: existing, now: now) == nil else { return nil }
-        return SleepRecord(id: editing?.id ?? UUID(), date: start,
+        var record = SleepRecord(id: observationID, date: start,
                            duration: Int(end.timeIntervalSince(start) / 60), kind: .break,
                            parentNapID: parent.id, createdAt: editing?.createdAt ?? now, endDate: end)
+        record.recordingDraft = true
+        record.recordingBaseline = editing.map(ObservationProvenance.sleepIdentity)
+        record.recordingRevision = editing?.persistedRevision
+        record.creationIntent = creationIntent
+        record.parentBaseline = ObservationProvenance.sleepIdentity(parent)
+        record.parentRevision = parent.persistedRevision
+        return record
+    }
+
+    fileprivate func captureForSubmission(_ record: SleepRecord) -> SleepObservationCapture? {
+        guard start != initialStart, end != initialEnd else { return nil }
+        return SleepObservationCapture(record: record, previous: editing, confirmsStart: true,
+                                       intent: "parent-entered-awake-break-v1")
     }
 
     func netMinutes(existing: [SleepRecord], now: Date) -> Int {
@@ -106,6 +157,21 @@ enum RecordingSheet: Identifiable {
 struct RecordingSubmission {
     private(set) var isSubmitted = false
 
+    /// Audited observation form Save action. Building a draft or a record grants no trust.
+    mutating func submit(draft: SleepRecordingDraft, kind: SleepKind, editing: SleepRecord? = nil,
+                         now: Date, save: (SleepRecord) -> Bool, dismiss: () -> Void) {
+        guard var record = draft.record(kind: kind, editing: editing, now: now) else { return }
+        record.observationCapture = draft.captureForSubmission(record, editing: editing)
+        submit(record, save: save, dismiss: dismiss)
+    }
+
+    mutating func submit(draft: AwakeBreakDraft, existing: [SleepRecord], now: Date,
+                         save: (SleepRecord) -> Bool, dismiss: () -> Void) {
+        guard var record = draft.record(existing: existing, now: now) else { return }
+        record.observationCapture = draft.captureForSubmission(record)
+        submit(record, save: save, dismiss: dismiss)
+    }
+
     mutating func submit(_ record: SleepRecord?, save: (SleepRecord) -> Bool, dismiss: () -> Void) {
         guard !isSubmitted, let record else { return }
         isSubmitted = true
@@ -126,3 +192,20 @@ final class RecordingUITestLLMAgent: SleepCoachLLMAgentProtocol {
     }
 }
 #endif
+
+/// Opaque, transient capture capability. A source enum or decoded record cannot mint it.
+struct SleepObservationCapture {
+    let content: String
+    let previousContent: String?
+    let confirmsStart: Bool
+    let intent: String
+    let creationOperationID: UUID?
+    fileprivate init(record: SleepRecord, previous: SleepRecord?, confirmsStart: Bool,
+                     intent: String = "parent-entered-sleep-boundaries-v1") {
+        self.intent = intent
+        creationOperationID = record.creationIntent?.operationID
+        self.confirmsStart = confirmsStart
+        content = ObservationProvenance.sleepIdentity(record)
+        previousContent = previous.map(ObservationProvenance.sleepIdentity)
+    }
+}

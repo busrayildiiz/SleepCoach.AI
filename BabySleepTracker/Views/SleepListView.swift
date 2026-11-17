@@ -92,8 +92,8 @@ struct SleepListView: View {
         loadRecords()
         return true
     }
-    private func saveRecords() {
-        sleepRecordPersistence.save(records)
+    private func deleteRecords(_ ids: Set<UUID>) {
+        if sleepRecordPersistence.delete(ids: ids) { loadRecords() }
     }
 
     private func loadRecords() {
@@ -106,7 +106,7 @@ struct SleepListView: View {
         wakeRecords = dailyWakeRecordPersistence.load() ?? []
     }
 
-    private func saveWakeTime(_ selectedTime: Date) -> Bool {
+    private func saveWakeTime(_ selectedTime: Date, capture: WakeObservationCapture?) -> Bool {
         #if DEBUG && targetEnvironment(simulator)
         if HomeCardTestFixture.enabled && ProcessInfo.processInfo.environment["HOME_WAKE_SAVE_FAIL"] == "1" { return false }
         #endif
@@ -117,13 +117,15 @@ struct SleepListView: View {
             wakeRecords: wakeRecords,
             sleepRecords: records,
             wakePersistence: dailyWakeRecordPersistence,
-            sleepPersistence: sleepRecordPersistence
+            sleepPersistence: sleepRecordPersistence,
+            capture: capture
         ).execute()
         var state = HomeWakeCardState(records: wakeRecords)
         state.accept(result)
         wakeRecords = state.records
         if result.sleepPersistenceSucceeded { records = result.updatedSleepRecords }
-        return result.wakePersistenceSucceeded
+        return result.wakePersistenceSucceeded && result.evidencePublicationSucceeded &&
+            (result.closedNightRecord == nil || result.sleepPersistenceSucceeded)
     }
 
     // MARK: - Derived Data
@@ -338,8 +340,7 @@ struct SleepListView: View {
 
     private func deleteDay(_ day: Date) {
         let cal = Calendar.current
-        records.removeAll { cal.isDate($0.date, inSameDayAs: day) }
-        saveRecords()
+        deleteRecords(Set(records.filter { cal.isDate($0.date, inSameDayAs: day) }.map(\.id)))
     }
 
 
@@ -368,6 +369,9 @@ struct SleepListView: View {
             .background(Color(.systemGroupedBackground))
             .navigationBarHidden(true)
             .onAppear {
+                _ = sleepRecordPersistence.storage.pruneRecoveryArchives()
+                _ = SleepWakeTimeWorkflow.resumePending(now: Date(), wakePersistence: dailyWakeRecordPersistence,
+                                                       sleepPersistence: sleepRecordPersistence)
                 loadRecords()
                 loadWakeRecords()
                 orchestrator.loadCachedLLMResponse()
@@ -430,8 +434,7 @@ struct SleepListView: View {
             onRecordUpsert: upsert,
             onBreakSaved: upsert,
             onDeleteRecords: { ids in
-                records.removeAll { ids.contains($0.id) }
-                saveRecords()
+                deleteRecords(ids)
             },
             onWakeTimeSave: saveWakeTime
         )

@@ -1,0 +1,909 @@
+import Foundation
+#if canImport(CryptoKit)
+import CryptoKit
+#else
+import Crypto
+#endif
+
+/// Additive sidecar. Canonical content is sensitive local data, never a log or network payload.
+/// Revisions are opaque UUIDs, not timestamps or hashes with process-dependent seeds.
+struct ObservationProvenance: Codable {
+    static let key = "observationProvenance_v1"
+    var version = 2
+    var sleeps: [String: Entry] = [:]
+    var wakes: [String: Entry] = [:]
+    var links: [String: NightWakeLink] = [:]
+    var daytime: [String: DaytimeAttestation] = [:]
+    // Optional for decoding metadata produced before membership generations existed.
+    var coverageGenerations: [String: CoverageGeneration]? = nil
+
+    struct CoverageGeneration: Codable {
+        let morningWakeID: UUID
+        let followingWakeID: UUID
+        var revision: UUID
+    }
+
+    struct Entry: Codable, Equatable {
+        let revision: UUID
+        let content: String
+        let source: String
+        let intent: String?
+        var coverageContent: String? = nil
+        var coverageRevision: UUID? = nil
+        var completedOperationID: UUID? = nil
+        var completedInput: String? = nil
+    }
+    struct DaytimeAttestation: Codable {
+        let morningWakeID: UUID
+        let followingWakeID: UUID
+        let coverage: String
+        let binding: String
+        let intent: String
+    }
+    struct NightWakeLink: Codable {
+        let nightID: UUID
+        let wakeID: UUID
+        let nightRevision: UUID
+        let wakeRevision: UUID
+    }
+
+    static func sleepIdentity(_ r: SleepRecord) -> String {
+        digest(LearningEvidenceIdentity.sleep(LearningSleepEvidence(record: r)))
+    }
+    static func wakeIdentity(_ r: DailyWakeRecord) -> String {
+        digest(LearningEvidenceIdentity.wake(LearningWakeEvidence(record: r)))
+    }
+    static func digest(_ value: String) -> String {
+        "sha256-v1:" + SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+    static func sleepCoverageIdentity(_ r: SleepRecord) -> String {
+        digest(LearningEvidenceIdentity.sleep(LearningSleepEvidence(record: r), includeLoggingTime: false))
+    }
+    static func load(_ defaults: UserDefaults) -> Self? {
+        guard let data = defaults.data(forKey: key),
+              let value = try? JSONDecoder().decode(Self.self, from: data), value.version == 2 else { return nil }
+        return value
+    }
+    static func entry(content: String) -> Entry {
+        Entry(revision: UUID(), content: content,
+              source: LearningEvidenceSource.recordedUnverified.rawValue, intent: nil)
+    }
+
+    /// Runs BEFORE record mutation: revocation survives a failed record write or edit/revert.
+    /// Unknown/corrupt sidecars recover only as unverified, never from record plausibility.
+    mutating func reconcile(sleeps records: [SleepRecord]) {
+        let old = sleeps
+        sleeps = [:]
+        for r in records {
+            let key = r.id.uuidString
+            let content = Self.sleepIdentity(r)
+            let coverage = Self.sleepCoverageIdentity(r)
+            if let previous = old[key], previous.content == content {
+                sleeps[key] = previous
+            } else if let previous = old[key], previous.coverageContent == coverage {
+                // Logging-only changes do not change the actual observed interval.
+                sleeps[key] = Entry(revision: UUID(), content: content, source: previous.source,
+                    intent: previous.intent, coverageContent: coverage, coverageRevision: previous.coverageRevision)
+            } else {
+                var entry = Self.entry(content: content)
+                entry.coverageContent = coverage
+                entry.coverageRevision = UUID()
+                sleeps[key] = entry
+            }
+        }
+        pruneLinks()
+    }
+    mutating func reconcile(wakes records: [DailyWakeRecord]) {
+        let old = wakes
+        wakes = [:]
+        for r in records {
+            let key = r.id.uuidString
+            let content = Self.wakeIdentity(r)
+            if let previous = old[key], previous.content == content { wakes[key] = previous }
+            else {
+                var entry = Self.entry(content: content)
+                entry.coverageContent = content
+                entry.coverageRevision = UUID()
+                wakes[key] = entry
+            }
+        }
+        pruneLinks()
+    }
+    /// Remove affected assertions BEFORE record writes. Returning to an old membership
+    /// cannot recreate a removed parent answer. Other cycles and logging-only edits survive.
+    private var trackedCoverage: [String: CoverageGeneration] {
+        var tracked = coverageGenerations ?? [:]
+        for (key, assertion) in daytime where tracked[key] == nil {
+            tracked[key] = .init(morningWakeID: assertion.morningWakeID, followingWakeID: assertion.followingWakeID, revision: UUID())
+        }
+        return tracked
+    }
+    mutating func revokeCoverage(old: [SleepRecord], new: [SleepRecord], wakes: [DailyWakeRecord]) {
+        for (key, var generation) in trackedCoverage {
+            func state(_ records: [SleepRecord]) -> [String]? {
+                guard let morning = wakes.first(where: { $0.id == generation.morningWakeID }),
+                      let following = wakes.first(where: { $0.id == generation.followingWakeID }) else { return nil }
+                let naps = records.filter { $0.kind == .dayNap && $0.date >= morning.wakeTime && $0.date < following.wakeTime }
+                let ids = Set(naps.map(\.id))
+                return (naps + records.filter { $0.kind == .break && $0.parentNapID.map(ids.contains) == true })
+                    .map(Self.sleepCoverageIdentity).sorted()
+            }
+            if state(old) != state(new) || state(new) == nil {
+                generation.revision = UUID()
+                coverageGenerations = coverageGenerations ?? [:]
+                coverageGenerations?[key] = generation
+                daytime.removeValue(forKey: key)
+            }
+        }
+    }
+    mutating func revokeCoverage(old: [DailyWakeRecord], new: [DailyWakeRecord]) {
+        let changed = Set((old + new).filter { record in
+            old.first(where: { $0.id == record.id }).map(Self.wakeIdentity) !=
+            new.first(where: { $0.id == record.id }).map(Self.wakeIdentity)
+        }.map(\.id))
+        for (key, var generation) in trackedCoverage where changed.contains(generation.morningWakeID) || changed.contains(generation.followingWakeID) {
+            generation.revision = UUID()
+            coverageGenerations = coverageGenerations ?? [:]
+            coverageGenerations?[key] = generation
+            daytime.removeValue(forKey: key)
+        }
+    }
+    private mutating func pruneLinks() {
+        links = links.filter { _, link in
+            sleeps[link.nightID.uuidString]?.revision == link.nightRevision &&
+            wakes[link.wakeID.uuidString]?.revision == link.wakeRevision
+        }
+    }
+}
+
+/// A form keeps this opaque capability across retries. The durable counter, rather
+/// than an expiring per-record tombstone, prevents a spent capability being reused.
+final class ObservationCreationIntent {
+    let operationID = UUID()
+    let recordID: UUID
+    fileprivate(set) var reservation: ObservationCreationReservation?
+    fileprivate(set) var isRetired = false
+    fileprivate var storage: ObservationStorage?
+    fileprivate var resumedOperations: Set<UUID> = []
+    init(recordID: UUID) { self.recordID = recordID }
+    var requiresExplicitCancellation: Bool {
+        ObservationStorage.lock.lock()
+        defer { ObservationStorage.lock.unlock() }
+        return storage != nil
+    }
+    @discardableResult
+    func abandon() -> Bool {
+        ObservationStorage.lock.lock()
+        defer { ObservationStorage.lock.unlock() }
+        isRetired = true
+        guard let storage else { return true }
+        var retired = storage.retireOperation(operationID, reservation: reservation)
+        for operation in resumedOperations {
+            if !storage.retireOperation(operation, reservation: nil) { retired = false }
+        }
+        return retired
+    }
+}
+
+struct ObservationCreationReservation: Codable, Equatable {
+    let ledgerID: UUID
+    let serial: UInt64
+    let operationID: UUID
+    let recordID: UUID
+    let collection: String
+    let content: String
+}
+
+/// Constant retired-operation state plus at most 64 unresolved creations. No TTL:
+/// removing a pending slot spends its serial permanently. Capacity fails closed;
+/// it never evicts another form's valid retry or grows with deleted observations.
+struct ObservationCreationLedger: Codable {
+    static let key = "observationCreationLedger_v1"
+    static let capacity = 64
+    static let processID = UUID()
+    let version: Int
+    let id: UUID
+    var next: UInt64
+    var pending: [ObservationCreationReservation]
+    var processID: UUID? = nil
+
+    static func load(_ defaults: UserDefaults) -> Self? {
+        guard let raw = defaults.data(forKey: key),
+              let value = try? JSONDecoder().decode(Self.self, from: raw), value.version == 1,
+              value.pending.count <= capacity,
+              Set(value.pending.map(\.serial)).count == value.pending.count,
+              value.pending.allSatisfy({ $0.ledgerID == value.id && $0.serial < value.next &&
+                  ["sleepRecords", "dailyWakeRecords_v1"].contains($0.collection) &&
+                  $0.content.hasPrefix("sha256-v1:") && $0.content.count == 74 }) else { return nil }
+        return value
+    }
+    static func contains(_ reservation: ObservationCreationReservation, defaults: UserDefaults) -> Bool {
+        ObservationStorage.lock.lock()
+        defer { ObservationStorage.lock.unlock() }
+        return !ObservationStorage.retirementRequests.contains(reservation.operationID) &&
+            load(defaults)?.pending.contains(reservation) == true
+    }
+}
+
+/// Local recovery journal, never evidence or an atomic transaction.
+struct ObservationCompletionPending: Codable {
+    static let key = "nightWakeCompletionPending_v1"
+    let version: Int
+    let originalNight: SleepRecord
+    let wake: DailyWakeRecord
+    let originalWakeContent: String?
+    let originalWakeRevision: UUID?
+    var operationID = UUID()
+    var recordedCalendar: Calendar? = nil
+    var wakeAttested = false
+    var onset: ObservationProvenance.Entry? = nil
+    var originalNightRevision: UUID? = nil
+    var expectedWake: ObservationProvenance.Entry? = nil
+    var expectedNight: ObservationProvenance.Entry? = nil
+    var isCancelled = false
+    var creation: ObservationCreationReservation? = nil
+    var selectedInput: Date? = nil
+
+    var originalNightContent: String { ObservationProvenance.sleepIdentity(originalNight) }
+    var night: SleepRecord {
+        let minutes = wake.wakeTime.timeIntervalSince(originalNight.date) / 60
+        let duration = minutes.isFinite && minutes > 0 && minutes < Double(Int.max) ? max(1, Int(minutes)) : 0
+        return SleepRecord(id: originalNight.id, date: originalNight.date, duration: duration,
+            kind: originalNight.kind, parentNapID: originalNight.parentNapID,
+            isOngoing: false, createdAt: originalNight.createdAt, endDate: wake.wakeTime)
+    }
+    func isValid(now: Date, calendar: Calendar) -> Bool {
+        guard version == 3, let recordedCalendar, now.timeIntervalSinceReferenceDate.isFinite,
+              originalNight.kind == .nightSleep, originalNight.isOngoing, originalNight.endDate == nil,
+              originalNight.date.timeIntervalSinceReferenceDate.isFinite,
+              originalNight.createdAt.timeIntervalSinceReferenceDate.isFinite,
+              wake.wakeTime.timeIntervalSinceReferenceDate.isFinite,
+              selectedInput.map({ $0.timeIntervalSinceReferenceDate.isFinite }) ?? true,
+              wake.day == recordedCalendar.startOfDay(for: wake.wakeTime),
+              wake.wakeTime > originalNight.date, wake.wakeTime <= now, night.duration > 0 else { return false }
+        if let creation {
+            guard creation.recordID == wake.id, creation.collection == "dailyWakeRecords_v1",
+                  creation.content == ObservationProvenance.wakeIdentity(wake) else { return false }
+        }
+        return (expectedWake.map { $0.content == ObservationProvenance.wakeIdentity(wake) } ?? true) &&
+            (expectedNight.map { $0.content == ObservationProvenance.sleepIdentity(night) } ?? true)
+    }
+    func canResume(defaults: UserDefaults, now: Date) -> Bool {
+        ObservationStorage.lock.lock()
+        defer { ObservationStorage.lock.unlock() }
+        guard !ObservationStorage.retirementRequests.contains(operationID),
+              creation.map({ !ObservationStorage.retirementRequests.contains($0.operationID) }) ?? true else { return false }
+        guard !isCancelled, isValid(now: now, calendar: recordedCalendar ?? .current),
+              let sleeps = SleepRecordPersistence(defaults: defaults).load(),
+              let actualNight = sleeps.first(where: { $0.id == originalNight.id }),
+              defaults.data(forKey: "dailyWakeRecords_v1") == nil || DailyWakeRecordPersistence(defaults: defaults).load() != nil else { return false }
+        // Pre-B1 arrays have no sidecar. Empty metadata confers no verification;
+        // the first persistence write initializes it (quarantining bad envelopes).
+        let metadata = ObservationProvenance.load(defaults) ?? ObservationProvenance()
+        let nightEntry = metadata.sleeps[originalNight.id.uuidString]
+        let actualContent = ObservationProvenance.sleepIdentity(actualNight)
+        if actualContent == originalNightContent {
+            guard (nightEntry?.content == originalNightContent && nightEntry?.revision == originalNightRevision) ||
+                    (expectedNight != nil && nightEntry == expectedNight) || (nightEntry == nil && originalNightRevision == nil) else { return false }
+        } else {
+            guard actualContent == ObservationProvenance.sleepIdentity(night),
+                  let expectedNight, nightEntry?.revision == expectedNight.revision,
+                  nightEntry?.content == expectedNight.content else { return false }
+        }
+        let currentWakes = DailyWakeRecordPersistence(defaults: defaults).load() ?? []
+        let scope = recordedCalendar ?? .current
+        guard !currentWakes.contains(where: { scope.isDate($0.day, inSameDayAs: wake.day) && $0.id != wake.id }) else { return false }
+        let actualWake = currentWakes.first { $0.id == wake.id }
+        if let creation, actualWake == nil,
+           !ObservationCreationLedger.contains(creation, defaults: defaults) { return false }
+        let wakeEntry = metadata.wakes[wake.id.uuidString]
+        if actualWake.map(ObservationProvenance.wakeIdentity) == originalWakeContent {
+            return wakeEntry?.revision == originalWakeRevision || (expectedWake != nil && wakeEntry == expectedWake)
+        }
+        return actualWake.map(ObservationProvenance.wakeIdentity) == ObservationProvenance.wakeIdentity(wake) &&
+            expectedWake != nil && wakeEntry?.revision == expectedWake?.revision && wakeEntry?.content == expectedWake?.content
+    }
+    static func load(_ defaults: UserDefaults) -> Self? {
+        guard let data = defaults.data(forKey: key),
+              let pending = try? JSONDecoder().decode(Self.self, from: data), pending.version == 3 else { return nil }
+        return pending
+    }
+}
+
+/// Standalone wake publication has its own exact receipt. An unchanged editor can
+/// resume this original intent; it cannot manufacture a new parent confirmation.
+struct StandaloneWakePending: Codable {
+    static let key = "standaloneWakePending_v1"
+    var version = 1
+    let operationID: UUID
+    let wake: DailyWakeRecord
+    let originalContent: String?
+    let originalRevision: UUID?
+    let calendar: Calendar
+    let attested: Bool
+    var expected: ObservationProvenance.Entry? = nil
+    var creation: ObservationCreationReservation? = nil
+    var isCancelled = false
+    var selectedInput: Date? = nil
+
+    static func load(_ defaults: UserDefaults) -> Self? {
+        guard let data = defaults.data(forKey: key),
+              let value = try? JSONDecoder().decode(Self.self, from: data), value.version == 1 else { return nil }
+        return value
+    }
+    func canResume(defaults: UserDefaults, now: Date) -> Bool {
+        ObservationStorage.lock.lock()
+        defer { ObservationStorage.lock.unlock() }
+        guard !ObservationStorage.retirementRequests.contains(operationID),
+              creation.map({ !ObservationStorage.retirementRequests.contains($0.operationID) }) ?? true else { return false }
+        guard !isCancelled, wake.wakeTime.timeIntervalSinceReferenceDate.isFinite,
+              now.timeIntervalSinceReferenceDate.isFinite, wake.wakeTime <= now,
+              selectedInput.map({ $0.timeIntervalSinceReferenceDate.isFinite }) ?? true,
+              wake.day == calendar.startOfDay(for: wake.wakeTime),
+              expected.map({ $0.content == ObservationProvenance.wakeIdentity(wake) }) ?? true,
+              defaults.data(forKey: "dailyWakeRecords_v1") == nil || DailyWakeRecordPersistence(defaults: defaults).load() != nil else { return false }
+        if let creation {
+            guard creation.recordID == wake.id, creation.collection == "dailyWakeRecords_v1",
+                  creation.content == ObservationProvenance.wakeIdentity(wake) else { return false }
+        }
+        let wakes = DailyWakeRecordPersistence(defaults: defaults).load() ?? []
+        guard !wakes.contains(where: { $0.id != wake.id && calendar.isDate($0.day, inSameDayAs: wake.day) }) else { return false }
+        let actual = wakes.first { $0.id == wake.id }
+        if let creation, actual == nil, !ObservationCreationLedger.contains(creation, defaults: defaults) { return false }
+        let entry = ObservationProvenance.load(defaults)?.wakes[wake.id.uuidString]
+        if actual.map(ObservationProvenance.wakeIdentity) == originalContent {
+            return entry?.revision == originalRevision || (expected != nil && entry == expected)
+        }
+        return actual.map(ObservationProvenance.wakeIdentity) == ObservationProvenance.wakeIdentity(wake) &&
+            expected != nil && entry?.revision == expected?.revision && entry?.content == expected?.content
+    }
+}
+
+/// UserDefaults provides no cross-key disk transaction. The sidecar is revoked first;
+/// records are written second; positive attestations are published only after read-back.
+/// This verifies the defaults API result, not fsync or protection against hostile local writes.
+/// Notifications run only at finalized write boundaries, without retaining any
+/// recursive ownership. Receipts are rechecked by callers after observers return.
+final class ObservationPersistenceLock {
+    private let mutex = NSRecursiveLock()
+    private let depthKey = "SleepCoach.ObservationPersistenceLock.depth." + UUID().uuidString
+    func lock() {
+        mutex.lock()
+        Thread.current.threadDictionary[depthKey] = depth + 1
+    }
+    func unlock() {
+        precondition(depth > 0)
+        Thread.current.threadDictionary[depthKey] = depth - 1
+        mutex.unlock()
+    }
+    private var depth: Int { Thread.current.threadDictionary[depthKey] as? Int ?? 0 }
+    func withoutLock(_ body: () -> Void) {
+        let held = depth
+        for _ in 0..<held { unlock() }
+        defer { for _ in 0..<held { lock() } }
+        body()
+    }
+}
+
+struct ObservationStorage {
+    static let lock = ObservationPersistenceLock()
+    /// Cleanup hints only. Durable authority remains in the monotonic ledger and
+    /// cancellation journals. Failed retirement is retried with the next writer.
+    fileprivate static var retirementRequests: Set<UUID> = []
+    static func post(_ name: Notification.Name, userInfo: [AnyHashable: Any]? = nil) {
+        lock.withoutLock { NotificationCenter.default.post(name: name, object: nil, userInfo: userInfo) }
+    }
+    static func completionIsActive(_ operation: UUID, defaults: UserDefaults) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !retirementRequests.contains(operation) else { return false }
+        if let pending = ObservationCompletionPending.load(defaults), pending.operationID == operation {
+            return !pending.isCancelled && (pending.creation.map { !retirementRequests.contains($0.operationID) } ?? true)
+        }
+        if let pending = StandaloneWakePending.load(defaults), pending.operationID == operation {
+            return !pending.isCancelled && (pending.creation.map { !retirementRequests.contains($0.operationID) } ?? true)
+        }
+        return false
+    }
+    let defaults: UserDefaults
+    /// Serialized synchronous storage I/O, not an application callback. Notifications
+    /// and receipt callbacks use the unlocked boundaries below.
+    let write: (Data, String) -> Bool
+    let clock: () -> Date
+
+    init(defaults: UserDefaults, writer: ((Data, String) -> Bool)? = nil, clock: @escaping () -> Date = Date.init) {
+        self.clock = clock
+        self.defaults = defaults
+        write = writer ?? { data, key in
+            defaults.set(data, forKey: key)
+            return defaults.data(forKey: key) == data
+        }
+    }
+
+    private func creationLedger() -> ObservationCreationLedger? {
+        if defaults.data(forKey: ObservationCreationLedger.key) == nil {
+            return .init(version: 1, id: UUID(), next: 0, pending: [], processID: ObservationCreationLedger.processID)
+        }
+        guard var ledger = ObservationCreationLedger.load(defaults) else { return nil }
+        if ledger.processID != ObservationCreationLedger.processID {
+            // Forms are transient, not decoded after process death. Retire abandoned
+            // reservations permanently, retaining both journals' restartable intents.
+            let night = ObservationCompletionPending.load(defaults)
+            let standalone = StandaloneWakePending.load(defaults)
+            let recoverable = [night?.isCancelled == false ? night?.creation?.operationID : nil,
+                               standalone?.isCancelled == false ? standalone?.creation?.operationID : nil].compactMap { $0 }
+            ledger.pending.removeAll { !recoverable.contains($0.operationID) }
+            ledger.processID = ObservationCreationLedger.processID
+            guard saveCreationLedger(ledger) else { return nil }
+        }
+        return ledger
+    }
+    private func saveCreationLedger(_ ledger: ObservationCreationLedger) -> Bool {
+        guard let data = try? JSONEncoder().encode(ledger), write(data, ObservationCreationLedger.key),
+              defaults.data(forKey: ObservationCreationLedger.key) == data else { return false }
+        return true
+    }
+    func reserveCreation(_ intent: ObservationCreationIntent, collection: String,
+                         content: String) -> ObservationCreationReservation? {
+        Self.lock.lock()
+        defer { Self.lock.unlock() }
+        guard !intent.isRetired, drainRetirements(), var ledger = creationLedger() else { return nil }
+        intent.storage = self
+        let reservation: ObservationCreationReservation
+        if let bound = intent.reservation {
+            guard bound.ledgerID == ledger.id, bound.recordID == intent.recordID,
+                  bound.collection == collection, bound.content == content else { return nil }
+            if ledger.pending.contains(bound) { return bound }
+            // A failed counter write may be retried only before another allocation.
+            guard bound.serial == ledger.next else { return nil }
+            reservation = bound
+        } else {
+            reservation = .init(ledgerID: ledger.id, serial: ledger.next, operationID: intent.operationID,
+                                recordID: intent.recordID, collection: collection, content: content)
+            intent.reservation = reservation
+        }
+        guard ledger.next < UInt64.max, ledger.pending.count < ObservationCreationLedger.capacity else { return nil }
+        ledger.next += 1
+        ledger.pending.append(reservation)
+        guard saveCreationLedger(ledger) else {
+            if defaults.data(forKey: ObservationCreationLedger.key) == nil { intent.reservation = nil }
+            return nil
+        }
+        return reservation
+    }
+    func bind(_ intent: ObservationCreationIntent) -> Bool {
+        Self.lock.lock()
+        defer { Self.lock.unlock() }
+        guard !intent.isRetired, drainRetirements() else { return false }
+        intent.storage = self
+        return true
+    }
+    func adopt(_ operation: UUID, by intent: ObservationCreationIntent?) {
+        Self.lock.lock()
+        defer { Self.lock.unlock() }
+        intent?.resumedOperations.insert(operation)
+    }
+    private func drainRetirements() -> Bool {
+        guard !Self.retirementRequests.isEmpty else { return true }
+        var candidates: [(UUID, ObservationCreationReservation?)] = []
+        for entry in ObservationCreationLedger.load(defaults)?.pending ?? [] {
+            candidates.append((entry.operationID, entry))
+        }
+        if let pending = ObservationCompletionPending.load(defaults) {
+            candidates.append((pending.operationID, pending.creation))
+        }
+        if let pending = StandaloneWakePending.load(defaults) {
+            candidates.append((pending.operationID, pending.creation))
+        }
+        for (operation, reservation) in candidates {
+            guard finishRetirementIfRequested(operation, reservation: reservation) else { return false }
+        }
+        return true
+    }
+    func finishRetirementIfRequested(_ operation: UUID, reservation: ObservationCreationReservation?) -> Bool {
+        Self.lock.lock()
+        defer { Self.lock.unlock() }
+        if Self.retirementRequests.contains(operation) { return retireOperation(operation, reservation: reservation) }
+        if let reservation, Self.retirementRequests.contains(reservation.operationID) {
+            return retireOperation(reservation.operationID, reservation: reservation)
+        }
+        return true
+    }
+    private func cancelOperationJournals(_ operation: UUID) -> Bool {
+        if var pending = ObservationCompletionPending.load(defaults),
+           pending.operationID == operation || pending.creation?.operationID == operation {
+            pending.isCancelled = true
+            guard journal(pending) else { return false }
+        }
+        if var pending = StandaloneWakePending.load(defaults),
+           pending.operationID == operation || pending.creation?.operationID == operation {
+            pending.isCancelled = true
+            guard standaloneJournal(pending) else { return false }
+        }
+        return true
+    }
+    fileprivate func retireOperation(_ operation: UUID, reservation: ObservationCreationReservation?) -> Bool {
+        Self.retirementRequests.insert(operation)
+        let reservation = reservation ??
+            ObservationCompletionPending.load(defaults).flatMap { $0.operationID == operation ? $0.creation : nil } ??
+            StandaloneWakePending.load(defaults).flatMap { $0.operationID == operation ? $0.creation : nil }
+        guard cancelOperationJournals(operation) else { return false }
+        if let reservation {
+            guard let ledger = ObservationCreationLedger.load(defaults), ledger.id == reservation.ledgerID else { return false }
+            // A full ledger or a failed allocation may leave a tentative, never-issued
+            // serial on the form. It has no durable authority to consume.
+            if reservation.serial < ledger.next {
+                guard finishCreation(reservation) else { return false }
+            } else if reservation.serial != ledger.next { return false }
+        }
+        guard removeCancelledJournals(operation) else { return false }
+        Self.retirementRequests.remove(operation)
+        return true
+    }
+    private func removeCancelledJournals(_ operation: UUID) -> Bool {
+        if let pending = ObservationCompletionPending.load(defaults), pending.isCancelled,
+           pending.operationID == operation || pending.creation?.operationID == operation {
+            defaults.removeObject(forKey: ObservationCompletionPending.key)
+            guard defaults.data(forKey: ObservationCompletionPending.key) == nil else { return false }
+        }
+        if let pending = StandaloneWakePending.load(defaults), pending.isCancelled,
+           pending.operationID == operation || pending.creation?.operationID == operation {
+            defaults.removeObject(forKey: StandaloneWakePending.key)
+            guard defaults.data(forKey: StandaloneWakePending.key) == nil else { return false }
+        }
+        return true
+    }
+    func finishCreation(_ reservation: ObservationCreationReservation) -> Bool {
+        Self.lock.lock()
+        defer { Self.lock.unlock() }
+        guard var ledger = ObservationCreationLedger.load(defaults), ledger.id == reservation.ledgerID,
+              reservation.serial < ledger.next else { return false }
+        guard ledger.pending.contains(reservation) else { return true }
+        ledger.pending.removeAll { $0 == reservation }
+        return saveCreationLedger(ledger)
+    }
+    /// Revoke before deleting, even if the observation write later fails. No serial
+    /// can be allocated again, and unrelated pending operations remain resumable.
+    func cancelCreations(collection: String, deletedIDs: Set<UUID>) -> Bool {
+        Self.lock.lock()
+        defer { Self.lock.unlock() }
+        guard !deletedIDs.isEmpty, defaults.data(forKey: ObservationCreationLedger.key) != nil else { return true }
+        guard var ledger = ObservationCreationLedger.load(defaults) else { return false }
+        let oldCount = ledger.pending.count
+        ledger.pending.removeAll { $0.collection == collection && deletedIDs.contains($0.recordID) }
+        return oldCount == ledger.pending.count || saveCreationLedger(ledger)
+    }
+    // Bounded quarantine, not a second observation history. Unsupported journal payloads
+    // retain only digest/size; metadata raw bytes are limited to 8 KiB for seven days.
+    // Purging runs on writes/startup; there is no background disk-expiry guarantee.
+    struct RecoveryEntry: Codable {
+        let digest: String
+        let savedAt: Date
+        let byteCount: Int
+        var raw: Data?
+    }
+    static let archiveKeys = ["observationProvenanceRecovery_v1", "nightWakeCompletionRecovery_v1"]
+    static let archiveTTL: TimeInterval = 7 * 86400
+    static let archiveCount = 4
+    static let archiveBytes = 32768
+    // Digest-only journal diagnostics have a fixed 2 KiB share. Together the two
+    // archives never exceed 32 KiB after successful maintenance.
+    private func archiveByteLimit(_ key: String) -> Int {
+        key == Self.archiveKeys[0] ? Self.archiveBytes - 2048 : 2048
+    }
+    static let cleanupRequestKey = "observationRecoveryCleanupPending_v1"
+
+    /// Written before a deletion. A failed cleanup is retried on subsequent writes
+    /// and Home startup; the marker contains no observation or parent information.
+    func requestRecoveryCleanup() -> Bool {
+        Self.lock.lock()
+        defer { Self.lock.unlock() }
+        let data = Data("true".utf8)
+        return write(data, Self.cleanupRequestKey) && defaults.data(forKey: Self.cleanupRequestKey) == data
+    }
+
+    private func reportMaintenanceFailures(_ stores: [String]) {
+        _ = requestRecoveryCleanup()
+        Self.post(.observationRecoveryMaintenanceDidFail, userInfo: ["stores": stores])
+    }
+
+    private func bounded(_ entries: [RecoveryEntry], now: Date, removingRaw: Bool = false, byteLimit: Int) -> [RecoveryEntry] {
+        var result = entries.filter { $0.savedAt <= now && now.timeIntervalSince($0.savedAt) < Self.archiveTTL }
+            .sorted { $0.savedAt == $1.savedAt ? $0.digest < $1.digest : $0.savedAt > $1.savedAt }
+        result = result.map { var entry = $0; if (entry.raw?.count ?? 0) > 8192 { entry.raw = nil }; return entry }
+        if removingRaw { result = result.map { var entry = $0; entry.raw = nil; return entry } }
+        result = Array(result.prefix(Self.archiveCount))
+        while !result.isEmpty && ((try? JSONEncoder().encode(result).count) ?? Int.max) > byteLimit { result.removeLast() }
+        return result
+    }
+    private func recovery(_ key: String) -> [RecoveryEntry]? {
+        guard let data = defaults.data(forKey: key) else { return [] }
+        if let entries = try? JSONDecoder().decode([RecoveryEntry].self, from: data) { return entries }
+        // Bound the previous uncommitted archive format on first access; don't invent an
+        // observation time. savedAt is explicitly the time of quarantine conversion.
+        if let legacy = try? JSONDecoder().decode([String: Data].self, from: data) {
+            return legacy.sorted { $0.key < $1.key }.map {
+                RecoveryEntry(digest: $0.key, savedAt: clock(), byteCount: $0.value.count,
+                    raw: key == Self.archiveKeys[0] && $0.value.count <= 8192 ? $0.value : nil)
+            }
+        }
+        return nil
+    }
+    @discardableResult
+    func pruneRecoveryArchives(removingRaw: Bool = false, retireCancelled: Bool = true) -> Bool {
+        Self.lock.lock()
+        defer { Self.lock.unlock() }
+        let failures = maintainRecoveryArchives(removingRaw: removingRaw, retireCancelled: retireCancelled)
+        if !failures.isEmpty { reportMaintenanceFailures(failures) }
+        return failures.isEmpty
+    }
+    /// No callbacks: observation writers collect failures here and deliver them only
+    /// after their observation write attempt, including when that attempt fails.
+    private func maintainRecoveryArchives(removingRaw: Bool, retireCancelled: Bool) -> [String] {
+        // Metadata is written before observations. Do not retire a cancellation
+        // tombstone during that pre-write phase of a deletion that may still fail.
+        let removingRaw = removingRaw || defaults.data(forKey: Self.cleanupRequestKey) != nil
+        let mayRetireCancelled = retireCancelled
+        var failures: [String] = []
+        for key in Self.archiveKeys where defaults.data(forKey: key) != nil {
+            var entries = recovery(key)
+            if entries == nil, removingRaw, let raw = defaults.data(forKey: key) {
+                // A successful user deletion may retire an unreadable derived archive as
+                // a digest-only diagnostic; it never tries to restore its unknown contents.
+                entries = [RecoveryEntry(digest: ObservationProvenance.digest(raw.base64EncodedString()),
+                    savedAt: clock(), byteCount: raw.count, raw: nil)]
+            }
+            guard let entries, let data = try? JSONEncoder().encode(bounded(entries, now: clock(),
+                removingRaw: removingRaw || key == Self.archiveKeys[1], byteLimit: archiveByteLimit(key))),
+                  write(data, key), defaults.data(forKey: key) == data else {
+                failures.append(key)
+                continue
+            }
+        }
+        let pending = ObservationCompletionPending.load(defaults)
+        if let raw = defaults.data(forKey: ObservationCompletionPending.key),
+           pending == nil || (mayRetireCancelled && pending?.isCancelled == true) {
+            if preserve(raw, recoveryKey: Self.archiveKeys[1]) {
+                defaults.removeObject(forKey: ObservationCompletionPending.key)
+                if defaults.data(forKey: ObservationCompletionPending.key) != nil { failures.append(ObservationCompletionPending.key) }
+            } else { failures.append(ObservationCompletionPending.key) }
+        }
+        let standalone = StandaloneWakePending.load(defaults)
+        if let raw = defaults.data(forKey: StandaloneWakePending.key),
+           standalone == nil || (mayRetireCancelled && standalone?.isCancelled == true) {
+            if preserve(raw, recoveryKey: Self.archiveKeys[1]) {
+                defaults.removeObject(forKey: StandaloneWakePending.key)
+                if defaults.data(forKey: StandaloneWakePending.key) != nil { failures.append(StandaloneWakePending.key) }
+            } else { failures.append(StandaloneWakePending.key) }
+        }
+        if failures.isEmpty, retireCancelled {
+            defaults.removeObject(forKey: Self.cleanupRequestKey)
+            if defaults.data(forKey: Self.cleanupRequestKey) != nil { failures.append(Self.cleanupRequestKey) }
+        }
+        return failures
+    }
+    func preserve(_ raw: Data, recoveryKey: String) -> Bool {
+        Self.lock.lock()
+        defer { Self.lock.unlock() }
+        guard Self.archiveKeys.contains(recoveryKey), let existing = recovery(recoveryKey) else { return false }
+        let digest = ObservationProvenance.digest(raw.base64EncodedString())
+        var entries = existing.filter { $0.digest != digest }
+        entries.append(RecoveryEntry(digest: digest, savedAt: existing.first(where: { $0.digest == digest })?.savedAt ?? clock(), byteCount: raw.count,
+            raw: recoveryKey == Self.archiveKeys[0] && raw.count <= 8192 ? raw : nil))
+        guard let data = try? JSONEncoder().encode(bounded(entries, now: clock(), byteLimit: archiveByteLimit(recoveryKey))), write(data, recoveryKey),
+              defaults.data(forKey: recoveryKey) == data else { return false }
+        return true
+    }
+    func journal(_ pending: ObservationCompletionPending) -> Bool {
+        Self.lock.lock()
+        defer { Self.lock.unlock() }
+        guard let data = try? JSONEncoder().encode(pending), write(data, ObservationCompletionPending.key),
+              defaults.data(forKey: ObservationCompletionPending.key) == data else { return false }
+        return true
+    }
+    func standaloneJournal(_ pending: StandaloneWakePending) -> Bool {
+        Self.lock.lock()
+        defer { Self.lock.unlock() }
+        guard let data = try? JSONEncoder().encode(pending), write(data, StandaloneWakePending.key),
+              defaults.data(forKey: StandaloneWakePending.key) == data else { return false }
+        return true
+    }
+    func updateJournal(_ pending: ObservationCompletionPending) -> Bool {
+        Self.lock.lock()
+        defer { Self.lock.unlock() }
+        guard let current = ObservationCompletionPending.load(defaults),
+              current.operationID == pending.operationID, !current.isCancelled else { return false }
+        return journal(pending)
+    }
+    func updateJournal(_ pending: StandaloneWakePending) -> Bool {
+        Self.lock.lock()
+        defer { Self.lock.unlock() }
+        guard let current = StandaloneWakePending.load(defaults),
+              current.operationID == pending.operationID, !current.isCancelled else { return false }
+        return standaloneJournal(pending)
+    }
+    func metadata(_ value: ObservationProvenance, notify: Bool = true) -> Bool {
+        Self.lock.lock()
+        defer { Self.lock.unlock() }
+        let outcome = writeMetadata(value)
+        if !outcome.failures.isEmpty { reportMaintenanceFailures(outcome.failures) }
+        if outcome.saved && notify { Self.post(.observationProvenanceDidChange) }
+        return outcome.saved
+    }
+    private func writeMetadata(_ value: ObservationProvenance) -> (saved: Bool, failures: [String]) {
+        // Preserve malformed/unsupported metadata for local recovery before replacing it.
+        // The observation arrays are never migrated or erased during this recovery.
+        if let raw = defaults.data(forKey: ObservationProvenance.key), ObservationProvenance.load(defaults) == nil {
+            guard preserve(raw, recoveryKey: "observationProvenanceRecovery_v1") else { return (false, []) }
+        }
+        guard let data = try? JSONEncoder().encode(value), write(data, ObservationProvenance.key),
+              defaults.data(forKey: ObservationProvenance.key) == data else { return (false, []) }
+        return (true, maintainRecoveryArchives(removingRaw: false, retireCancelled: false))
+    }
+    func save<T: Encodable>(_ records: T, key: String, provenance: ObservationProvenance, expectedData: Data?) -> Bool {
+        Self.lock.lock()
+        defer { Self.lock.unlock() }
+        guard let data = try? JSONEncoder().encode(records),
+              defaults.data(forKey: key) == expectedData else { return false }
+        let outcome = writeMetadata(provenance)
+        // Internal receipt/journal callbacks must not permit a stale collection write.
+        let saved = outcome.saved && defaults.data(forKey: key) == expectedData &&
+            write(data, key) && defaults.data(forKey: key) == data
+        if !outcome.failures.isEmpty { reportMaintenanceFailures(outcome.failures) }
+        if outcome.saved { Self.post(.observationProvenanceDidChange) }
+        return saved
+    }
+}
+
+/// Internal future-provider boundary. Coverage stays unknown until B2 supplies confirmation.
+/// Never connected to production prediction authorization. B3 must pass this snapshot to
+/// the unchanged evaluator with explicit date/calendar/policy, consume daily structural
+/// findings and qualifies, and handle authorization separately. The legacy orchestrator's
+/// 14-day aggregate DQS, presence-based completeDays and weighted score are diagnostics;
+/// none can replace parent attestations or override a blocking finding.
+struct TrustedObservationAdapter {
+    let defaults: UserDefaults
+
+    /// B2 must call this before presenting a genuine parent confirmation, then submit
+    /// the explicit answer through the returned draft. Merely preparing it asserts nothing.
+    func beginDaytimeConfirmation(morningWakeID: UUID, followingWakeID: UUID) -> DaytimeCoverageDraft? {
+        ObservationStorage.lock.lock()
+        defer { ObservationStorage.lock.unlock() }
+        guard daytimeRevisionIdentity(morningWakeID: morningWakeID, followingWakeID: followingWakeID) != nil,
+              var metadata = ObservationProvenance.load(defaults) else { return nil }
+        let key = LearningEvidenceIdentity.pack([morningWakeID.uuidString, followingWakeID.uuidString])
+        if metadata.coverageGenerations?[key] == nil {
+            metadata.coverageGenerations = metadata.coverageGenerations ?? [:]
+            metadata.coverageGenerations?[key] = .init(morningWakeID: morningWakeID, followingWakeID: followingWakeID, revision: UUID())
+            guard ObservationStorage(defaults: defaults).metadata(metadata) else { return nil }
+        }
+        guard let binding = daytimeRevisionIdentity(morningWakeID: morningWakeID, followingWakeID: followingWakeID) else { return nil }
+        return DaytimeCoverageDraft(defaults: defaults, morning: morningWakeID, following: followingWakeID, binding: binding)
+    }
+
+    /// Preserves Phase A exclusions: logging time and previous-night links are independent
+    /// of daytime coverage. Semantic revisions still detect a timing edit followed by revert.
+    func daytimeRevisionIdentity(morningWakeID: UUID, followingWakeID: UUID) -> String? {
+        ObservationStorage.lock.lock()
+        defer { ObservationStorage.lock.unlock() }
+        guard let metadata = ObservationProvenance.load(defaults),
+              defaults.data(forKey: "sleepRecords") == nil || SleepRecordPersistence(defaults: defaults).load() != nil,
+              defaults.data(forKey: "dailyWakeRecords_v1") == nil || DailyWakeRecordPersistence(defaults: defaults).load() != nil else { return nil }
+        let evidence = snapshot(includeDaytime: false)
+        guard let morning = evidence.wakes.first(where: { $0.record.id == morningWakeID }),
+              let following = evidence.wakes.first(where: { $0.record.id == followingWakeID }),
+              morning.record.wakeTime < following.record.wakeTime else { return nil }
+        let naps = evidence.sleeps.filter { $0.record.kind == .dayNap &&
+            $0.record.date >= morning.record.wakeTime && $0.record.date < following.record.wakeTime }
+        let key = LearningEvidenceIdentity.pack([morningWakeID.uuidString, followingWakeID.uuidString])
+        var parts = ["daytime-revisions-v3", LearningDaytimeEvidence.identity(morning: morning, following: following, naps: naps),
+                     metadata.coverageGenerations?[key]?.revision.uuidString ?? "unprepared-membership"]
+        for wake in [morning, following] {
+            guard let entry = metadata.wakes[wake.record.id.uuidString],
+                  entry.content == ObservationProvenance.wakeIdentity(wake.record),
+                  let revision = entry.coverageRevision else { return nil }
+            parts.append(revision.uuidString)
+        }
+        let napIDs = Set(naps.map { $0.record.id })
+        let relevant = naps + evidence.sleeps.filter { $0.record.kind == .break && $0.record.parentNapID.map(napIDs.contains) == true }
+        for sleep in relevant.sorted(by: { $0.record.id.uuidString < $1.record.id.uuidString }) {
+            guard let entry = metadata.sleeps[sleep.record.id.uuidString],
+                  entry.content == ObservationProvenance.sleepIdentity(sleep.record),
+                  let revision = entry.coverageRevision else { return nil }
+            parts.append(revision.uuidString)
+        }
+        return ObservationProvenance.digest(LearningEvidenceIdentity.pack(parts))
+    }
+
+    func snapshot(includeDaytime: Bool = true) -> LearningEvidenceSnapshot {
+        ObservationStorage.lock.lock()
+        defer { ObservationStorage.lock.unlock() }
+        let sleeps = SleepRecordPersistence(defaults: defaults).load() ?? []
+        let wakes = DailyWakeRecordPersistence(defaults: defaults).load() ?? []
+        let metadata = ObservationProvenance.load(defaults)
+        func source(_ entry: ObservationProvenance.Entry?, content: String, intents: Set<String>) -> LearningEvidenceSource {
+            guard let entry, entry.content == content,
+                  let source = LearningEvidenceSource(rawValue: entry.source) else { return .reconstructedLegacy }
+            if source == .verifiedObservation && !intents.contains(entry.intent ?? "") {
+                return .recordedUnverified
+            }
+            return source
+        }
+        let sleepEvidence = sleeps.map { r in
+            LearningSleepEvidence(record: r, source: source(metadata?.sleeps[r.id.uuidString],
+                                                          content: ObservationProvenance.sleepIdentity(r),
+                                                          intents: r.kind == .break ? ["parent-entered-awake-break-v1"] :
+                                                            ["parent-entered-sleep-boundaries-v1", "parent-confirmed-night-completion-v1"]))
+        }
+        let wakeEvidence = wakes.map { r -> LearningWakeEvidence in
+            let wakeSource = source(metadata?.wakes[r.id.uuidString], content: ObservationProvenance.wakeIdentity(r),
+                                    intents: ["parent-entered-morning-wake-v1"])
+            var linkedNight: UUID?
+            if let link = metadata?.links[r.id.uuidString], link.wakeID == r.id,
+               let night = sleeps.first(where: { $0.id == link.nightID }),
+               night.kind == .nightSleep, !night.isOngoing, night.observedEnd == r.wakeTime,
+               let nightEntry = metadata?.sleeps[night.id.uuidString],
+               nightEntry.content == ObservationProvenance.sleepIdentity(night),
+               nightEntry.revision == link.nightRevision,
+               let wakeEntry = metadata?.wakes[r.id.uuidString],
+               wakeEntry.content == ObservationProvenance.wakeIdentity(r),
+               wakeEntry.revision == link.wakeRevision {
+                linkedNight = night.id
+            }
+            return LearningWakeEvidence(record: r, source: wakeSource, completedNightID: linkedNight)
+        }
+        var daytime: [LearningDaytimeEvidence] = []
+        if includeDaytime, let metadata {
+            for saved in metadata.daytime.values {
+                guard saved.intent == "parent-attested-daytime-coverage-v1",
+                      let coverage = LearningNapCoverage(rawValue: saved.coverage),
+                      coverage != .unknown,
+                      saved.binding == daytimeRevisionIdentity(morningWakeID: saved.morningWakeID, followingWakeID: saved.followingWakeID),
+                      let morning = wakeEvidence.first(where: { $0.record.id == saved.morningWakeID }),
+                      let following = wakeEvidence.first(where: { $0.record.id == saved.followingWakeID }) else { continue }
+                let naps = sleepEvidence.filter { $0.record.kind == .dayNap &&
+                    $0.record.date >= morning.record.wakeTime && $0.record.date < following.record.wakeTime }
+                daytime.append(LearningDaytimeEvidence(morning: morning, following: following,
+                    coverage: coverage, source: .verifiedObservation, naps: naps))
+            }
+        }
+        return LearningEvidenceSnapshot(sleeps: sleepEvidence, wakes: wakeEvidence, daytime: daytime)
+    }
+}
+
+extension Notification.Name {
+    /// Diagnostics contain storage-key names only, never raw data or record IDs.
+    static let observationRecoveryMaintenanceDidFail = Notification.Name("observationRecoveryMaintenanceDidFail")
+    static let observationProvenanceDidChange = Notification.Name("observationProvenanceDidChange")
+}
+
+/// Explicit future parent answers, not inferred values or a completeness default.
+enum ParentDaytimeAttestation { case allNapsRecorded, notAllNapsRecorded }
+
+/// Storage/domain pathway only. There is deliberately no production UI or provider caller.
+struct DaytimeCoverageDraft {
+    private let defaults: UserDefaults
+    private let morning: UUID
+    private let following: UUID
+    private let binding: String
+
+    fileprivate init(defaults: UserDefaults, morning: UUID, following: UUID, binding: String) {
+        self.defaults = defaults; self.morning = morning; self.following = following; self.binding = binding
+    }
+
+    @discardableResult
+    func submit(_ answer: ParentDaytimeAttestation, at now: Date, using storage: ObservationStorage) -> Bool {
+        ObservationStorage.lock.lock()
+        defer { ObservationStorage.lock.unlock() }
+        guard storage.defaults === defaults, now.timeIntervalSinceReferenceDate.isFinite,
+              let end = DailyWakeRecordPersistence(defaults: defaults).load()?.first(where: { $0.id == following }),
+              end.wakeTime <= now,
+              let current = TrustedObservationAdapter(defaults: defaults).daytimeRevisionIdentity(morningWakeID: morning, followingWakeID: following),
+              current == binding, var metadata = ObservationProvenance.load(defaults) else { return false }
+        let coverage: LearningNapCoverage = answer == .allNapsRecorded ? .confirmedComplete : .incomplete
+        let key = LearningEvidenceIdentity.pack([morning.uuidString, following.uuidString])
+        metadata.daytime[key] = .init(morningWakeID: morning, followingWakeID: following,
+            coverage: coverage.rawValue, binding: binding, intent: "parent-attested-daytime-coverage-v1")
+        return storage.metadata(metadata)
+    }
+}
