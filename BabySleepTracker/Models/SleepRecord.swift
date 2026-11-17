@@ -24,6 +24,8 @@ struct SleepRecord: Identifiable, Codable {
     var persistedRevision: UUID? = nil
     var recordingRevision: UUID? = nil
     var creationIntent: ObservationCreationIntent? = nil
+    /// End Sleep route capability, transient and excluded from serialization.
+    var nightCompletionIntent: ObservationCreationIntent? = nil
 
     init(
         id: UUID = UUID(),

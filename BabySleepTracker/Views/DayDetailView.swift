@@ -23,7 +23,7 @@ struct DayDetailView: View {
     @Environment(\.dismiss) private var dismiss
 
     private let cal = Calendar.current
-    private let now = Date()
+    @State private var now = Date()
 
     // MARK: - Derived
 
@@ -107,6 +107,9 @@ struct DayDetailView: View {
                                  existingBreaks: breaks.filter { $0.parentNapID == parent.id },
                                  onSave: onBreakSaved)
                 }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .dailyWakeRecordsDidChange)) { _ in
+                now = Date()
             }
             .onReceive(NotificationCenter.default.publisher(for: .sleepRecordsDidChange)) { _ in
                 if let saved = SleepRecordPersistence().load() {

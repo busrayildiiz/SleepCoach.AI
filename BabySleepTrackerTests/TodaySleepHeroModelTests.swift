@@ -434,3 +434,40 @@ final class TodaySleepHeroModelTests: XCTestCase {
     }
 
 }
+
+extension TodaySleepHeroModelTests {
+    func testHomeNightCompletionDrivesHeroPlanWakePromptAndCurrentCardFromPersistence() throws {
+        let suite = "HomeNightCompletionPresentation-\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let sleeps = SleepRecordPersistence(defaults: defaults)
+        let wakes = DailyWakeRecordPersistence(defaults: defaults)
+        let endpoint = at(7).addingTimeInterval(0.125)
+        let action = at(8)
+        let original = SleepRecord(date: at(-4), duration: 0, kind: .nightSleep, isOngoing: true, createdAt: at(-4))
+        XCTAssertTrue(sleeps.save([original]))
+        let selected = try XCTUnwrap(sleeps.load()?.first)
+        var draft = SleepRecordingDraft(defaultDate: selected.date, editing: selected, now: action)
+        draft.prepareForEnding(at: action); draft.end = endpoint
+        var submission = RecordingSubmission()
+        submission.submit(draft: draft, kind: .nightSleep, editing: selected, now: action, save: {
+            NightSleepCompletion(submitted: $0, now: action, calendar: self.calendar,
+                sleepPersistence: sleeps, wakePersistence: wakes).execute().succeeded
+        }, dismiss: {})
+        XCTAssertTrue(submission.isSubmitted)
+        let persistedSleeps = try XCTUnwrap(sleeps.load())
+        let persistedWakes = try XCTUnwrap(wakes.load())
+        let hero = TodaySleepHeroModel.make(records: persistedSleeps, wakeRecords: persistedWakes, now: action,
+            calendar: calendar, routine: nil, displayName: "Parent", babyName: "Baby", proposals: [])
+        XCTAssertEqual(hero.mode, .morningConfirmed)
+        XCTAssertFalse(HomeWakeCardState(records: persistedWakes).isVisible(now: action, calendar: calendar))
+        XCTAssertEqual(HomeSleepCardPresentation.make(records: persistedSleeps, now: action, calendar: calendar).status, .missing)
+        let plan = TodayPlanPresentation.make(records: persistedSleeps, wakes: persistedWakes, hero: hero,
+            now: action, calendar: calendar, routine: nil, proposals: [])
+        let event = try XCTUnwrap(plan.items.first { $0.kind == .wake })
+        XCTAssertEqual(event.time, endpoint)
+        XCTAssertEqual(event.source, .recorded(try XCTUnwrap(persistedWakes.first).id))
+        XCTAssertEqual(event.visualState, .completed)
+        XCTAssertFalse(plan.overnightEndUnconfirmed)
+    }
+}

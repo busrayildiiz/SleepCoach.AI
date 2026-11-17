@@ -73,7 +73,9 @@ struct SleepWakeTimeWorkflow {
                               sleepPersistence: SleepRecordPersistence) -> SleepWakeTimeWorkflowResult? {
         ObservationStorage.lock.lock()
         defer { ObservationStorage.lock.unlock() }
-        guard let pending = ObservationCompletionPending.load(wakePersistence.defaults), pending.wakeAttested,
+        guard wakePersistence.storage.retireInvalidForwardCompletion(now: now) else { return nil }
+        guard let pending = ObservationCompletionPending.load(wakePersistence.defaults),
+              pending.wakeAttested || pending.nightCompletionInput != nil,
               pending.canResume(defaults: wakePersistence.defaults, now: now) else {
             guard let standalone = StandaloneWakePending.load(wakePersistence.defaults),
                   standalone.canResume(defaults: wakePersistence.defaults, now: now) else { return nil }
@@ -144,7 +146,7 @@ struct SleepWakeTimeWorkflow {
             wakePersistence.storage.adopt(standalone.operationID, by: capture?.creationIntent)
             return completeStandalone(standalone)
         }
-        if let pending, pending.wakeAttested,
+        if let pending, pending.nightCompletionInput == nil, pending.wakeAttested,
            (pending.wake.wakeTime == selectedWakeTime || pending.selectedInput == selectedWakeTime),
            pending.canResume(defaults: defaults, now: now) {
             wakePersistence.storage.adopt(pending.operationID, by: capture?.creationIntent)
@@ -155,7 +157,7 @@ struct SleepWakeTimeWorkflow {
         guard let time = calendar.date(bySettingHour: parts.hour ?? 7, minute: parts.minute ?? 0, second: 0, of: today),
               time <= now else { return result(time: nil) }
         // A still-open editor may carry seconds on its original DatePicker value.
-        if let pending, pending.wakeAttested, pending.wake.wakeTime == time,
+        if let pending, pending.nightCompletionInput == nil, pending.wakeAttested, pending.wake.wakeTime == time,
            pending.canResume(defaults: defaults, now: now) {
             wakePersistence.storage.adopt(pending.operationID, by: capture?.creationIntent)
             return complete(pending)
@@ -249,7 +251,7 @@ struct SleepWakeTimeWorkflow {
         return result(time: time, wakeOK: true, evidenceOK: published)
     }
 
-    private func complete(_ original: ObservationCompletionPending) -> SleepWakeTimeWorkflowResult {
+    fileprivate func complete(_ original: ObservationCompletionPending) -> SleepWakeTimeWorkflowResult {
         guard wakePersistence.defaults === sleepPersistence.defaults,
               original.canResume(defaults: wakePersistence.defaults, now: now) else { return result(time: original.wake.wakeTime) }
         let defaults = wakePersistence.defaults
@@ -284,7 +286,8 @@ struct SleepWakeTimeWorkflow {
         }
         // Receipts were captured before either service emitted synchronous notifications.
         // A matching timestamp, ID, or latest metadata entry alone is never sufficient.
-        guard wakeMatches(wake, transaction.expectedWake), nightMatches(closed, transaction.expectedNight),
+        guard transaction.canResume(defaults: defaults, now: now),
+              wakeMatches(wake, transaction.expectedWake), nightMatches(closed, transaction.expectedNight),
               let wakeEntry = transaction.expectedWake, let nightEntry = transaction.expectedNight,
               var metadata = ObservationProvenance.load(defaults),
               ObservationCompletionPending.load(defaults)?.operationID == transaction.operationID,
@@ -303,12 +306,201 @@ struct SleepWakeTimeWorkflow {
                 metadata.sleeps[closed.id.uuidString] = verified(nightEntry, intent: "parent-confirmed-night-completion-v1")
             }
             metadata.links[wake.id.uuidString] = .init(nightID: closed.id, wakeID: wake.id,
-                nightRevision: nightEntry.revision, wakeRevision: wakeEntry.revision)
+                nightRevision: nightEntry.revision, wakeRevision: wakeEntry.revision,
+                recordedCalendar: transaction.recordedCalendar)
         }
-        let published = wakePersistence.storage.metadata(metadata) && wakeMatches(wake, wakeEntry) && nightMatches(closed, nightEntry)
+        if let input = transaction.nightCompletionInput {
+            // Revision-bound acknowledgement for an exact retry; never a new attestation.
+            metadata.wakes[wake.id.uuidString]?.completedOperationID = transaction.operationID
+            metadata.wakes[wake.id.uuidString]?.completedInput = input
+            metadata.sleeps[closed.id.uuidString]?.completedOperationID = transaction.operationID
+            metadata.sleeps[closed.id.uuidString]?.completedInput = input
+        }
+        let saved = wakePersistence.storage.metadata(metadata)
+        let finalMetadata = ObservationProvenance.load(defaults)
+        let link = finalMetadata?.links[wake.id.uuidString]
+        let linkMatches = !transaction.wakeAttested ||
+            (link?.nightID == closed.id && link?.wakeID == wake.id &&
+             link?.nightRevision == nightEntry.revision && link?.wakeRevision == wakeEntry.revision)
+        let completionReceiptsMatch = transaction.nightCompletionInput.map { input in
+            finalMetadata?.sleeps[closed.id.uuidString]?.completedOperationID == transaction.operationID &&
+            finalMetadata?.sleeps[closed.id.uuidString]?.completedInput == input &&
+            finalMetadata?.wakes[wake.id.uuidString]?.completedOperationID == transaction.operationID &&
+            finalMetadata?.wakes[wake.id.uuidString]?.completedInput == input
+        } ?? true
+        let published = saved && completionReceiptsMatch && transaction.canResume(defaults: defaults, now: now) &&
+            ObservationStorage.completionIsActive(transaction.operationID, defaults: defaults) &&
+            wakeMatches(wake, wakeEntry) && nightMatches(closed, nightEntry) && linkMatches
         if published, ObservationCompletionPending.load(defaults)?.operationID == transaction.operationID {
             defaults.removeObject(forKey: pendingKey)
         }
         return result(time: time, closed: closed, wakeOK: true, sleepOK: true, evidenceOK: published)
+    }
+}
+
+struct NightSleepCompletionResult {
+    enum State { case completed, invalidSubmission, staleNight, wakeConflict, ambiguousWakes, recoveryPending, recoveryFailure, incomplete }
+    let state: State
+    let sleepPersisted: Bool
+    let wakePersisted: Bool
+    /// Journal publication/acknowledgement, not a claim of verified learning evidence.
+    let evidencePublished: Bool
+    var succeeded: Bool { state == .completed }
+    var message: String {
+        switch state {
+        case .wakeConflict: return "A different morning wake is already recorded for this day. Your existing wake was kept. Review it before finishing this night."
+        case .ambiguousWakes: return "More than one morning wake exists for this day. Review those records before finishing this night."
+        case .staleNight: return "This night changed or was deleted. Reopen it before saving."
+        case .invalidSubmission: return "Keep the original night start and choose a valid ending to finish this night."
+        case .recoveryFailure: return "Recovery could not be safely saved. Your observations have been kept. Please retry Save before starting another night completion."
+        case .recoveryPending: return "A sleep or wake entry still needs recovery. Retry its original submission or cancel it before starting another."
+        case .incomplete: return "Night completion is incomplete. Saved observations have been kept. Retry Save to finish synchronization, or Cancel to keep them without completing recovery."
+        case .completed: return ""
+        }
+    }
+}
+
+/// Home End Sleep only. The recording submission supplies its expected content,
+/// revision and transient capabilities; ordinary edits never enter this command.
+/// Uses B1's journal and receipt publisher, not the wake editor's date normalization.
+struct NightSleepCompletion {
+    let submitted: SleepRecord
+    let now: Date
+    let calendar: Calendar
+    let sleepPersistence: SleepRecordPersistence
+    let wakePersistence: DailyWakeRecordPersistence
+
+    func execute() -> NightSleepCompletionResult {
+        ObservationStorage.lock.lock()
+        defer { ObservationStorage.lock.unlock() }
+        let defaults = sleepPersistence.defaults
+        var expectedWake: DailyWakeRecord?
+        func result(_ state: NightSleepCompletionResult.State, publication: Bool = false) -> NightSleepCompletionResult {
+            let nightOK = sleepPersistence.load()?.contains {
+                ObservationProvenance.sleepIdentity($0) == ObservationProvenance.sleepIdentity(submitted)
+            } == true
+            let wakeOK = expectedWake.map { expected in
+                wakePersistence.load()?.contains {
+                    ObservationProvenance.wakeIdentity($0) == ObservationProvenance.wakeIdentity(expected)
+                } == true
+            } ?? false
+            return .init(state: state, sleepPersisted: nightOK, wakePersisted: wakeOK, evidencePublished: publication)
+        }
+        guard defaults === wakePersistence.defaults else { return result(.invalidSubmission) }
+        guard wakePersistence.storage.retireInvalidForwardCompletion(now: now) else { return result(.recoveryFailure) }
+        if submitted.nightCompletionIntent?.isRetired == true { return result(.staleNight) }
+        guard submitted.recordingDraft,
+              submitted.kind == .nightSleep, !submitted.isOngoing,
+              let end = submitted.endDate, end.timeIntervalSinceReferenceDate.isFinite,
+              now.timeIntervalSinceReferenceDate.isFinite, end <= now,
+              end.timeIntervalSince(submitted.date) >= 60,
+              let intent = submitted.nightCompletionIntent,
+              submitted.creationIntent?.isRetired != true,
+              wakePersistence.storage.bind(intent),
+              defaults.data(forKey: "sleepRecords") == nil || sleepPersistence.load() != nil,
+              defaults.data(forKey: "dailyWakeRecords_v1") == nil || wakePersistence.load() != nil else {
+            return result(.invalidSubmission)
+        }
+        let input = ObservationCompletionPending.completionInput(baseline: submitted.recordingBaseline ?? "",
+            revision: submitted.recordingRevision, completed: submitted)
+        let sleeps = sleepPersistence.load() ?? []
+        let wakes = wakePersistence.load() ?? []
+        guard let current = sleeps.first(where: { $0.id == submitted.id }) else { return result(.staleNight) }
+        let metadata = ObservationProvenance.load(defaults)
+        let workflow = SleepWakeTimeWorkflow(selectedWakeTime: end, now: now, calendar: calendar,
+            wakeRecords: [], sleepRecords: [], wakePersistence: wakePersistence, sleepPersistence: sleepPersistence)
+        func complete(_ pending: ObservationCompletionPending) -> NightSleepCompletionResult {
+            let outcome = workflow.complete(pending)
+            let scope = pending.recordedCalendar ?? calendar
+            let candidates = (wakePersistence.load() ?? []).filter { scope.isDate($0.day, inSameDayAs: pending.wake.day) }
+            let canonicalMatches = candidates.count == 1 && candidates.first?.id == pending.wake.id
+            let persisted = result(.incomplete, publication: outcome.evidencePublicationSucceeded && canonicalMatches)
+            if persisted.sleepPersisted && persisted.wakePersisted && persisted.evidencePublished {
+                wakePersistence.storage.rememberNightCompletion(pending, submissionInput: input, by: intent)
+            }
+            return .init(state: persisted.sleepPersisted && persisted.wakePersisted && persisted.evidencePublished ? .completed : .incomplete,
+                         sleepPersisted: persisted.sleepPersisted, wakePersisted: persisted.wakePersisted,
+                         evidencePublished: persisted.evidencePublished)
+        }
+        if let pending = ObservationCompletionPending.load(defaults), pending.nightCompletionInput != nil,
+           pending.nightCompletionInput == input ||
+            (pending.originalNightContent == submitted.recordingBaseline &&
+             submitted.recordingRevision == current.persistedRevision &&
+             pending.originalNightContent == ObservationProvenance.sleepIdentity(current) &&
+             ObservationProvenance.sleepIdentity(pending.night) == ObservationProvenance.sleepIdentity(submitted)) {
+            guard pending.canResume(defaults: defaults, now: now) else { return result(.staleNight) }
+            wakePersistence.storage.adopt(pending.operationID, by: intent)
+            expectedWake = pending.wake
+            return complete(pending)
+        }
+        let adopted = intent.nightCompletionAcknowledgement
+        let acknowledgedOperation = adopted?.operationID ?? intent.operationID
+        let acknowledgedInput = adopted?.persistedInput ?? input
+        let acknowledgementMatches = adopted.map { $0.submissionInput == input && $0.nightID == submitted.id } ?? true
+        if acknowledgementMatches,
+           let wake = wakes.first(where: { metadata?.wakes[$0.id.uuidString]?.completedOperationID == acknowledgedOperation }),
+           wake.wakeTime == end,
+           let nightEntry = metadata?.sleeps[current.id.uuidString],
+           let wakeEntry = metadata?.wakes[wake.id.uuidString],
+           nightEntry.completedOperationID == acknowledgedOperation, nightEntry.completedInput == acknowledgedInput,
+           wakeEntry.completedOperationID == acknowledgedOperation, wakeEntry.completedInput == acknowledgedInput,
+           adopted.map({ $0.wakeID == wake.id && $0.nightRevision == nightEntry.revision && $0.wakeRevision == wakeEntry.revision }) ?? true,
+           nightEntry.revision == current.persistedRevision, wakeEntry.revision == wake.persistedRevision,
+           nightEntry.content == ObservationProvenance.sleepIdentity(submitted),
+           nightEntry.content == ObservationProvenance.sleepIdentity(current),
+           wakeEntry.content == ObservationProvenance.wakeIdentity(wake) {
+            let scope = adopted?.calendar ?? calendar
+            guard wakes.filter({ scope.isDate($0.day, inSameDayAs: wake.day) }).count == 1 else {
+                return result(.ambiguousWakes)
+            }
+            expectedWake = wake
+            return result(.completed, publication: true)
+        }
+        let day = calendar.startOfDay(for: end)
+        let candidates = wakes.filter { calendar.isDate($0.day, inSameDayAs: day) }
+        guard candidates.count <= 1 else { return result(.ambiguousWakes) }
+        if let wake = candidates.first, wake.wakeTime != end { return result(.wakeConflict) }
+        // Preserve another operation, including malformed journals, rather than replacing
+        // its recovery context with a new snapshot.
+        guard defaults.data(forKey: ObservationCompletionPending.key) == nil,
+              defaults.data(forKey: StandaloneWakePending.key) == nil else { return result(.recoveryPending) }
+        // A retired creation serial cannot be recycled into a fresh completion,
+        // even when the first operation left a matching ordinary wake behind.
+        if let reservation = intent.reservation,
+           !ObservationCreationLedger.contains(reservation, defaults: defaults) { return result(.staleNight) }
+        guard current.kind == .nightSleep, current.isOngoing,
+              ObservationProvenance.sleepIdentity(current) == submitted.recordingBaseline,
+              current.persistedRevision == submitted.recordingRevision else { return result(.staleNight) }
+        var pending = ObservationCompletionPending(version: 3, originalNight: current,
+            wake: candidates.first ?? DailyWakeRecord(id: intent.recordID, day: day, wakeTime: end),
+            originalWakeContent: candidates.first.map(ObservationProvenance.wakeIdentity),
+            originalWakeRevision: candidates.first?.persistedRevision)
+        guard ObservationProvenance.sleepIdentity(pending.night) == ObservationProvenance.sleepIdentity(submitted) else {
+            return result(.invalidSubmission)
+        }
+        pending.operationID = intent.operationID
+        pending.recordedCalendar = calendar
+        pending.originalNightRevision = current.persistedRevision
+        pending.onset = metadata?.sleeps[current.id.uuidString]
+        pending.selectedInput = end
+        pending.nightCompletionInput = input
+        if let capture = submitted.observationCapture {
+            guard capture.content == ObservationProvenance.sleepIdentity(submitted),
+                  capture.previousContent == submitted.recordingBaseline,
+                  capture.creationOperationID == submitted.creationIntent?.operationID else { return result(.invalidSubmission) }
+            // A matching independent wake is reused without upgrading its trust or
+            // inferring a semantic association from timestamp equality.
+            pending.wakeAttested = candidates.isEmpty
+        }
+        if candidates.isEmpty {
+            guard let reservation = wakePersistence.storage.reserveCreation(intent, collection: "dailyWakeRecords_v1",
+                content: ObservationProvenance.wakeIdentity(pending.wake)) else { return result(.incomplete) }
+            pending.creation = reservation
+        }
+        guard pending.isValid(now: now, calendar: calendar), wakePersistence.storage.journal(pending) else {
+            return result(.incomplete)
+        }
+        expectedWake = pending.wake
+        return complete(pending)
     }
 }

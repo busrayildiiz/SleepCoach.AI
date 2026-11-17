@@ -4,22 +4,26 @@ struct AddRecordView: View {
     let defaultDate: Date
     let editingRecord: SleepRecord?
     let onSave: (SleepRecord) -> Bool
+    let onNightCompletion: ((SleepRecord) -> NightSleepCompletionResult)?
 
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var vm: AddRecordViewModel
     @State private var draft: SleepRecordingDraft
     @State private var submission = RecordingSubmission()
     @State private var saveFailed = false
+    @State private var completionMessage: String?
     @State private var cancellationFailed = false
     @State private var breakParent: SleepRecord?
     @State private var existingBreaks: [SleepRecord] = []
 
     init(defaultDate: Date, editingRecord: SleepRecord? = nil, vm: AddRecordViewModel,
          initialKind: SleepKind? = nil, endingOngoing: Bool = false,
+         onNightCompletion: ((SleepRecord) -> NightSleepCompletionResult)? = nil,
          onSave: @escaping (SleepRecord) -> Bool) {
         self.defaultDate = defaultDate
         self.editingRecord = editingRecord
         self.onSave = onSave
+        self.onNightCompletion = onNightCompletion
         self.vm = vm
         if let editingRecord { vm.kind = editingRecord.kind }
         else if let initialKind { vm.kind = initialKind }
@@ -67,7 +71,7 @@ struct AddRecordView: View {
             } message: {
                 Text(cancellationFailed
                      ? "Cancellation could not be saved. Your entry is still open; try Cancel again."
-                     : "The sleep session may have changed or this interval is already recorded. Your changes are still here; review the record and try again.")
+                     : completionMessage ?? "The sleep session may have changed or this interval is already recorded. Your changes are still here; review the record and try again.")
             }
             .onAppear(perform: loadBreaks)
             .onDisappear { if breakParent == nil { _ = draft.abandon() } }
@@ -99,13 +103,10 @@ struct AddRecordView: View {
     private func save() {
         cancellationFailed = false
         submission.submit(draft: draft, kind: vm.kind, editing: editingRecord, now: Date(), save: { record in
-            let saved = onSave(record)
-            if saved && record.isOngoing {
-                NotificationCenter.default.post(name: .sleepStillSleepingConfirmed, object: record.id,
-                                                userInfo: ["confirmedAt": Date()])
-            }
-            saveFailed = !saved
-            return saved
+            let result = RecordingSubmission.saveHomeRecord(record, now: Date(), onSave: onSave, onNightCompletion: onNightCompletion)
+            completionMessage = result.message
+            saveFailed = !result.succeeded
+            return result.succeeded
         }, dismiss: { dismiss() })
     }
     private func cancel() {

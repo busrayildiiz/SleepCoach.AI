@@ -7,6 +7,7 @@ struct SleepListSheetRouter: View {
     let todayWakeTime: Date?
     let defaultWakeTime: Date
     let onRecordUpsert: (SleepRecord) -> Bool
+    let onNightCompletion: (SleepRecord) -> NightSleepCompletionResult
     let onBreakSaved: (SleepRecord) -> Bool
     let onDeleteRecords: (Set<UUID>) -> Void
     let onWakeTimeSave: (Date, WakeObservationCapture?) -> Bool
@@ -25,16 +26,13 @@ struct SleepListSheetRouter: View {
             AddRecordView(defaultDate: date, vm: AddRecordViewModel(), initialKind: .nightSleep,
                           onSave: onRecordUpsert)
 
-        case .endSleep(let parentID):
-            if let parent = records.first(where: { $0.id == parentID && $0.kind != .break && $0.isOngoing }) {
-                AddRecordView(defaultDate: parent.date, editingRecord: parent,
-                              vm: AddRecordViewModel(), endingOngoing: true, onSave: onRecordUpsert)
-            } else {
-                NavigationStack {
-                    Text("This sleep session is no longer ongoing.")
-                        .toolbar { Button("Cancel") { dismiss() } }
-                }
-            }
+        case .endSleep(let parent):
+            // Keep the editor's original revision/capabilities alive after a partial
+            // write. The command revalidates persistence; notifications cannot replace
+            // this form with a different night or destroy its retry context.
+            AddRecordView(defaultDate: parent.date, editingRecord: parent,
+                          vm: AddRecordViewModel(), endingOngoing: true,
+                          onNightCompletion: parent.kind == .nightSleep ? onNightCompletion : nil, onSave: onRecordUpsert)
 
         case .addBreak(let parentID):
             if let parent = records.first(where: { $0.id == parentID && $0.kind != .break }) {

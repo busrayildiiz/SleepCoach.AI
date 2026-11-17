@@ -191,3 +191,63 @@ final class TodaySleepHeroUITests: XCTestCase {
         capture("bedtime-confirmed-night-large-type", app: app)
     }
 }
+
+extension TodaySleepHeroUITests {
+    private func finishNightAndVerifyCanonicalWake(large: Bool) {
+        // This fixture seeds only an ongoing night. The actual Home End Sleep Save
+        // must create the wake; no preconstructed completed/wake pair is supplied.
+        let app = launch("nightActive", live: true, large: large)
+        let end = app.buttons["hero.endSleep"]
+        reveal(end, app: app); end.tap()
+        let editor = app.navigationBars["Edit Night Sleep"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        let save = app.buttons["recording.save"]
+        reveal(save, app: app)
+        XCTAssertTrue(save.isEnabled); save.tap()
+        dismissed(editor)
+        let summary = app.descendants(matching: .any).matching(identifier: "home.sleep.summary").firstMatch
+        let morning = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "Good morning"), object: summary)
+        XCTAssertEqual(XCTWaiter.wait(for: [morning], timeout: 5), .completed)
+        XCTAssertFalse(app.buttons["hero.confirmWake"].exists)
+        XCTAssertFalse(app.buttons["home.wake.add"].exists)
+        let wake = app.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label CONTAINS[c] %@", "home.plan.event.record:", "wake")).firstMatch
+        reveal(wake, app: app)
+        XCTAssertTrue(wake.exists)
+        XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "home.plan.wakeReference").firstMatch.exists)
+        capture(large ? "night-completed-canonical-wake-large" : "night-completed-canonical-wake", app: app)
+    }
+    func testHomeEndNightCreatesRecordedCanonicalWake() {
+        finishNightAndVerifyCanonicalWake(large: false)
+    }
+    func testHomeEndNightCreatesCanonicalWakeAtAccessibilitySize() {
+        finishNightAndVerifyCanonicalWake(large: true)
+    }
+}
+
+extension TodaySleepHeroUITests {
+    func testHomeEndNightStillSleepingConfirmsWithoutRecordingWake() {
+        let app = launch("nightActive", live: true, large: true)
+        let end = app.buttons["hero.endSleep"]
+        reveal(end, app: app); end.tap()
+        let editor = app.navigationBars["Edit Night Sleep"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        let ongoing = app.switches["recording.ongoing"]
+        reveal(ongoing, app: app)
+        XCTAssertEqual(ongoing.value as? String, "0")
+        ongoing.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 0.5)).tap()
+        let selected = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "1"), object: ongoing)
+        XCTAssertEqual(XCTWaiter.wait(for: [selected], timeout: 5), .completed)
+        let save = app.buttons["recording.save"]
+        reveal(save, app: app); XCTAssertTrue(save.isEnabled); save.tap()
+        dismissed(editor)
+        let summary = app.descendants(matching: .any).matching(identifier: "home.sleep.summary").firstMatch
+        let confirmed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "Night sleep in progress"), object: summary)
+        XCTAssertEqual(XCTWaiter.wait(for: [confirmed], timeout: 5), .completed)
+        XCTAssertTrue(app.buttons["hero.endSleep"].exists)
+        let recordedWake = app.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label CONTAINS[c] %@", "home.plan.event.record:", "wake")).firstMatch
+        XCTAssertFalse(recordedWake.exists)
+        capture("night-still-sleeping-no-wake-large", app: app)
+    }
+}
