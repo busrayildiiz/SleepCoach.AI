@@ -74,6 +74,8 @@ struct DailyWakeRecordPersistence {
             cancelled.isCancelled = true
             guard storage.standaloneJournal(cancelled) else { return false }
         }
+        // The sidecar can change even if the record write fails. Retire affected
+        // drafts before observers run and require a fresh review on failure.
         HistoricalWakeDraft.invalidateChangedDays(defaults: defaults, old: old, new: records)
         guard storage.save(records, key: key, provenance: provenance, expectedData: expectedData) else { return false }
         if let cancellation, ObservationCompletionPending.load(defaults)?.operationID == cancellation.operationID {

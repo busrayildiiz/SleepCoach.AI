@@ -40,12 +40,13 @@ struct DayDetailView: View {
         records.filter { $0.kind == .break }.sorted { $0.date < $1.date }
     }
 
+    private var wakeEvidence: DayDetailWakeEvidence {
+        DayDetailWakeEvidence(records: DailyWakeRecordPersistence().load() ?? [], day: day, calendar: cal)
+    }
+
     private var wakeUpTime: Date? {
-        guard let data = UserDefaults.standard.data(forKey: "dailyWakeRecords_v1"),
-              let wakeRecords = try? JSONDecoder().decode([DailyWakeRecord].self, from: data),
-              let todayWake = wakeRecords.first(where: { cal.isDate($0.day, inSameDayAs: day) })
-        else { return nil }
-        return todayWake.wakeTime
+        if case .recorded(let time) = wakeEvidence { return time }
+        return nil
     }
 
     private var isToday: Bool { cal.isDate(day, inSameDayAs: now) }
@@ -144,11 +145,24 @@ struct DayDetailView: View {
     // MARK: - All Cards (kronolojik)
     @ViewBuilder
     private var allCards: some View {
-        // 1. Wake Up kartı — kayıt varsa göster, yoksa placeholder
-        if let wake = wakeUpTime {
-            WakeUpCard(time: wake)
-        } else if isToday {
-            WakeUpPlaceholderCard()
+        switch wakeEvidence {
+        case .recorded(let time):
+            WakeUpCard(time: time)
+        case .missing:
+            if isToday {
+                WakeUpPlaceholderCard()
+            } else {
+                Text("No morning wake recorded")
+                    .foregroundStyle(.secondary)
+            }
+        case .ambiguous:
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Conflicting morning wakes").font(.headline)
+                Text("Multiple wakes are recorded for this date. Resolve the duplicates before confirming a morning wake.")
+                    .foregroundStyle(.secondary)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("history.day.wake.ambiguous")
         }
 
         // Devam eden night sleep varsa (dünden kalan) önce göster
@@ -264,7 +278,8 @@ private struct HistoricalWakeEditor: View {
     @State private var draft: HistoricalWakeDraft
     @State private var selected: Date
     @State private var confirmedSelection: Date?
-    @State private var retryOnly = false
+    @State private var outcome: HistoricalWakeOutcome?
+    @State private var cancellationBlocked = false
     @State private var message: String?
     @State private var confirmation: HistoricalWakeConfirmation?
     let onSaved: (Date, Calendar) -> Void
@@ -274,10 +289,15 @@ private struct HistoricalWakeEditor: View {
         self.onSaved = onSaved
         let initial = HistoricalWakeDraft(day: day, calendar: calendar, persistence: .init())
         _draft = State(initialValue: initial)
-        let existing = initial.candidates.first?.wakeTime
+        let existing = initial.candidates.count == 1 ? initial.candidates.first?.wakeTime : nil
         _selected = State(initialValue: existing.flatMap {
             initial.calendar.isDate($0, inSameDayAs: initial.day) ? $0 : nil
         } ?? initial.day)
+    }
+
+    private var saveTitle: LocalizedStringKey {
+        if outcome?.canRetry == true { return "Retry Saving Morning Wake" }
+        return draft.candidates.isEmpty ? "Record Morning Wake" : "Confirm or Correct Morning Wake"
     }
 
     var body: some View {
@@ -286,13 +306,13 @@ private struct HistoricalWakeEditor: View {
                 DatePicker("Observed wake date and time", selection: $selected,
                            in: ...draft.calendar.startOfDay(for: Date()).addingTimeInterval(-1))
                     .accessibilityIdentifier("history.wake.dateTime")
-                    .disabled(retryOnly)
+                    .disabled(cancellationBlocked || outcome?.blocksEditing == true)
                     .onChange(of: selected) { value in
                         confirmedSelection = nil
                         message = nil
                         if confirmation != nil || !draft.calendar.isDate(value, inSameDayAs: draft.day) {
                             guard draft.abandon() else {
-                                retryOnly = true
+                                cancellationBlocked = true
                                 message = "Cancellation could not be saved. Try again."
                                 return
                             }
@@ -313,9 +333,10 @@ private struct HistoricalWakeEditor: View {
                         set: { confirmedSelection = $0 ? selected : nil }
                     ))
                         .accessibilityIdentifier("history.wake.confirmation")
-                        .disabled(retryOnly)
-                    Button(draft.candidates.isEmpty ? "Record Morning Wake" : "Confirm or Correct Morning Wake", action: save)
-                        .disabled(confirmedSelection != selected)
+                        .disabled(cancellationBlocked || outcome?.blocksEditing == true)
+                    Button(saveTitle, action: save)
+                        .disabled(confirmedSelection != selected || cancellationBlocked ||
+                                  (outcome?.blocksEditing == true && outcome?.canRetry != true))
                         .accessibilityIdentifier("history.wake.save")
                 }
                 if let message { Text(LocalizedStringKey(message)).accessibilityIdentifier("history.wake.feedback") }
@@ -328,29 +349,33 @@ private struct HistoricalWakeEditor: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
                         if draft.abandon() { dismiss() }
-                        else { message = "Cancellation could not be saved. Try again." }
+                        else {
+                            cancellationBlocked = true
+                            message = "Cancellation could not be saved. Try Cancel again."
+                        }
                     }.accessibilityIdentifier("history.wake.cancel")
                 }
             }
         }
-        .interactiveDismissDisabled(retryOnly)
+        .interactiveDismissDisabled(cancellationBlocked || outcome?.blocksEditing == true)
     }
 
     private func save() {
         let workflow = SleepWakeTimeWorkflow(selectedWakeTime: selected, now: Date(), calendar: draft.calendar,
             wakeRecords: [], sleepRecords: [], wakePersistence: persistence, sleepPersistence: .init())
-        guard confirmedSelection == selected else { return }
+        guard confirmedSelection == selected, !cancellationBlocked,
+              outcome?.blocksEditing != true || outcome?.canRetry == true else { return }
         let capture = confirmation ?? draft.confirmObservedWake(at: selected)
         confirmation = capture
-        let outcome = workflow.recoverHistoricalWake(draft, confirmation: capture)
-        if outcome == .saved {
+        let result = workflow.recoverHistoricalWake(draft, confirmation: capture)
+        outcome = result
+        if result == .saved {
             onSaved(draft.day, draft.calendar)
             dismiss()
         } else {
-            retryOnly = retryOnly || outcome == .incomplete
-            if !retryOnly, outcome != .recoveryPending {
+            if !result.blocksEditing {
                 guard draft.abandon() else {
-                    retryOnly = true
+                    cancellationBlocked = true
                     message = "Cancellation could not be saved. Try again."
                     return
                 }
@@ -358,7 +383,7 @@ private struct HistoricalWakeEditor: View {
                 confirmation = nil
                 confirmedSelection = nil
             }
-            message = outcome.message
+            message = result.message
         }
     }
 }

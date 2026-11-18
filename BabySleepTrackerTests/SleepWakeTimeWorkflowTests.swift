@@ -342,14 +342,99 @@ final class SleepWakeTimeWorkflowTests: XCTestCase {
                     }
                     XCTAssertFalse(adapter.snapshot().wakes.contains { $0.source == .verifiedObservation })
                 }
-                let result = command.recoverHistoricalWake(draft, confirmation: draft.confirmObservedWake(at: time))
+                let capture = draft.confirmObservedWake(at: time)
+                let result = command.recoverHistoricalWake(draft, confirmation: capture)
                 NotificationCenter.default.removeObserver(observer)
-                XCTAssertNotEqual(result, .saved, "\(stage) \(mutation)")
+                XCTAssertEqual(result, .stale, "\(stage) \(mutation)")
+                XCTAssertFalse(result.canRetry)
+                XCTAssertNil(StandaloneWakePending.load(store))
+                XCTAssertTrue(draft.abandon())
+                let reopened = HistoricalWakeDraft(day: day, calendar: calendar, persistence: wakes)
+                XCTAssertEqual(command.recoverHistoricalWake(reopened, confirmation: capture), .confirmationRequired)
                 XCTAssertFalse(adapter.snapshot().wakes.contains { $0.source == .verifiedObservation })
                 XCTAssertNil(SleepWakeTimeWorkflow.resumePending(now: now, wakePersistence: wakes,
                     sleepPersistence: .init(defaults: store)))
             }
         }
+    }
+
+    func testDayDetailWakeEvidenceUsesLocalDayAndNeverPicksADuplicate() {
+        let day = calendar.startOfDay(for: now - 4 * 86400)
+        let first = DailyWakeRecord(day: day, wakeTime: day + 7 * 3600)
+        let duplicate = DailyWakeRecord(day: day, wakeTime: day + 8 * 3600)
+        let unrelated = DailyWakeRecord(day: day - 86400, wakeTime: day - 3600)
+        XCTAssertEqual(DayDetailWakeEvidence(records: [unrelated], day: day, calendar: calendar), .missing)
+        XCTAssertEqual(DayDetailWakeEvidence(records: [unrelated, first], day: day, calendar: calendar),
+                       .recorded(first.wakeTime))
+        XCTAssertEqual(DayDetailWakeEvidence(records: [duplicate, unrelated, first], day: day, calendar: calendar),
+                       .ambiguous)
+    }
+
+    func testHistoricalFailedCompetingWriteRequiresFreshReviewEvenWithUnchangedWakeBytes() {
+        let day = calendar.startOfDay(for: now - 4 * 86400)
+        let time = day + 7 * 3600
+        let command = workflow(selected: time)
+        let wakes = command.wakePersistence
+        let stale = HistoricalWakeDraft(day: day, calendar: calendar, persistence: wakes)
+        let capture = stale.confirmObservedWake(at: time)
+        let store = wakes.defaults
+        let failing = DailyWakeRecordPersistence(defaults: store, writer: { data, key in
+            guard key != "dailyWakeRecords_v1" else { return false }
+            store.set(data, forKey: key)
+            return true
+        })
+        let before = store.data(forKey: "dailyWakeRecords_v1")
+        XCTAssertFalse(failing.save([DailyWakeRecord(day: day, wakeTime: time + 60)]))
+        XCTAssertEqual(store.data(forKey: "dailyWakeRecords_v1"), before)
+        let result = command.recoverHistoricalWake(stale, confirmation: capture)
+        XCTAssertEqual(result, .stale)
+        XCTAssertFalse(result.canRetry)
+        XCTAssertTrue(stale.abandon())
+
+        let fresh = HistoricalWakeDraft(day: day, calendar: calendar, persistence: wakes)
+        XCTAssertEqual(command.recoverHistoricalWake(fresh, confirmation: capture), .confirmationRequired)
+        XCTAssertEqual(command.recoverHistoricalWake(fresh, confirmation: fresh.confirmObservedWake(at: time)), .saved)
+        XCTAssertEqual(wakes.load()?.first?.day, day)
+    }
+
+    func testHistoricalRetryCanBeCancelledAndCannotAuthorizeFreshDraft() {
+        let day = calendar.startOfDay(for: now - 4 * 86400)
+        let time = day + 7 * 3600
+        let store = defaults!
+        let fails = DailyWakeRecordPersistence(defaults: store, writer: { data, key in
+            guard key != "dailyWakeRecords_v1" else { return false }
+            store.set(data, forKey: key)
+            return true
+        })
+        let sleeps = SleepRecordPersistence(defaults: store)
+        let command = SleepWakeTimeWorkflow(selectedWakeTime: time, now: now, calendar: calendar,
+            wakeRecords: [], sleepRecords: [], wakePersistence: fails, sleepPersistence: sleeps)
+        let original = HistoricalWakeDraft(day: day, calendar: calendar, persistence: fails)
+        let capture = original.confirmObservedWake(at: time)
+        let result = command.recoverHistoricalWake(original, confirmation: capture)
+        XCTAssertEqual(result, .incomplete)
+        XCTAssertTrue(result.canRetry)
+        XCTAssertTrue(result.blocksEditing)
+        XCTAssertTrue(original.abandon())
+        XCTAssertNil(StandaloneWakePending.load(store))
+        XCTAssertEqual(command.recoverHistoricalWake(original, confirmation: capture), .stale)
+        let reopened = HistoricalWakeDraft(day: day, calendar: calendar, persistence: fails)
+        XCTAssertEqual(command.recoverHistoricalWake(reopened, confirmation: capture), .confirmationRequired)
+        XCTAssertEqual(command.recoverHistoricalWake(reopened), .confirmationRequired)
+    }
+
+    func testHistoricalUnreadableStorageBlocksEditingAndRetryWithoutChangingData() {
+        let day = calendar.startOfDay(for: now - 4 * 86400)
+        let time = day + 7 * 3600
+        let command = workflow(selected: time)
+        let invalid = Data("unreadable".utf8)
+        defaults.set(invalid, forKey: "dailyWakeRecords_v1")
+        let draft = HistoricalWakeDraft(day: day, calendar: calendar, persistence: command.wakePersistence)
+        let result = command.recoverHistoricalWake(draft, confirmation: draft.confirmObservedWake(at: time))
+        XCTAssertEqual(result, .recoveryFailed)
+        XCTAssertTrue(result.blocksEditing)
+        XCTAssertFalse(result.canRetry)
+        XCTAssertEqual(defaults.data(forKey: "dailyWakeRecords_v1"), invalid)
     }
 
     private final class HistoricalNotificationGate: @unchecked Sendable {
