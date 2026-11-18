@@ -80,6 +80,291 @@ final class SleepWakeTimeWorkflowTests: XCTestCase {
         XCTAssertEqual(try JSONDecoder().decode([SleepRecord].self, from: data).first?.duration, 780)
     }
 
+    func testHistoricalWakePreservesNightAndDoesNotInferLinkFromMatchingEnd() throws {
+        let day = calendar.date(byAdding: .day, value: -1, to: calendar.startOfDay(for: now))!
+        let time = day.addingTimeInterval(7 * 3600)
+        let start = time.addingTimeInterval(-8 * 3600)
+        let night = SleepRecord(date: start, duration: 480, kind: .nightSleep, createdAt: start, endDate: time)
+        let command = workflow(selected: time, sleepRecords: [night])
+        let draft = HistoricalWakeDraft(day: day, calendar: calendar, persistence: command.wakePersistence)
+        let originalSleep = defaults.data(forKey: "sleepRecords")
+
+        let confirmation = draft.confirmObservedWake(at: time)
+        XCTAssertEqual(command.recoverHistoricalWake(draft, confirmation: confirmation), .saved)
+        XCTAssertEqual(command.recoverHistoricalWake(draft, confirmation: confirmation), .confirmationRequired)
+        XCTAssertEqual(defaults.data(forKey: "sleepRecords"), originalSleep)
+        let wake = try XCTUnwrap(command.wakePersistence.load()?.first)
+        XCTAssertEqual(wake.day, day)
+        XCTAssertEqual(wake.wakeTime, time)
+        XCTAssertEqual(command.wakePersistence.load()?.count, 1)
+        XCTAssertEqual(TrustedObservationAdapter(defaults: defaults).snapshot().wakes.first?.source, .verifiedObservation)
+        XCTAssertTrue(ObservationProvenance.load(defaults)?.links.isEmpty == true)
+    }
+
+    func testHistoricalWakeRejectsEditRevertAndAmbiguousWakes() {
+        let day = calendar.date(byAdding: .day, value: -1, to: calendar.startOfDay(for: now))!
+        let original = DailyWakeRecord(day: day, wakeTime: day.addingTimeInterval(7 * 3600))
+        let time = original.wakeTime.addingTimeInterval(1800)
+        let command = workflow(selected: time, wakeRecords: [original])
+        let persistence = command.wakePersistence
+        let draft = HistoricalWakeDraft(day: day, calendar: calendar, persistence: persistence)
+        let corrected = DailyWakeRecord(id: original.id, day: day, wakeTime: time)
+        XCTAssertTrue(persistence.save([corrected]))
+        XCTAssertTrue(persistence.save([original]))
+        XCTAssertEqual(command.recoverHistoricalWake(draft, confirmation: draft.confirmObservedWake(at: time)), .stale)
+
+        XCTAssertTrue(persistence.save([original, DailyWakeRecord(day: day, wakeTime: time)]))
+        let ambiguous = HistoricalWakeDraft(day: day, calendar: calendar, persistence: persistence)
+        XCTAssertEqual(command.recoverHistoricalWake(ambiguous, confirmation: ambiguous.confirmObservedWake(at: time)), .ambiguous)
+        XCTAssertEqual(persistence.load()?.count, 2)
+    }
+
+    func testHistoricalWakeResumesAfterRecordWriteFailure() throws {
+        let day = calendar.date(byAdding: .day, value: -1, to: calendar.startOfDay(for: now))!
+        let time = day.addingTimeInterval(7 * 3600)
+        let store = try XCTUnwrap(defaults)
+        let failing = DailyWakeRecordPersistence(defaults: store, writer: { data, key in
+            guard key != "dailyWakeRecords_v1" else { return false }
+            store.set(data, forKey: key)
+            return true
+        })
+        let sleeps = SleepRecordPersistence(defaults: store)
+        let draft = HistoricalWakeDraft(day: day, calendar: calendar, persistence: failing)
+        let command = SleepWakeTimeWorkflow(selectedWakeTime: time, now: now, calendar: calendar,
+            wakeRecords: [], sleepRecords: [], wakePersistence: failing, sleepPersistence: sleeps)
+
+        XCTAssertEqual(command.recoverHistoricalWake(draft, confirmation: draft.confirmObservedWake(at: time)), .incomplete)
+        XCTAssertNil(failing.load())
+        let recovered = SleepWakeTimeWorkflow.resumePending(now: now,
+            wakePersistence: DailyWakeRecordPersistence(defaults: store), sleepPersistence: sleeps)
+        XCTAssertTrue(recovered?.evidencePublicationSucceeded == true)
+        XCTAssertEqual(recovered?.updatedWakeRecords.first?.wakeTime, time)
+        XCTAssertNil(store.data(forKey: "sleepRecords"))
+    }
+
+    func testRecoveringBothBoundariesMakesCoverageReviewableWithoutConfirmingIt() throws {
+        let today = calendar.startOfDay(for: now)
+        let day = calendar.date(byAdding: .day, value: -2, to: today)!
+        let next = calendar.date(byAdding: .day, value: 1, to: day)!
+        let wakes = DailyWakeRecordPersistence(defaults: defaults)
+        let sleeps = SleepRecordPersistence(defaults: defaults)
+        for label in [day, next] {
+            let command = SleepWakeTimeWorkflow(selectedWakeTime: label.addingTimeInterval(7 * 3600),
+                now: now, calendar: calendar, wakeRecords: [], sleepRecords: [],
+                wakePersistence: wakes, sleepPersistence: sleeps)
+            let draft = HistoricalWakeDraft(day: label, calendar: calendar, persistence: wakes)
+            XCTAssertEqual(command.recoverHistoricalWake(draft, confirmation: draft.confirmObservedWake(at: command.selectedWakeTime)), .saved)
+        }
+        let records = try XCTUnwrap(wakes.load()).sorted { $0.day < $1.day }
+        guard records.count == 2 else { return XCTFail("Expected two canonical wakes") }
+        let adapter = TrustedObservationAdapter(defaults: defaults)
+        let review = try XCTUnwrap(adapter.prepareDaytimeReview(morningWakeID: records[0].id,
+            followingWakeID: records[1].id, calendar: calendar))
+        XCTAssertEqual(review.savedCoverage, .unknown)
+        XCTAssertTrue(adapter.snapshot(calendar: calendar).daytime.isEmpty)
+    }
+
+    func testHistoricalWakeRejectsTimeOutsideSelectedDay() {
+        let command = workflow(selected: now)
+        let yesterday = calendar.date(byAdding: .day, value: -1, to: now)!
+        let draft = HistoricalWakeDraft(day: yesterday, calendar: calendar, persistence: command.wakePersistence)
+        XCTAssertEqual(command.recoverHistoricalWake(draft, confirmation: draft.confirmObservedWake(at: now)), .invalidTime)
+        XCTAssertEqual(command.wakePersistence.load()?.count, 0)
+    }
+
+    func testHistoricalServiceRejectsMissingForeignAndMismatchedConfirmation() {
+        let day = calendar.startOfDay(for: now.addingTimeInterval(-86400))
+        let time = day.addingTimeInterval(7 * 3600)
+        let legacy = DailyWakeRecord(day: day, wakeTime: time)
+        let command = workflow(selected: time, wakeRecords: [legacy])
+        let persistence = command.wakePersistence
+        let draft = HistoricalWakeDraft(day: day, calendar: calendar, persistence: persistence)
+        let foreign = HistoricalWakeDraft(day: day, calendar: calendar, persistence: persistence)
+
+        XCTAssertEqual(command.recoverHistoricalWake(draft), .confirmationRequired)
+        XCTAssertEqual(command.recoverHistoricalWake(draft, confirmation: foreign.confirmObservedWake(at: time)),
+                       .confirmationRequired)
+        XCTAssertEqual(command.recoverHistoricalWake(draft, confirmation: draft.confirmObservedWake(at: time + 60)),
+                       .confirmationRequired)
+        let adapter = TrustedObservationAdapter(defaults: defaults)
+        XCTAssertNotEqual(adapter.snapshot().wakes.first?.source, .verifiedObservation)
+
+        let fresh = HistoricalWakeDraft(day: day, calendar: calendar, persistence: persistence)
+        XCTAssertEqual(command.recoverHistoricalWake(fresh, confirmation: fresh.confirmObservedWake(at: time)), .saved)
+        XCTAssertEqual(adapter.snapshot().wakes.first?.record.id, legacy.id)
+        XCTAssertEqual(adapter.snapshot().wakes.first?.source, .verifiedObservation)
+    }
+
+    func testHistoricalAbsenceRejectsInsertDeleteButAllowsUnrelatedWrites() {
+        let day = calendar.startOfDay(for: now.addingTimeInterval(-86400))
+        let time = day.addingTimeInterval(7 * 3600)
+        let command = workflow(selected: time)
+        let persistence = command.wakePersistence
+        let draft = HistoricalWakeDraft(day: day, calendar: calendar, persistence: persistence)
+        XCTAssertTrue(persistence.save([DailyWakeRecord(day: day, wakeTime: time)]))
+        XCTAssertTrue(persistence.save([]))
+        XCTAssertEqual(command.recoverHistoricalWake(draft, confirmation: draft.confirmObservedWake(at: time)), .stale)
+
+        let fresh = HistoricalWakeDraft(day: day, calendar: calendar, persistence: persistence)
+        let today = calendar.startOfDay(for: now)
+        XCTAssertTrue(persistence.save([DailyWakeRecord(day: today, wakeTime: now)]))
+        XCTAssertEqual(command.recoverHistoricalWake(fresh, confirmation: fresh.confirmObservedWake(at: time)), .saved)
+        XCTAssertEqual(persistence.load()?.count, 2)
+    }
+
+    func testHistoricalDSTGapAndFoldPreserveSelectedInstantAndLocalDay() throws {
+        var scope = Calendar(identifier: .gregorian)
+        scope.timeZone = try XCTUnwrap(TimeZone(identifier: "America/Los_Angeles"))
+        let spring = try XCTUnwrap(scope.date(from: DateComponents(year: 2025, month: 3, day: 9)))
+        let fold = try XCTUnwrap(scope.date(from: DateComponents(year: 2025, month: 11, day: 2)))
+        let gap = DateComponents(hour: 2, minute: 30)
+        let repeated = DateComponents(hour: 1, minute: 30)
+        let springEnd = try XCTUnwrap(scope.date(byAdding: .day, value: 1, to: spring))
+        let first = try XCTUnwrap(scope.nextDate(after: fold - 1, matching: repeated,
+            matchingPolicy: .strict, repeatedTimePolicy: .first))
+        let last = try XCTUnwrap(scope.nextDate(after: fold - 1, matching: repeated,
+            matchingPolicy: .strict, repeatedTimePolicy: .last))
+        XCTAssertFalse(scope.nextDate(after: spring - 1, matching: gap, matchingPolicy: .strict)
+            .map { $0 < springEnd } ?? false)
+        XCTAssertEqual(last.timeIntervalSince(first), 3600)
+        let wakes = DailyWakeRecordPersistence(defaults: defaults)
+        let sleeps = SleepRecordPersistence(defaults: defaults)
+        func save(_ time: Date, on day: Date) -> HistoricalWakeOutcome {
+            let command = SleepWakeTimeWorkflow(selectedWakeTime: time, now: now, calendar: scope,
+                wakeRecords: [], sleepRecords: [], wakePersistence: wakes, sleepPersistence: sleeps)
+            let draft = HistoricalWakeDraft(day: day, calendar: scope, persistence: wakes)
+            return command.recoverHistoricalWake(draft, confirmation: draft.confirmObservedWake(at: time))
+        }
+        XCTAssertEqual(save(springEnd, on: spring), .invalidTime)
+        XCTAssertEqual(save(spring, on: spring), .saved)
+        XCTAssertEqual(save(first, on: fold), .saved)
+        let firstRecord = try XCTUnwrap(wakes.load()?.first { $0.day == fold })
+        XCTAssertEqual(save(last, on: fold), .saved)
+        let corrected = try XCTUnwrap(wakes.load()?.first { $0.day == fold })
+        XCTAssertEqual(corrected.id, firstRecord.id)
+        XCTAssertEqual(corrected.wakeTime, last)
+        XCTAssertEqual(wakes.load()?.count, 2)
+    }
+
+    func testHistoricalWakeCorrectionRotatesCoverageAndRejectsPreparedReview() throws {
+        let today = calendar.startOfDay(for: now)
+        let day = calendar.date(byAdding: .day, value: -2, to: today)!
+        let next = calendar.date(byAdding: .day, value: 1, to: day)!
+        let wakes = DailyWakeRecordPersistence(defaults: defaults)
+        let sleeps = SleepRecordPersistence(defaults: defaults)
+        func save(_ label: Date, hour: Double) {
+            let time = label.addingTimeInterval(hour * 3600)
+            let command = SleepWakeTimeWorkflow(selectedWakeTime: time, now: now, calendar: calendar,
+                wakeRecords: [], sleepRecords: [], wakePersistence: wakes, sleepPersistence: sleeps)
+            let draft = HistoricalWakeDraft(day: label, calendar: calendar, persistence: wakes)
+            XCTAssertEqual(command.recoverHistoricalWake(draft, confirmation: draft.confirmObservedWake(at: time)), .saved)
+        }
+        save(day, hour: 7)
+        save(next, hour: 7)
+        let saved = try XCTUnwrap(wakes.load())
+        let morning = try XCTUnwrap(saved.first { $0.day == day }).id
+        let following = try XCTUnwrap(saved.first { $0.day == next }).id
+        let adapter = TrustedObservationAdapter(defaults: defaults)
+        let review = try XCTUnwrap(adapter.prepareDaytimeReview(morningWakeID: morning,
+            followingWakeID: following, calendar: calendar))
+        XCTAssertTrue(review.draft.submit(.allNapsRecorded, at: now, using: wakes.storage, calendar: calendar))
+        let binding = adapter.daytimeRevisionIdentity(morningWakeID: morning, followingWakeID: following, calendar: calendar)
+        save(day, hour: 8)
+        save(day, hour: 7)
+        XCTAssertNotEqual(adapter.daytimeRevisionIdentity(morningWakeID: morning,
+            followingWakeID: following, calendar: calendar), binding)
+        XCTAssertFalse(review.draft.submit(.allNapsRecorded, at: now, using: wakes.storage, calendar: calendar))
+        XCTAssertTrue(adapter.snapshot(calendar: calendar).daytime.isEmpty)
+    }
+
+    func testHistoricalPublicationIsUntrustedUntilReplayClearsJournalInRecordedZone() throws {
+        let suite = "HistoricalWakeReplay-\(UUID())"
+        let store = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { store.removePersistentDomain(forName: suite) }
+        var zone = calendar!
+        zone.timeZone = try XCTUnwrap(TimeZone(identifier: "Pacific/Kiritimati"))
+        let localDay = zone.startOfDay(for: now - 86400)
+        let time = localDay + 60
+        XCTAssertFalse(calendar.isDate(time, inSameDayAs: localDay + 20 * 3600))
+        let adapter = TrustedObservationAdapter(defaults: store)
+        let writes = DailyWakeRecordPersistence(defaults: store, writer: { data, key in
+            store.set(data, forKey: key)
+            if key == ObservationProvenance.key,
+               ObservationProvenance.load(store)?.wakes.values.contains(where: { $0.historicalWakeCalendar != nil }) == true {
+                XCTAssertNotEqual(adapter.snapshot().wakes.first?.source, .verifiedObservation)
+                return false // Simulate interruption after sidecar write, before cleanup.
+            }
+            return true
+        })
+        let draft = HistoricalWakeDraft(day: localDay, calendar: zone, persistence: writes)
+        let command = SleepWakeTimeWorkflow(selectedWakeTime: time, now: now, calendar: calendar,
+            wakeRecords: [], sleepRecords: [], wakePersistence: writes, sleepPersistence: .init(defaults: store))
+        XCTAssertEqual(command.recoverHistoricalWake(draft, confirmation: draft.confirmObservedWake(at: time)), .incomplete)
+        XCTAssertNotNil(StandaloneWakePending.load(store))
+        XCTAssertNotEqual(adapter.snapshot().wakes.first?.source, .verifiedObservation)
+
+        let reopened = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let result = SleepWakeTimeWorkflow.resumePending(now: now, wakePersistence: .init(defaults: reopened),
+            sleepPersistence: .init(defaults: reopened))
+        XCTAssertTrue(result?.evidencePublicationSucceeded == true)
+        XCTAssertEqual(result?.updatedWakeRecords.first?.day, localDay)
+        XCTAssertEqual(result?.updatedWakeRecords.first?.wakeTime, time)
+        XCTAssertNil(StandaloneWakePending.load(reopened))
+        XCTAssertEqual(TrustedObservationAdapter(defaults: reopened).snapshot().wakes.first?.source, .verifiedObservation)
+    }
+
+    func testHistoricalPersistenceNotificationsRejectDuplicateCorrectionDeletionAndRevert() {
+        for stage in [Notification.Name.dailyWakeRecordsDidChange, .observationProvenanceDidChange] {
+            for mutation in ["duplicate", "correct", "delete", "revert"] {
+                let store = UserDefaults(suiteName: "HistoricalWakeMutation-\(UUID())")!
+                let wakes = DailyWakeRecordPersistence(defaults: store)
+                let adapter = TrustedObservationAdapter(defaults: store)
+                let day = calendar.startOfDay(for: now - 86400)
+                let time = day + 7 * 3600
+                let draft = HistoricalWakeDraft(day: day, calendar: calendar, persistence: wakes)
+                let command = SleepWakeTimeWorkflow(selectedWakeTime: time, now: now, calendar: calendar,
+                    wakeRecords: [], sleepRecords: [], wakePersistence: wakes, sleepPersistence: .init(defaults: store))
+                let once = HistoricalNotificationGate()
+                let observer = NotificationCenter.default.addObserver(forName: stage, object: nil, queue: nil) { _ in
+                    guard let wake = wakes.load()?.first,
+                          (stage == .dailyWakeRecordsDidChange || StandaloneWakePending.load(wakes.defaults) == nil),
+                          once.enter() else { return }
+                    let correction = DailyWakeRecord(id: wake.id, day: day, wakeTime: time + 60)
+                    switch mutation {
+                    case "duplicate":
+                        XCTAssertTrue(wakes.save([wake, DailyWakeRecord(day: day, wakeTime: time + 60)]))
+                        XCTAssertTrue(wakes.save([wake]))
+                    case "correct": XCTAssertTrue(wakes.save([correction]))
+                    case "delete": XCTAssertTrue(wakes.save([]))
+                    default:
+                        XCTAssertTrue(wakes.save([correction]))
+                        XCTAssertTrue(wakes.save([wake]))
+                    }
+                    XCTAssertFalse(adapter.snapshot().wakes.contains { $0.source == .verifiedObservation })
+                }
+                let result = command.recoverHistoricalWake(draft, confirmation: draft.confirmObservedWake(at: time))
+                NotificationCenter.default.removeObserver(observer)
+                XCTAssertNotEqual(result, .saved, "\(stage) \(mutation)")
+                XCTAssertFalse(adapter.snapshot().wakes.contains { $0.source == .verifiedObservation })
+                XCTAssertNil(SleepWakeTimeWorkflow.resumePending(now: now, wakePersistence: wakes,
+                    sleepPersistence: .init(defaults: store)))
+            }
+        }
+    }
+
+    private final class HistoricalNotificationGate: @unchecked Sendable {
+        private let lock = NSLock()
+        private var entered = false
+
+        func enter() -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            guard !entered else { return false }
+            entered = true
+            return true
+        }
+    }
+
     private func workflow(selected: Date, wakeRecords: [DailyWakeRecord] = [], sleepRecords: [SleepRecord] = []) -> SleepWakeTimeWorkflow {
         _ = DailyWakeRecordPersistence(defaults: defaults).save(wakeRecords)
         _ = SleepRecordPersistence(defaults: defaults).save(sleepRecords)
@@ -156,6 +441,82 @@ final class NightSleepCompletionTests: XCTestCase {
         return SleepWakeTimeWorkflow.resumePending(now: now, wakePersistence: .init(defaults: reloaded), sleepPersistence: .init(defaults: reloaded))
     }
     private var snapshot: LearningEvidenceSnapshot { TrustedObservationAdapter(defaults: defaults).snapshot() }
+
+    func testHomeWakeAndNightCompletionCoordinateHistoricalJournals() throws {
+        for homeAction in ["wake", "night"] {
+            for status in ["active", "completed", "cancelled", "stale", "unwritable"] {
+                defaults.removePersistentDomain(forName: suite)
+                let historicalDay = calendar.startOfDay(for: now - 2 * 86400)
+                let time = historicalDay + 7 * 3600
+                let writes = DailyWakeRecordPersistence(defaults: defaults, writer: failing("dailyWakeRecords_v1"))
+                let draft = HistoricalWakeDraft(day: historicalDay, calendar: calendar, persistence: writes)
+                let historical = SleepWakeTimeWorkflow(selectedWakeTime: time, now: now, calendar: calendar,
+                    wakeRecords: [], sleepRecords: [], wakePersistence: writes, sleepPersistence: sleeps)
+                XCTAssertEqual(historical.recoverHistoricalWake(draft, confirmation: draft.confirmObservedWake(at: time)), .incomplete)
+                var pending = try XCTUnwrap(StandaloneWakePending.load(defaults))
+                switch status {
+                case "completed": XCTAssertTrue(recover()?.evidencePublicationSucceeded == true)
+                case "cancelled":
+                    pending.isCancelled = true
+                    XCTAssertTrue(wakes.storage.standaloneJournal(pending))
+                case "stale":
+                    let replacement = DailyWakeRecord(day: historicalDay, wakeTime: time + 60)
+                    defaults.set(try JSONEncoder().encode([replacement]), forKey: "dailyWakeRecords_v1")
+                default: break
+                }
+
+                let writer = status == "unwritable" ? failing("dailyWakeRecords_v1") : nil
+                if homeAction == "wake" {
+                    let command = SleepWakeTimeWorkflow(selectedWakeTime: endpoint, now: now, calendar: calendar,
+                        wakeRecords: [], sleepRecords: [], wakePersistence: .init(defaults: defaults, writer: writer),
+                        sleepPersistence: sleeps)
+                    let result = command.execute()
+                    XCTAssertEqual(result.historicalRecovery, status == "unwritable" ? .failed : nil)
+                    XCTAssertEqual(result.wakePersistenceSucceeded, status != "unwritable")
+                } else {
+                    let value = try submitted(night())
+                    let result = complete(value, writer: writer)
+                    if status == "unwritable" {
+                        guard case .recoveryFailure = result.state else { return XCTFail("Expected recovery failure") }
+                    }
+                    else { XCTAssertTrue(result.succeeded, status) }
+                }
+                if status == "unwritable" {
+                    XCTAssertEqual(StandaloneWakePending.load(defaults)?.operationID, pending.operationID)
+                } else {
+                    XCTAssertNil(StandaloneWakePending.load(defaults))
+                    let historicalWakes = snapshot.wakes.filter { $0.record.day == historicalDay }
+                    if status == "active" || status == "completed" {
+                        XCTAssertEqual(historicalWakes.first?.record.wakeTime, time)
+                        XCTAssertEqual(historicalWakes.first?.source, .verifiedObservation)
+                    } else if status == "stale" {
+                        XCTAssertEqual(historicalWakes.first?.record.wakeTime, time + 60)
+                        XCTAssertNotEqual(historicalWakes.first?.source, .verifiedObservation)
+                    } else {
+                        XCTAssertTrue(historicalWakes.isEmpty)
+                    }
+                }
+            }
+        }
+    }
+
+    func testHistoricalConfirmationOfExistingVerifiedWakePreservesNightLinkAndRevision() throws {
+        let original = try night(verified: true)
+        XCTAssertTrue(complete(try submitted(original)).succeeded)
+        let wake = try XCTUnwrap(wakes.load()?.first)
+        let metadata = try XCTUnwrap(ObservationProvenance.load(defaults))
+        let nightBytes = defaults.data(forKey: "sleepRecords")
+        let later = try XCTUnwrap(calendar.date(byAdding: .day, value: 1, to: now))
+        let draft = HistoricalWakeDraft(day: wake.day, calendar: calendar, persistence: wakes)
+        let historical = SleepWakeTimeWorkflow(selectedWakeTime: wake.wakeTime, now: later, calendar: calendar,
+            wakeRecords: [], sleepRecords: [], wakePersistence: wakes, sleepPersistence: sleeps)
+        XCTAssertEqual(historical.recoverHistoricalWake(draft, confirmation: draft.confirmObservedWake(at: wake.wakeTime)), .saved)
+        XCTAssertEqual(sleeps.load()?.first?.id, original.id)
+        XCTAssertEqual(defaults.data(forKey: "sleepRecords"), nightBytes)
+        XCTAssertEqual(wakes.load()?.first?.persistedRevision, wake.persistedRevision)
+        XCTAssertEqual(ObservationProvenance.load(defaults)?.sleeps, metadata.sleeps)
+        XCTAssertEqual(snapshot.wakes.first?.completedNightID, original.id)
+    }
 
     func testHomeRecordingSubmissionPersistsExactNightAndCanonicalWakeOnce() throws {
         let original = try night()

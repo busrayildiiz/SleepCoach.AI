@@ -33,6 +33,7 @@ struct ObservationProvenance: Codable {
         var coverageRevision: UUID? = nil
         var completedOperationID: UUID? = nil
         var completedInput: String? = nil
+        var historicalWakeCalendar: Calendar? = nil
     }
     struct DaytimeAttestation: Codable {
         let morningWakeID: UUID
@@ -48,6 +49,17 @@ struct ObservationProvenance: Codable {
         let nightRevision: UUID
         let wakeRevision: UUID
         var recordedCalendar: Calendar? = nil
+    }
+
+    mutating func revokeUnfinishedHistoricalWake(_ pending: StandaloneWakePending) -> Bool {
+        let key = pending.wake.id.uuidString
+        guard let entry = wakes[key], entry.completedOperationID == pending.operationID,
+              entry.historicalWakeCalendar != nil else { return false }
+        var replacement = Self.entry(content: entry.content)
+        replacement.coverageContent = entry.coverageContent
+        replacement.coverageRevision = UUID()
+        wakes[key] = replacement
+        return true
     }
 
     static func sleepIdentity(_ r: SleepRecord) -> String {
@@ -102,7 +114,10 @@ struct ObservationProvenance: Codable {
         for r in records {
             let key = r.id.uuidString
             let content = Self.wakeIdentity(r)
-            if let previous = old[key], previous.content == content { wakes[key] = previous }
+            if let previous = old[key], previous.content == content,
+               previous.historicalWakeCalendar.map({ calendar in
+                   records.filter { calendar.isDate($0.day, inSameDayAs: r.day) }.count == 1
+               }) != false { wakes[key] = previous }
             else {
                 var entry = Self.entry(content: content)
                 entry.coverageContent = content
@@ -372,6 +387,7 @@ struct StandaloneWakePending: Codable {
     var expected: ObservationProvenance.Entry? = nil
     var creation: ObservationCreationReservation? = nil
     var isCancelled = false
+    var historical: Bool? = nil
     var selectedInput: Date? = nil
 
     static func load(_ defaults: UserDefaults) -> Self? {
@@ -387,20 +403,26 @@ struct StandaloneWakePending: Codable {
         guard !isCancelled, wake.wakeTime.timeIntervalSinceReferenceDate.isFinite,
               now.timeIntervalSinceReferenceDate.isFinite, wake.wakeTime <= now,
               selectedInput.map({ $0.timeIntervalSinceReferenceDate.isFinite }) ?? true,
+              historical != true || (attested && creation != nil && selectedInput == wake.wakeTime &&
+                  wake.day < calendar.startOfDay(for: now) &&
+                  (defaults.data(forKey: ObservationProvenance.key) == nil || ObservationProvenance.load(defaults) != nil)),
               wake.day == calendar.startOfDay(for: wake.wakeTime),
               expected.map({ $0.content == ObservationProvenance.wakeIdentity(wake) }) ?? true,
               defaults.data(forKey: "dailyWakeRecords_v1") == nil || DailyWakeRecordPersistence(defaults: defaults).load() != nil else { return false }
         if let creation {
-            guard creation.recordID == wake.id, creation.collection == "dailyWakeRecords_v1",
+            guard historical != true || creation.operationID == operationID,
+                  creation.recordID == wake.id, creation.collection == "dailyWakeRecords_v1",
                   creation.content == ObservationProvenance.wakeIdentity(wake) else { return false }
         }
         let wakes = DailyWakeRecordPersistence(defaults: defaults).load() ?? []
-        guard !wakes.contains(where: { $0.id != wake.id && calendar.isDate($0.day, inSameDayAs: wake.day) }) else { return false }
+        guard wakes.filter({ $0.id == wake.id }).count <= 1,
+              !wakes.contains(where: { $0.id != wake.id && calendar.isDate($0.day, inSameDayAs: wake.day) }) else { return false }
         let actual = wakes.first { $0.id == wake.id }
         if let creation, actual == nil, !ObservationCreationLedger.contains(creation, defaults: defaults) { return false }
         let entry = ObservationProvenance.load(defaults)?.wakes[wake.id.uuidString]
         if actual.map(ObservationProvenance.wakeIdentity) == originalContent {
-            return entry?.revision == originalRevision || (expected != nil && entry == expected)
+            return entry?.revision == originalRevision ||
+                (expected != nil && entry?.revision == expected?.revision && entry?.content == expected?.content)
         }
         return actual.map(ObservationProvenance.wakeIdentity) == ObservationProvenance.wakeIdentity(wake) &&
             expected != nil && entry?.revision == expected?.revision && entry?.content == expected?.content
@@ -607,6 +629,12 @@ struct ObservationStorage {
             wakeRevisionChanged = metadata.wakes != oldWakes
             guard self.metadata(metadata, notify: false) else { return false }
         }
+        if let pending = StandaloneWakePending.load(defaults), pending.historical == true,
+           pending.operationID == operation, var metadata = ObservationProvenance.load(defaults),
+           metadata.revokeUnfinishedHistoricalWake(pending) {
+            guard publishHistoricalWake(metadata) else { return false }
+            wakeRevisionChanged = true
+        }
         if let reservation {
             guard let ledger = ObservationCreationLedger.load(defaults), ledger.id == reservation.ledgerID else { return false }
             // A full ledger or a failed allocation may leave a tentative, never-issued
@@ -660,6 +688,19 @@ struct ObservationStorage {
         guard defaults.data(forKey: ObservationCreationLedger.key) == nil || ledger != nil else { return false }
         // Consult the actual ledger, rather than trusting a corrupt journal's
         // reservation to retire some other form's serial or operation.
+        let reservations = ledger?.pending.filter { $0.operationID == pending.operationID } ?? []
+        guard reservations.count <= 1 else { return false }
+        return retireOperation(pending.operationID, reservation: reservations.first, useJournalReservation: false)
+    }
+
+    func retireHistoricalWake(_ pending: StandaloneWakePending) -> Bool {
+        guard pending.historical == true,
+              StandaloneWakePending.load(defaults)?.operationID == pending.operationID,
+              let raw = defaults.data(forKey: StandaloneWakePending.key),
+              preserve(raw, recoveryKey: "nightWakeCompletionRecovery_v1"),
+              defaults.data(forKey: StandaloneWakePending.key) == raw else { return false }
+        let ledger = ObservationCreationLedger.load(defaults)
+        guard defaults.data(forKey: ObservationCreationLedger.key) == nil || ledger != nil else { return false }
         let reservations = ledger?.pending.filter { $0.operationID == pending.operationID } ?? []
         guard reservations.count <= 1 else { return false }
         return retireOperation(pending.operationID, reservation: reservations.first, useJournalReservation: false)
@@ -804,7 +845,8 @@ struct ObservationStorage {
         }
         let standalone = StandaloneWakePending.load(defaults)
         if let raw = defaults.data(forKey: StandaloneWakePending.key),
-           standalone == nil || (mayRetireCancelled && standalone?.isCancelled == true) {
+           standalone == nil ||
+            (mayRetireCancelled && standalone?.isCancelled == true && standalone?.historical != true) {
             if preserve(raw, recoveryKey: Self.archiveKeys[1]) {
                 defaults.removeObject(forKey: StandaloneWakePending.key)
                 if defaults.data(forKey: StandaloneWakePending.key) != nil { failures.append(StandaloneWakePending.key) }
@@ -856,6 +898,13 @@ struct ObservationStorage {
               current.operationID == pending.operationID, !current.isCancelled else { return false }
         return standaloneJournal(pending)
     }
+    /// Historical completion owns the lock and posts only after validating the
+    /// receipt and removing its journal. Archive maintenance is a separate write.
+    func publishHistoricalWake(_ value: ObservationProvenance) -> Bool {
+        guard let data = try? JSONEncoder().encode(value) else { return false }
+        return write(data, ObservationProvenance.key) && defaults.data(forKey: ObservationProvenance.key) == data
+    }
+
     func metadata(_ value: ObservationProvenance, notify: Bool = true) -> Bool {
         Self.lock.lock()
         defer { Self.lock.unlock() }
@@ -982,8 +1031,14 @@ struct TrustedObservationAdapter {
                                                           intents: r.kind == .break ? ["parent-entered-awake-break-v1"] :
                                                             ["parent-entered-sleep-boundaries-v1", "parent-confirmed-night-completion-v1"]))
         }
+        let standalone = StandaloneWakePending.load(defaults)
         let wakeEvidence = wakes.map { r -> LearningWakeEvidence in
-            let wakeSource = source(metadata?.wakes[r.id.uuidString], content: ObservationProvenance.wakeIdentity(r),
+            let entry = metadata?.wakes[r.id.uuidString]
+            let historicalReady = entry?.historicalWakeCalendar.map { calendar in
+                (standalone == nil || standalone?.operationID != entry?.completedOperationID) &&
+                    wakes.filter { calendar.isDate($0.day, inSameDayAs: r.day) }.count == 1
+            } ?? true
+            let wakeSource = source(historicalReady ? entry : nil, content: ObservationProvenance.wakeIdentity(r),
                                     intents: ["parent-entered-morning-wake-v1"])
             var linkedNight: UUID?
             if let link = metadata?.links[r.id.uuidString], link.wakeID == r.id,
@@ -1023,7 +1078,7 @@ struct TrustedObservationAdapter {
     }
 }
 
-fileprivate struct DaytimeReviewWindow {
+struct DaytimeReviewWindow {
     let day: LearningDay
     let followingLabel: Date
     let morning: LearningWakeEvidence

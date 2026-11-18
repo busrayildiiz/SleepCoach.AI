@@ -6,13 +6,14 @@ enum AddMode {
 }
 
 struct DayDetailView: View {
-    let day: Date
+    @State var day: Date
     @State var records: [SleepRecord]
 
     let onDelete: (_ ids: Set<UUID>) -> Void
     let onRecordUpsert: (SleepRecord) -> Bool
     let onBreakSaved: (_ newBreak: SleepRecord) -> Bool
 
+    @State private var showHistoricalWake = false
     @State private var showAddMenu = false
     @State private var recordingSheet: RecordingSheet?
     @State private var contextNap: SleepRecord? = nil
@@ -22,7 +23,7 @@ struct DayDetailView: View {
 
     @Environment(\.dismiss) private var dismiss
 
-    private let cal = Calendar.current
+    @State private var cal = Calendar.current
     @State private var now = Date()
 
     // MARK: - Derived
@@ -58,6 +59,10 @@ struct DayDetailView: View {
                     let summary = SleepAccounting(records: records, now: now, calendar: cal).sleepDay(on: day)
                     Text("Sleep Day: " + TimeFormat.minutes(summary.totalMinutes) + (!summary.subtotalsAreReliable ? " · unreliable" : (summary.isProvisional ? " · provisional" : " · finalized")))
                         .font(.subheadline)
+                    if cal.startOfDay(for: day) < cal.startOfDay(for: now) {
+                        Button("Review Morning Wake") { showHistoricalWake = true }
+                            .accessibilityIdentifier("history.wake.review")
+                    }
                     allCards
                 }
                 .padding(.horizontal, 16)
@@ -75,10 +80,16 @@ struct DayDetailView: View {
                     Button { showAddMenu = true } label: {
                         Image(systemName: "plus")
                     }
+                    .accessibilityLabel("Add")
+                    .accessibilityIdentifier("history.day.add")
                 }
             }
             .confirmationDialog("Add", isPresented: $showAddMenu, titleVisibility: .hidden) {
                 Button("Add Nap") { recordingSheet = .sleep(editing: nil, date: day) }
+                if isToday {
+                    Button("Record Historical Morning Wake") { showHistoricalWake = true }
+                        .accessibilityIdentifier("history.wake.open")
+                }
                 Button("Cancel", role: .cancel) { }
             }
             .confirmationDialog(
@@ -96,6 +107,16 @@ struct DayDetailView: View {
                     if let nap = contextNap { onDelete([nap.id]) }
                 }
                 Button("Cancel", role: .cancel) { contextNap = nil }
+            }
+            .sheet(isPresented: $showHistoricalWake) {
+                let initialDay = isToday ? cal.date(byAdding: .day, value: -1, to: day) ?? day : day
+                HistoricalWakeEditor(day: initialDay, calendar: cal) { savedDay, calendar in
+                    day = savedDay
+                    cal = calendar
+                    now = Date()
+                    records = SleepAccounting(records: SleepRecordPersistence().load() ?? [],
+                                              now: now, calendar: calendar).records(on: savedDay)
+                }
             }
             .fullScreenCover(item: $recordingSheet) { destination in
                 switch destination {
@@ -235,6 +256,110 @@ struct DayDetailView: View {
         if cal.isDateInToday(day) { return "Today" }
         if cal.isDateInYesterday(day) { return "Yesterday" }
         return day.formatted(.dateTime.day().month(.abbreviated))
+    }
+}
+
+private struct HistoricalWakeEditor: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var draft: HistoricalWakeDraft
+    @State private var selected: Date
+    @State private var confirmedSelection: Date?
+    @State private var retryOnly = false
+    @State private var message: String?
+    @State private var confirmation: HistoricalWakeConfirmation?
+    let onSaved: (Date, Calendar) -> Void
+    private let persistence = DailyWakeRecordPersistence()
+
+    init(day: Date, calendar: Calendar, onSaved: @escaping (Date, Calendar) -> Void) {
+        self.onSaved = onSaved
+        let initial = HistoricalWakeDraft(day: day, calendar: calendar, persistence: .init())
+        _draft = State(initialValue: initial)
+        let existing = initial.candidates.first?.wakeTime
+        _selected = State(initialValue: existing.flatMap {
+            initial.calendar.isDate($0, inSameDayAs: initial.day) ? $0 : nil
+        } ?? initial.day)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                DatePicker("Observed wake date and time", selection: $selected,
+                           in: ...draft.calendar.startOfDay(for: Date()).addingTimeInterval(-1))
+                    .accessibilityIdentifier("history.wake.dateTime")
+                    .disabled(retryOnly)
+                    .onChange(of: selected) { value in
+                        confirmedSelection = nil
+                        message = nil
+                        if confirmation != nil || !draft.calendar.isDate(value, inSameDayAs: draft.day) {
+                            guard draft.abandon() else {
+                                retryOnly = true
+                                message = "Cancellation could not be saved. Try again."
+                                return
+                            }
+                            confirmation = nil
+                            draft = HistoricalWakeDraft(day: value, calendar: draft.calendar, persistence: persistence)
+                        }
+                    }
+
+                if draft.candidates.count > 1 {
+                    Text(LocalizedStringKey(HistoricalWakeOutcome.ambiguous.message))
+                        .accessibilityIdentifier("history.wake.duplicate")
+                } else {
+                    if let wake = draft.candidates.first {
+                        LabeledContent("Recorded wake", value: wake.wakeTime.formatted(.dateTime.hour().minute()))
+                    }
+                    Toggle("I observed this morning wake", isOn: Binding(
+                        get: { confirmedSelection == selected },
+                        set: { confirmedSelection = $0 ? selected : nil }
+                    ))
+                        .accessibilityIdentifier("history.wake.confirmation")
+                        .disabled(retryOnly)
+                    Button(draft.candidates.isEmpty ? "Record Morning Wake" : "Confirm or Correct Morning Wake", action: save)
+                        .disabled(confirmedSelection != selected)
+                        .accessibilityIdentifier("history.wake.save")
+                }
+                if let message { Text(LocalizedStringKey(message)).accessibilityIdentifier("history.wake.feedback") }
+            }
+            .environment(\.calendar, draft.calendar)
+            .environment(\.timeZone, draft.calendar.timeZone)
+            .navigationTitle("Historical Morning Wake")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        if draft.abandon() { dismiss() }
+                        else { message = "Cancellation could not be saved. Try again." }
+                    }.accessibilityIdentifier("history.wake.cancel")
+                }
+            }
+        }
+        .interactiveDismissDisabled(retryOnly)
+    }
+
+    private func save() {
+        let workflow = SleepWakeTimeWorkflow(selectedWakeTime: selected, now: Date(), calendar: draft.calendar,
+            wakeRecords: [], sleepRecords: [], wakePersistence: persistence, sleepPersistence: .init())
+        guard confirmedSelection == selected else { return }
+        let capture = confirmation ?? draft.confirmObservedWake(at: selected)
+        confirmation = capture
+        let outcome = workflow.recoverHistoricalWake(draft, confirmation: capture)
+        if outcome == .saved {
+            onSaved(draft.day, draft.calendar)
+            dismiss()
+        } else {
+            retryOnly = retryOnly || outcome == .incomplete
+            if !retryOnly, outcome != .recoveryPending {
+                guard draft.abandon() else {
+                    retryOnly = true
+                    message = "Cancellation could not be saved. Try again."
+                    return
+                }
+                draft = HistoricalWakeDraft(day: selected, calendar: draft.calendar, persistence: persistence)
+                confirmation = nil
+                confirmedSelection = nil
+            }
+            message = outcome.message
+        }
     }
 }
 

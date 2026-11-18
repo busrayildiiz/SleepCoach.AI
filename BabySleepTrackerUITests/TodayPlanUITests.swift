@@ -82,6 +82,41 @@ final class TodayPlanUITests: XCTestCase {
         capture("no-confirmed-records-unavailable", app: app)
     }
 
+    func testHistoricalWakeEditorGatesSaveAndReturnsToSavedDayAtAccessibilitySize() {
+        let app = launch("completed", large: true)
+        app.buttons["home.plan.details"].tap()
+        let today = app.navigationBars["Today"]
+        XCTAssertTrue(today.waitForExistence(timeout: 5))
+
+        func openEditor() {
+            app.buttons["history.day.add"].tap()
+            let open = app.buttons["history.wake.open"]
+            XCTAssertTrue(open.waitForExistence(timeout: 5))
+            open.tap()
+            XCTAssertTrue(app.navigationBars["Historical Morning Wake"].waitForExistence(timeout: 5))
+        }
+
+        openEditor()
+        let save = app.buttons["history.wake.save"]
+        let confirmation = app.switches["history.wake.confirmation"]
+        for _ in 0..<4 where !save.isHittable { app.swipeUp() }
+        XCTAssertTrue(save.exists)
+        XCTAssertFalse(save.isEnabled)
+        XCTAssertTrue(confirmation.exists)
+        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "history.wake.dateTime").firstMatch.exists)
+        app.buttons["history.wake.cancel"].tap()
+        XCTAssertTrue(today.waitForExistence(timeout: 5))
+
+        openEditor()
+        for _ in 0..<4 where !confirmation.isHittable { app.swipeUp() }
+        confirmation.tap()
+        for _ in 0..<4 where !save.isHittable { app.swipeUp() }
+        XCTAssertTrue(save.isEnabled)
+        save.tap()
+        XCTAssertTrue(app.navigationBars["Yesterday"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["history.wake.review"].exists)
+    }
+
     func testCompletedWakeAndNetNapNavigateToExistingTimeline() {
         let app = launch("completed")
         let nap = event("record:\(parentID)", app: app)
