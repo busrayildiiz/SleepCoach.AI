@@ -1065,8 +1065,9 @@ fileprivate struct DaytimeReviewWindow {
     }
 
     static func affectsCoverage(_ nap: SleepRecord, start: Date, end: Date) -> Bool {
-        nap.kind == .dayNap && nap.date < end &&
-            (nap.date >= start || nap.isOngoing || (nap.observedEnd ?? nap.date) > start)
+        guard nap.kind == .dayNap, nap.date < end else { return false }
+        // An earlier nap without an observed end may still overlap this window.
+        return nap.date >= start || (nap.observedEnd.map { $0 > start } ?? true)
     }
 
     static func isRelevantBreak(_ record: SleepRecord, napIDs: Set<UUID>, start: Date, end: Date) -> Bool {
@@ -1093,8 +1094,8 @@ fileprivate struct DaytimeReviewWindow {
         let end = following.record.wakeTime
         let naps = evidence.sleeps.filter { Self.affectsCoverage($0.record, start: start, end: end) }
         guard naps.allSatisfy({ nap in
-            nap.record.date >= start && !nap.record.isOngoing &&
-                nap.record.observedEnd.map { $0 <= end } != false
+            guard nap.record.date >= start, let observedEnd = nap.record.observedEnd else { return false }
+            return observedEnd <= end
         }) else { return nil }
         let napIDs = Set(naps.map { $0.record.id })
         let breaks = evidence.sleeps.filter { Self.isRelevantBreak($0.record, napIDs: napIDs, start: start, end: end) }

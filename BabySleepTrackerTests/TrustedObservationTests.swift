@@ -801,6 +801,113 @@ final class TrustedObservationTests: XCTestCase {
         XCTAssertEqual(review.naps.map(\.id), [lateNap.id])
     }
 
+    func testCompletedNapsWithUnresolvedEndsBlockDaytimeReview() throws {
+        let pair = try coveragePair()
+        let nearFollowingWake = pair.1.wakeTime.addingTimeInterval(-60)
+        let naps = [
+            SleepRecord(date: pair.0.wakeTime.addingTimeInterval(3600), duration: 0),
+            SleepRecord(date: nearFollowingWake, duration: 1, endDate: nearFollowingWake)
+        ]
+        let adapter = TrustedObservationAdapter(defaults: defaults)
+        for nap in naps {
+            XCTAssertFalse(nap.isOngoing)
+            XCTAssertNil(nap.observedEnd)
+            XCTAssertTrue(sleep.save([nap]))
+            XCTAssertNil(adapter.prepareDaytimeReview(morningWakeID: pair.0.id, followingWakeID: pair.1.id,
+                                                      calendar: calendar))
+            XCTAssertTrue(snapshot.daytime.isEmpty)
+        }
+    }
+
+    func testUnresolvedNapBeforeMorningWakeRetiresZeroNapCoverageAfterEditAndRevert() throws {
+        let pair = try coveragePair()
+        let start = pair.0.wakeTime.addingTimeInterval(-120)
+        let priorNap = SleepRecord(date: start, duration: 1)
+        XCTAssertTrue(sleep.save([priorNap]))
+        let original = try attest(pair)
+        XCTAssertEqual(snapshot.daytime.first?.napIDs, [])
+
+        let unresolved = SleepRecord(id: priorNap.id, date: start, duration: 0)
+        XCTAssertNil(unresolved.observedEnd)
+        XCTAssertTrue(sleep.save([unresolved]))
+        let adapter = TrustedObservationAdapter(defaults: defaults)
+        XCTAssertNil(adapter.prepareDaytimeReview(morningWakeID: pair.0.id, followingWakeID: pair.1.id,
+                                                  calendar: calendar))
+        XCTAssertTrue(snapshot.daytime.isEmpty)
+        XCTAssertTrue(ObservationProvenance.load(defaults)?.daytime.isEmpty == true)
+        XCTAssertFalse(original.submit(.allNapsRecorded, at: pair.1.wakeTime, using: wake.storage, calendar: calendar))
+
+        XCTAssertTrue(sleep.save([priorNap]))
+        XCTAssertTrue(snapshot.daytime.isEmpty)
+        XCTAssertFalse(original.submit(.allNapsRecorded, at: pair.1.wakeTime, using: wake.storage, calendar: calendar))
+        _ = try attest(pair)
+        XCTAssertEqual(snapshot.daytime.first?.coverage, .confirmedComplete)
+        XCTAssertEqual(snapshot.daytime.first?.napIDs, [])
+    }
+
+    func testUnresolvedNapRequiresFreshDaytimeReviewAfterRecordedCorrection() throws {
+        let pair = try coveragePair()
+        let originalNap = try entered()
+        XCTAssertTrue(sleep.saveRecording(originalNap, now: now))
+        let originalReview = try attest(pair)
+
+        let unresolved = SleepRecord(id: originalNap.id, date: originalNap.date, duration: 0)
+        XCTAssertTrue(sleep.save([unresolved]))
+        let adapter = TrustedObservationAdapter(defaults: defaults)
+        XCTAssertNil(adapter.prepareDaytimeReview(morningWakeID: pair.0.id, followingWakeID: pair.1.id,
+                                                  calendar: calendar))
+        let editing = try XCTUnwrap(sleep.load()?.first)
+        var correction = SleepRecordingDraft(defaultDate: editing.date, editing: editing, now: now)
+        correction.start = editing.date.addingTimeInterval(60)
+        correction.end = try XCTUnwrap(originalNap.observedEnd)
+        let corrected = try submitted(correction, editing: editing)
+        XCTAssertTrue(sleep.saveRecording(corrected, now: now))
+        XCTAssertTrue(snapshot.daytime.isEmpty)
+        XCTAssertFalse(originalReview.submit(.allNapsRecorded, at: pair.1.wakeTime, using: wake.storage, calendar: calendar))
+
+        let review = try XCTUnwrap(adapter.prepareDaytimeReview(morningWakeID: pair.0.id,
+            followingWakeID: pair.1.id, calendar: calendar))
+        XCTAssertEqual(review.savedCoverage, .unknown)
+        XCTAssertEqual(review.naps.map(\.id), [originalNap.id])
+        XCTAssertEqual(review.naps.first?.end, corrected.observedEnd)
+        XCTAssertEqual(review.naps.first?.source, .verifiedObservation)
+        XCTAssertTrue(review.draft.submit(.allNapsRecorded, at: pair.1.wakeTime, using: wake.storage, calendar: calendar))
+        XCTAssertEqual(snapshot.daytime.first?.coverage, .confirmedComplete)
+    }
+
+    func testUnresolvedNapStartingAtFollowingWakePreservesEarlierZeroNapCoverage() throws {
+        let pair = try coveragePair()
+        let third = try trustedWake(at: pair.1.wakeTime.addingTimeInterval(86400))
+        let earlier = try attest(pair)
+        let next = try attest((pair.1, third))
+        let nap = SleepRecord(date: pair.1.wakeTime, duration: 0)
+        XCTAssertTrue(sleep.save([nap]))
+
+        let adapter = TrustedObservationAdapter(defaults: defaults)
+        XCTAssertNil(adapter.prepareDaytimeReview(morningWakeID: pair.1.id, followingWakeID: third.id,
+                                                  calendar: calendar))
+        XCTAssertFalse(next.verifiesPersistedAnswer(.allNapsRecorded, calendar: calendar))
+        XCTAssertTrue(earlier.verifiesPersistedAnswer(.allNapsRecorded, calendar: calendar))
+        XCTAssertEqual(snapshot.daytime.map(\.morningWakeID), [pair.0.id])
+        XCTAssertEqual(snapshot.daytime.first?.napIDs, [])
+    }
+
+    func testResolvedNapEndsRemainReviewableWithoutUpgradingProvenance() throws {
+        let pair = try coveragePair()
+        let start = pair.0.wakeTime.addingTimeInterval(60)
+        let legacy = SleepRecord(date: start, duration: 1)
+        let exact = SleepRecord(date: start.addingTimeInterval(120), duration: 0,
+                               endDate: start.addingTimeInterval(150))
+        XCTAssertTrue(sleep.save([legacy, exact]))
+        let review = try XCTUnwrap(TrustedObservationAdapter(defaults: defaults).prepareDaytimeReview(
+            morningWakeID: pair.0.id, followingWakeID: pair.1.id, calendar: calendar))
+        XCTAssertEqual(review.naps.map(\.id), [legacy.id, exact.id])
+        XCTAssertEqual(review.naps.map(\.end), [start.addingTimeInterval(60), exact.endDate])
+        XCTAssertEqual(review.naps.map(\.source), [.recordedUnverified, .recordedUnverified])
+        XCTAssertTrue(review.draft.submit(.allNapsRecorded, at: pair.1.wakeTime, using: wake.storage, calendar: calendar))
+        XCTAssertEqual(snapshot.sleeps.map(\.source), [.recordedUnverified, .recordedUnverified])
+    }
+
     func testTimeZoneChangeRequiresReviewForDifferentLearningDay() throws {
         let pair = try coveragePair()
         let original = try attest(pair)
