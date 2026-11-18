@@ -99,19 +99,42 @@ final class TodayPlanUITests: XCTestCase {
         openEditor()
         let save = app.buttons["history.wake.save"]
         let confirmation = app.switches["history.wake.confirmation"]
+        let datePicker = app.descendants(matching: .any).matching(identifier: "history.wake.dateTime").firstMatch
         for _ in 0..<4 where !save.isHittable { app.swipeUp() }
         XCTAssertTrue(save.exists)
         XCTAssertFalse(save.isEnabled)
         XCTAssertTrue(confirmation.exists)
-        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "history.wake.dateTime").firstMatch.exists)
+        XCTAssertTrue(datePicker.exists)
         app.buttons["history.wake.cancel"].tap()
         XCTAssertTrue(today.waitForExistence(timeout: 5))
 
         openEditor()
+        let initialPicker = datePicker.debugDescription
+        func failureDetails(_ message: String) -> String {
+            """
+            \(message)
+            Date picker when reopened: \(initialPicker)
+            Date picker at failure: \(datePicker.debugDescription)
+            \(app.debugDescription)
+            """
+        }
+
         for _ in 0..<4 where !confirmation.isHittable { app.swipeUp() }
-        confirmation.tap()
+        XCTAssertTrue(confirmation.isHittable, failureDetails("The confirmation switch could not be reached."))
+        XCTAssertTrue(confirmation.isEnabled, failureDetails("The confirmation switch was disabled."))
+        XCTAssertEqual(confirmation.value as? String, "0", failureDetails("A reopened editor must start unconfirmed."))
+        // At AX XXXL, the switch accessibility frame includes the label. Tap its trailing thumb.
+        confirmation.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 0.5))
+            .withOffset(CGVector(dx: -20, dy: 0)).tap()
+        let confirmed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "1"), object: confirmation)
+        XCTAssertEqual(XCTWaiter.wait(for: [confirmed], timeout: 5), .completed,
+                       failureDetails("The confirmation switch did not turn on."))
+
         for _ in 0..<4 where !save.isHittable { app.swipeUp() }
-        XCTAssertTrue(save.isEnabled)
+        let saveEnabled = XCTNSPredicateExpectation(predicate: NSPredicate(format: "enabled == true"), object: save)
+        XCTAssertEqual(XCTWaiter.wait(for: [saveEnabled], timeout: 5), .completed,
+                       failureDetails("Save did not enable after confirmation."))
+        XCTAssertTrue(save.isEnabled, failureDetails("Save was disabled before submission."))
         save.tap()
         XCTAssertTrue(app.navigationBars["Yesterday"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["history.wake.review"].exists)
