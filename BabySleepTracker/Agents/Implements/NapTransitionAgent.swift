@@ -81,9 +81,12 @@ final class DefaultNapTransitionAgent: NapTransitionAgentProtocol {
         now:         Date
     ) -> NapTransitionAssessment {
         
-        let breaks  = records.filter { $0.kind == .break }
-        let dayNaps = records.filter { $0.kind == .dayNap }.sorted { $0.date < $1.date }
-        let nights  = records.filter { $0.kind == .nightSleep }.sorted { $0.date < $1.date }
+        let dayNaps = records.filter { $0.kind == .dayNap && $0.date <= now && $0.date.timeIntervalSinceReferenceDate.isFinite }
+            .sorted { $0.date < $1.date }
+        let completedNaps = dayNaps.filter { $0.completedEnd(at: now) != nil }
+        let nights = records.filter { $0.kind == .nightSleep && $0.completedEnd(at: now) != nil }
+            .sorted { $0.date < $1.date }
+        let accounting = SleepAccounting(records: records, now: now, calendar: calendar)
         
         // Hangi geçiş türü bekleniyor?
         let transitionType = expectedTransition(ageMonths: ageMonths, dayNaps: dayNaps)
@@ -101,10 +104,10 @@ final class DefaultNapTransitionAgent: NapTransitionAgentProtocol {
         // Sinyalleri topla
         var signals = [TransitionSignal]()
         
-        if let s = checkNapRejection(dayNaps: dayNaps, now: now) { signals.append(s) }
+        if let s = checkNapRejection(dayNaps: completedNaps, now: now) { signals.append(s) }
         if let s = checkDelayedFirstNap(dayNaps: dayNaps, now: now) { signals.append(s) }
-        if let s = checkShortenedNightSleep(nights: nights, ageMonths: ageMonths, breaks: breaks, now: now) { signals.append(s) }
-        if let s = checkExcessiveDaytimeSleep(dayNaps: dayNaps, breaks: breaks, ageMonths: ageMonths, now: now) { signals.append(s) }
+        if let s = checkShortenedNightSleep(nights: nights, ageMonths: ageMonths, accounting: accounting) { signals.append(s) }
+        if let s = checkExcessiveDaytimeSleep(dayNaps: dayNaps, accounting: accounting, ageMonths: ageMonths) { signals.append(s) }
         if let s = checkEarlyMorningWaking(wakeRecords: wakeRecords, now: now) { signals.append(s) }
         if let s = checkLongWakeWindow(dayNaps: dayNaps, wakeRecords: wakeRecords, ageMonths: ageMonths) { signals.append(s) }
         
@@ -164,7 +167,9 @@ final class DefaultNapTransitionAgent: NapTransitionAgentProtocol {
         
         // Nap reddi = 30 dk'dan kısa nap (bebeğin karyolada uyumadığı)
         let recentNaps      = dayNaps.filter { $0.date >= weekAgo }
-        let rejections      = recentNaps.filter { $0.duration < 30 }.count
+        let rejections = recentNaps.filter { nap in
+            nap.completedEnd(at: now).map { $0.timeIntervalSince(nap.date) < 30 * 60 } == true
+        }.count
         
         guard rejections >= 3 else { return nil }
         
@@ -215,8 +220,7 @@ final class DefaultNapTransitionAgent: NapTransitionAgentProtocol {
     private func checkShortenedNightSleep(
         nights:    [SleepRecord],
         ageMonths: Int,
-        breaks:    [SleepRecord],
-        now: Date
+        accounting: SleepAccounting
     ) -> TransitionSignal? {
         
         guard nights.count >= 6 else { return nil }
@@ -224,7 +228,7 @@ final class DefaultNapTransitionAgent: NapTransitionAgentProtocol {
         let profile      = profileProvider.profile(forAgeMonths: ageMonths)
         let nightTarget  = profile.nightSleepRange.lowerBound
         
-        let recentNights = nights.suffix(7).map { $0.totalMinutes(breaks: breaks, at: now) }
+        let recentNights = nights.suffix(7).map { accounting.completedMinutes(sleepIDs: [$0.id]) }
         let recentAvg    = recentNights.reduce(0, +) / recentNights.count
         
         // Hedefin %85'inin altına düştüyse sinyal
@@ -240,10 +244,9 @@ final class DefaultNapTransitionAgent: NapTransitionAgentProtocol {
     
     /// Gündüz uykusu yaş normunun üstünde mi?
     private func checkExcessiveDaytimeSleep(
-        dayNaps:   [SleepRecord],
-        breaks:    [SleepRecord],
-        ageMonths: Int,
-        now: Date
+        dayNaps: [SleepRecord],
+        accounting: SleepAccounting,
+        ageMonths: Int
     ) -> TransitionSignal? {
         
         let profile    = profileProvider.profile(forAgeMonths: ageMonths)
@@ -254,8 +257,8 @@ final class DefaultNapTransitionAgent: NapTransitionAgentProtocol {
         let byDay = Dictionary(grouping: dayNaps) {
             calendar.startOfDay(for: $0.date)
         }
-        let dailyTotals = byDay.values.map { naps in
-            SleepAccounting.netMinutes(records: naps + breaks, now: now)
+        let dailyTotals = byDay.keys.compactMap {
+            accounting.completedSubtotal(on: $0, kind: .dayNap).comparableMinutes
         }
         guard !dailyTotals.isEmpty else { return nil }
         let avg = dailyTotals.reduce(0, +) / dailyTotals.count

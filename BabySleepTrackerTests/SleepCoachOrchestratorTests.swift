@@ -471,6 +471,21 @@ final class SleepCoachOrchestratorTests: XCTestCase {
         XCTAssertEqual(triggerName(llmAgent.receivedTriggers.first), "shortNapDetected")
     }
 
+    func testElapsedUnconfirmedSleepDoesNotTriggerCoaching() async {
+        let currentDay = now
+        UserDefaults.standard.set(currentDay.timeIntervalSince1970, forKey: "llm_lastGenerated")
+        orchestrator.generate(now: currentDay)
+        saveRecords([
+            SleepRecord(date: currentDay.addingTimeInterval(-2 * 3600), duration: 0,
+                        kind: .nightSleep, isOngoing: true, createdAt: currentDay)
+        ])
+
+        orchestrator.generate(now: currentDay)
+        XCTAssertEqual(orchestrator.snapshot?.recordedSleepDay, .incomplete(nil, reason: .unresolved))
+        XCTAssertFalse(orchestrator.isLLMLoading)
+        XCTAssertTrue(llmAgent.receivedTriggers.isEmpty)
+    }
+
     // MARK: - Helpers
 
     private func saveRecords(
@@ -624,7 +639,8 @@ private struct MockDaytimeAgent: DaytimePredictionAgentProtocol {
         wakeRecords: [DailyWakeRecord],
         ageMonths: Int,
         trackedDays: Int,
-        now: Date
+        now: Date,
+        planning: SleepPredictionContext?
     ) -> DaytimePredictionAgent {
 
         DaytimePredictionAgent(
@@ -649,7 +665,8 @@ private struct MockNightAgent: NightPredictionAgentProtocol {
         wakeRecords: [DailyWakeRecord],
         ageMonths: Int,
         trackedDays: Int,
-        now: Date
+        now: Date,
+        planning: SleepPredictionContext?
     ) -> NightPredictionAgent {
 
         NightPredictionAgent(

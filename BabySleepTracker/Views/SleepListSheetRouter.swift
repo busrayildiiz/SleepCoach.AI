@@ -10,7 +10,7 @@ struct SleepListSheetRouter: View {
     let onNightCompletion: (SleepRecord) -> NightSleepCompletionResult
     let onBreakSaved: (SleepRecord) -> Bool
     let onDeleteRecords: (Set<UUID>) -> Void
-    let onWakeTimeSave: (Date, WakeObservationCapture?) -> String?
+    let onWakeTimeSave: (Date, WakeObservationCapture?, HomeWakeOperation, Calendar) -> String?
 
     var body: some View {
         switch sheet {
@@ -26,12 +26,12 @@ struct SleepListSheetRouter: View {
             AddRecordView(defaultDate: date, vm: AddRecordViewModel(), initialKind: .nightSleep,
                           onSave: onRecordUpsert)
 
-        case .endSleep(let parent):
+        case .endSleep(let parent, let review):
             // Keep the editor's original revision/capabilities alive after a partial
             // write. The command revalidates persistence; notifications cannot replace
             // this form with a different night or destroy its retry context.
             AddRecordView(defaultDate: parent.date, editingRecord: parent,
-                          vm: AddRecordViewModel(), endingOngoing: true,
+                          vm: AddRecordViewModel(), endingOngoing: true, reviewUnconfirmed: review,
                           onNightCompletion: parent.kind == .nightSleep ? onNightCompletion : nil, onSave: onRecordUpsert)
 
         case .addBreak(let parentID):
@@ -68,10 +68,10 @@ struct SleepListSheetRouter: View {
                 onBreakSaved: onBreakSaved
             )
 
-        case .wakeTime:
+        case .wakeTime(let night):
             WakeTimeEditorView(
                 initialTime: todayWakeTime ?? defaultWakeTime,
-                nightRecords: records,
+                night: night,
                 existing: DailyWakeRecordPersistence().load()?.first { $0.wakeTime == todayWakeTime },
                 onSave: onWakeTimeSave
             )
@@ -82,16 +82,20 @@ struct SleepListSheetRouter: View {
 // MARK: - Wake Time Editor
 
 private struct WakeTimeEditorView: View {
-    let onSave: (Date, WakeObservationCapture?) -> String?
+    let onSave: (Date, WakeObservationCapture?, HomeWakeOperation, Calendar) -> String?
+    let night: SleepRecord?
+    @State private var calendar = Calendar.current
     @Environment(\.dismiss) private var dismiss
     @State private var draft: WakeObservationDraft
     @State private var saveFailed = false
     @State private var saveFailureMessage: String?
     @State private var cancellationFailed = false
 
-    init(initialTime: Date, nightRecords: [SleepRecord], existing: DailyWakeRecord?, onSave: @escaping (Date, WakeObservationCapture?) -> String?) {
-        self.onSave   = onSave
-        _draft = State(initialValue: WakeObservationDraft(initial: initialTime, existing: existing, nightRecords: nightRecords))
+    init(initialTime: Date, night: SleepRecord?, existing: DailyWakeRecord?,
+         onSave: @escaping (Date, WakeObservationCapture?, HomeWakeOperation, Calendar) -> String?) {
+        self.onSave = onSave
+        self.night = night
+        _draft = State(initialValue: WakeObservationDraft(initial: initialTime, existing: existing))
     }
 
     var body: some View {
@@ -108,7 +112,8 @@ private struct WakeTimeEditorView: View {
                         .font(.system(size: 20, weight: .bold, design: .rounded))
                         .foregroundStyle(Color.sleepInk)
                         .multilineTextAlignment(.center)
-                    Text("This time becomes the starting point for today's sleep predictions.")
+                    Text(night.map { "This also ends the night started \(RecordingFormat.timestamp($0.date, calendar: calendar))." }
+                         ?? "Record an observed wake time to help plan today.")
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(Color.sleepMuted)
                         .multilineTextAlignment(.center)
@@ -134,10 +139,11 @@ private struct WakeTimeEditorView: View {
                     }.accessibilityIdentifier("home.wake.cancel")
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Save") {
+                    Button(night == nil ? "Save" : "Save and End Sleep") {
                         cancellationFailed = false
                         if draft.submit(save: { date, capture in
-                            saveFailureMessage = onSave(date, capture)
+                            let operation = night.map { HomeWakeOperation.associated(SleepRecordVersion($0)) } ?? .independent
+                            saveFailureMessage = onSave(date, capture, operation, calendar)
                             return saveFailureMessage == nil
                         }) { dismiss() } else { saveFailed = true }
                     }.accessibilityIdentifier("home.wake.save")
@@ -152,6 +158,8 @@ private struct WakeTimeEditorView: View {
                  ? "Cancellation could not be saved. Your entry is still open; try Cancel again."
                  : saveFailureMessage ?? "Saving did not finish. Review your wake time and try again."))
         }
+        .environment(\.calendar, calendar)
+        .environment(\.timeZone, calendar.timeZone)
         .tint(Color.sleepPurpleDeep)
         .presentationDetents([.height(390)])
         .presentationDragIndicator(.visible)

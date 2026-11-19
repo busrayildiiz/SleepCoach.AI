@@ -6,7 +6,7 @@ struct SleepTimelineItem: Equatable, Identifiable {
     enum VisualState: Equatable { case completed, active, next, future, unavailable }
     enum Source: Equatable { case recorded(UUID), estimate, defaultValue, guidance, unavailable }
     enum UnavailableReason: Equatable {
-        case missingRecord, invalidRecord, eligibilityUnverified, missingPrediction, overdue, notAnObservation
+        case missingRecord, invalidRecord, endUnconfirmed, eligibilityUnverified, missingPrediction, overdue, notAnObservation
     }
 
     let id: String
@@ -28,6 +28,7 @@ struct SleepTimelineItem: Equatable, Identifiable {
 
     var isOngoing: Bool { visualState == .active }
     var isActive: Bool { visualState == .active }
+    var isEndUnconfirmed: Bool { unavailableReason == .endUnconfirmed }
     var isFuture: Bool { visualState == .next || visualState == .future }
     var usesDashedConnector: Bool {
         if case .recorded = source { return visualState == .unavailable }
@@ -57,16 +58,20 @@ struct SleepTimelineCalculator {
     var day: Date? = nil
     var proposals: [SleepTimelineProposal] = []
     var predictionEligibility: PredictionEligibility = .unavailable
+    var assessment: SleepStateAssessment? = nil
 
     func calculate() -> [SleepTimelineItem] {
         let sleepDay = calendar.startOfDay(for: day ?? now)
         let accounting = SleepAccounting(records: records, now: now, calendar: calendar)
         let selected = accounting.records(on: sleepDay)
+        let state = assessment ?? SleepStateCalculator.assess(records: records, wakes: [wakeRecord].compactMap { $0 },
+            evaluation: .init(now: now, calendar: calendar))
+        let active = state.active
         let previousDay = calendar.date(byAdding: .day, value: -1, to: sleepDay)
         // Only today's row receives previous-day ongoing context. Historical rows
         // retain their own start-day records, and completed nights are never reassigned.
         let carryover = calendar.isDate(sleepDay, inSameDayAs: now) ? records.filter { record in
-            record.kind != .break && record.isOngoing && record.date <= now &&
+            (record.id == active?.record.id || record.id == state.reminderNight?.id) &&
                 previousDay.map { calendar.isDate(record.date, inSameDayAs: $0) } == true
         } : []
         let sleeps = (selected.filter { $0.kind != .break } + carryover).sorted {
@@ -74,20 +79,21 @@ struct SleepTimelineCalculator {
         }
         var items = [wakeItem(on: sleepDay)]
         for record in sleeps {
-            let completed = !record.isOngoing && record.date <= now &&
-                record.observedEnd.map { $0 <= now } == true
-            let active = record.isOngoing && record.date <= now
+            let end = record.completedEnd(at: now)
+            let completed = end != nil
+            let isActive = active?.record.id == record.id
+            let unresolved = record.date <= now && (record.isOngoing || (record.endDate == nil && record.duration == 0))
             let originalDay = calendar.startOfDay(for: record.date)
             let kind: SleepTimelineItem.Kind = record.kind == .nightSleep ? .bedtime :
-                .nap(index: completed || active ? napNumber(for: record, accounting: accounting) : nil)
+                .nap(index: completed || isActive ? napNumber(for: record, accounting: accounting) : nil)
             items.append(SleepTimelineItem(
                 id: "record:\(record.id.uuidString)", kind: kind, sleepDay: originalDay,
                 source: .recorded(record.id), time: record.date,
-                observedEnd: completed ? record.observedEnd : nil,
-                durationMinutes: completed ? record.totalMinutes(breaks: selected.filter { $0.kind == .break }, at: now) : nil,
-                elapsedMinutes: active ? max(0, Int(now.timeIntervalSince(record.date) / 60)) : nil,
-                visualState: completed ? .completed : (active ? .active : .unavailable),
-                unavailableReason: completed || active ? nil : .invalidRecord,
+                observedEnd: end,
+                durationMinutes: completed ? accounting.completedMinutes(sleepIDs: [record.id]) : nil,
+                elapsedMinutes: isActive ? active?.elapsed : nil,
+                visualState: completed ? .completed : (isActive ? .active : .unavailable),
+                unavailableReason: completed || isActive ? nil : (unresolved ? .endUnconfirmed : .invalidRecord),
                 isCarryover: originalDay != sleepDay))
         }
 

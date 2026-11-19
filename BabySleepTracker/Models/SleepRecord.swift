@@ -26,6 +26,7 @@ struct SleepRecord: Identifiable, Codable {
     var creationIntent: ObservationCreationIntent? = nil
     /// End Sleep route capability, transient and excluded from serialization.
     var nightCompletionIntent: ObservationCreationIntent? = nil
+    var recordingCalendar: Calendar? = nil
 
     init(
         id: UUID = UUID(),
@@ -75,6 +76,12 @@ struct SleepRecord: Identifiable, Codable {
         if let endDate { return endDate > date ? endDate : nil }
         guard duration > 0 else { return nil }
         return date.addingTimeInterval(Double(duration) * 60)
+    }
+
+    func completedEnd(at now: Date) -> Date? {
+        guard let end = observedEnd, date.timeIntervalSinceReferenceDate.isFinite,
+              end.timeIntervalSinceReferenceDate.isFinite, end <= now else { return nil }
+        return end
     }
 
     func totalMinutes(breaks: [SleepRecord], at referenceDate: Date) -> Int {

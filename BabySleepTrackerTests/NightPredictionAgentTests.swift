@@ -132,39 +132,16 @@ final class NightPredictionAgentTests: XCTestCase {
 
     // MARK: - Fixed Bedtime
 
-    func testBeforeFourteenDaysUsesFixedAgeBasedBedtime() {
-
-        let result = agent.predictBedtime(
-            pattern: nil,
-            todayRecords: [],
-            wakeRecords: [],
-            ageMonths: 9,
-            trackedDays: 0,
-            now: now
-        )
-
-        // 18...20 → midpoint = 19:00
-        XCTAssertEqual(
-            result.optimalBedtimeStart,
-            makeDate(hour: 18, minute: 30)
-        )
-
-        XCTAssertEqual(
-            result.optimalBedtimeEnd,
-            makeDate(hour: 19, minute: 30)
-        )
-
-        // Fixed bedtime risk = ideal + 50 min
-        XCTAssertEqual(
-            result.overtiredRiskTime,
-            makeDate(hour: 19, minute: 50)
-        )
-
-        XCTAssertTrue(
-            result.reasoning.contains {
-                $0.contains("Not enough naps completed yet")
-            }
-        )
+    func testMissingAnchorUsesAgeRangeWithoutInventingBedtime() {
+        let context = SleepPredictionContext(records: [], wakes: [], evaluation: .init(now: now, calendar: calendar))
+        let result = agent.predictBedtime(pattern: nil, todayRecords: [], wakeRecords: [],
+                                         ageMonths: 9, trackedDays: 0, now: now, planning: context)
+        XCTAssertNil(result.optimalBedtimeStart)
+        XCTAssertNil(result.optimalBedtimeEnd)
+        XCTAssertNil(result.overtiredRiskTime)
+        XCTAssertNil(result.confidence)
+        XCTAssertNil(result.daytimeSleepStatus)
+        XCTAssertEqual(result.generalBedtimeHours, 18...20)
     }
 
     // MARK: - Learning Period
@@ -332,27 +309,13 @@ final class NightPredictionAgentTests: XCTestCase {
             now: now
         )
 
-        // Use the completed nap's 16:00 end, not the ongoing nap's stored
-        // placeholder duration or its live 20:00 endpoint. Elapsed ongoing
-        // sleep contributes to the provisional daytime total (60 + 120 = 180).
         XCTAssertNil(ongoingNap.observedEnd)
-        XCTAssertEqual(result.daytimeSleepStatus, .onTrack)
-
-        XCTAssertEqual(
-            result.optimalBedtimeStart,
-            makeDate(hour: 19, minute: 30)
-        )
-
-        XCTAssertEqual(
-            result.optimalBedtimeEnd,
-            makeDate(hour: 20, minute: 0)
-        )
-
-        XCTAssertTrue(
-            result.reasoning.contains {
-                $0.contains("Last nap ended at")
-            }
-        )
+        XCTAssertNil(result.daytimeSleepStatus)
+        XCTAssertNil(result.optimalBedtimeStart)
+        XCTAssertNil(result.optimalBedtimeEnd)
+        XCTAssertNil(result.overtiredRiskTime)
+        XCTAssertNil(result.confidence)
+        XCTAssertFalse(result.daytimeSubtotalIsReliable)
     }
 
     // MARK: - Chronological Ordering
@@ -516,7 +479,7 @@ final class NightPredictionAgentTests: XCTestCase {
 
     // MARK: - Confidence
 
-    func testConfidenceStartsAtForty() {
+    func testConfidenceRequiresABedtimeAnchor() {
 
         let result = agent.predictBedtime(
             pattern: nil,
@@ -527,28 +490,25 @@ final class NightPredictionAgentTests: XCTestCase {
             now: now
         )
 
-        XCTAssertEqual(
-            result.confidence,
-            40
-        )
+        XCTAssertNil(result.confidence)
     }
 
     func testConfidenceIncreasesWithTrackedDays() {
 
         let result = agent.predictBedtime(
             pattern: nil,
-            todayRecords: [],
+            todayRecords: [makeNap(hour: 15, duration: 60)],
             wakeRecords: [],
             ageMonths: 9,
             trackedDays: 7,
             now: now
         )
 
-        // 40 + (7 * 2) = 54
+        // 40 + (7 * 2) + 10 for a recorded nap end = 64
 
         XCTAssertEqual(
             result.confidence,
-            54
+            64
         )
     }
 
@@ -625,7 +585,7 @@ final class NightPredictionAgentTests: XCTestCase {
         )
     }
 
-    func testReasoningMentionsEstimatedBedtimeBeforeEnoughNaps() {
+    func testReasoningMentionsAgeGuidanceBeforeEnoughNaps() {
 
         let result = agent.predictBedtime(
             pattern: nil,
@@ -638,7 +598,7 @@ final class NightPredictionAgentTests: XCTestCase {
 
         XCTAssertTrue(
             result.reasoning.contains {
-                $0.contains("Not enough naps completed yet")
+                $0.contains("age-based bedtime guidance")
             }
         )
     }

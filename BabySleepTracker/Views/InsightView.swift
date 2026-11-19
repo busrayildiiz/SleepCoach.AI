@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct InsightsView: View {
+    @Binding var sleepConfirmation: StillSleepingConfirmation?
+    let isVisible: Bool
 
     private enum CoachTab: String, CaseIterable {
         case overview = "Coach"
@@ -58,6 +60,17 @@ struct InsightsView: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: .sleepRecordsDidChange)) { _ in refresh() }
             .onReceive(NotificationCenter.default.publisher(for: .dailyWakeRecordsDidChange)) { _ in refresh() }
+            .task(id: isVisible) { @MainActor in
+                guard isVisible else { return }
+                while !Task.isCancelled {
+                    do { try await Task.sleep(for: .seconds(60)) } catch { return }
+                    guard let snapshot = orchestrator.snapshot else { continue }
+                    let now = Date()
+                    if snapshot.hasCurrentSleep || !snapshot.evaluationCalendar.isDate(now, inSameDayAs: snapshot.generatedAt) {
+                        orchestrator.generate(now: now, confirmation: sleepConfirmation, requestCoaching: false)
+                    }
+                }
+            }
             .environment(\.locale, Locale(identifier: "en_US"))
         }
     }
@@ -65,11 +78,7 @@ struct InsightsView: View {
     @ViewBuilder
     private var sleepDaySummary: some View {
         if let snapshot = orchestrator.snapshot {
-            let sleepDayMinutes = TimeFormat.minutes(snapshot.todayTotalMinutes)
-            let sleepDayStatus = snapshot.sleepDayIsProvisional ? " · provisional" : " · finalized"
-            let rollingMinutes = TimeFormat.minutes(snapshot.rolling24hMinutes)
-            let rollingStatus = snapshot.rolling24hIsProvisional ? " · provisional" : ""
-            let summary: String = "Sleep Day: \(sleepDayMinutes)\(sleepDayStatus) | Rolling 24h: \(rollingMinutes)\(rollingStatus)"
+            let summary = "Sleep Day: \(snapshot.recordedSleepDay.display) | Rolling 24h: \(snapshot.recordedRolling24h.display)"
 
             Text(summary)
                 .font(.caption)
@@ -156,11 +165,10 @@ struct InsightsView: View {
 
     private var coachHeroCard: some View {
         let isBedtime = orchestrator.snapshot?.nextSleepKind == .bedtime
-        let targetTime = isBedtime
-            ? (orchestrator.snapshot?.night.optimalBedtimeStart ?? Date())
-            : (orchestrator.snapshot?.daytime.nextNapTime ?? Date())
-        let confidence = max(0, min(orchestrator.snapshot?.daytime.confidence ?? 0, 100))
+        let targetTime = actionTargetTime
+        let confidence = overallConfidence
         let windowText = isBedtime ? bedtimeWindowText : napWindowText
+        let source = (isBedtime ? orchestrator.snapshot?.night.source : orchestrator.snapshot?.daytime.source)
 
         return VStack(alignment: .leading, spacing: 0) {
             Text(isBedtime ? "TONIGHT'S PLAN" : "TODAY'S PLAN")
@@ -193,22 +201,24 @@ struct InsightsView: View {
 
                 Spacer(minLength: 8)
 
-                VStack(spacing: 3) {
-                    Text("Confidence")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(CoachColor.muted)
-                    ZStack {
-                        Circle()
-                            .stroke(CoachColor.purple.opacity(0.15), lineWidth: 5)
-                        Circle()
-                            .trim(from: 0, to: CGFloat(confidence) / 100)
-                            .stroke(CoachColor.purpleDeep, style: StrokeStyle(lineWidth: 5, lineCap: .round))
-                            .rotationEffect(.degrees(-90))
-                        Text("\(confidence)%")
-                            .font(.system(size: 12, weight: .bold, design: .rounded))
-                            .foregroundStyle(CoachColor.ink)
+                if let confidence {
+                    VStack(spacing: 3) {
+                        Text("Confidence")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(CoachColor.muted)
+                        ZStack {
+                            Circle()
+                                .stroke(CoachColor.purple.opacity(0.15), lineWidth: 5)
+                            Circle()
+                                .trim(from: 0, to: CGFloat(confidence) / 100)
+                                .stroke(CoachColor.purpleDeep, style: StrokeStyle(lineWidth: 5, lineCap: .round))
+                                .rotationEffect(.degrees(-90))
+                            Text("\(confidence)%")
+                                .font(.system(size: 12, weight: .bold, design: .rounded))
+                                .foregroundStyle(CoachColor.ink)
+                        }
+                        .frame(width: 40, height: 40)
                     }
-                    .frame(width: 40, height: 40)
                 }
             }
             .padding(.horizontal, 16)
@@ -217,7 +227,7 @@ struct InsightsView: View {
             Divider().overlay(CoachColor.stroke)
 
             HStack(spacing: 5) {
-                Text("Optimal window")
+                Text(source?.rawValue ?? "Planning")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(CoachColor.muted)
                 Text(windowText)
@@ -607,7 +617,7 @@ struct InsightsView: View {
             return .completed
         }
 
-        let target = actionTargetTime.addingMinutes(-item.offsetMinutesBeforeTarget)
+        guard let target = actionTargetTime?.addingMinutes(-item.offsetMinutesBeforeTarget) else { return .upcoming }
 
         if now >= target {
             return .readyNow
@@ -617,7 +627,8 @@ struct InsightsView: View {
     }
     
     private var minutesToGoText: String {
-        let minutes = Int(actionTargetTime.timeIntervalSince(Date()) / 60)
+        guard let target = actionTargetTime else { return "Time unavailable" }
+        let minutes = Int(target.timeIntervalSince(Date()) / 60)
         guard minutes > 0 else { return "Time's up" }
         return "~\(minutes) min to go"
     }
@@ -662,7 +673,7 @@ struct InsightsView: View {
         let id: String
         let name: String
         let icon: String
-        let score: Int
+        let score: Int?
     }
 
     private struct ConfidenceSignal: Identifiable {
@@ -694,11 +705,11 @@ struct InsightsView: View {
         let label: String
     }
 
-    private var actionTargetTime: Date {
+    private var actionTargetTime: Date? {
         let isBedtime = orchestrator.snapshot?.nextSleepKind == .bedtime
         return isBedtime
-            ? (orchestrator.snapshot?.night.optimalBedtimeStart ?? Date())
-            : (orchestrator.snapshot?.daytime.nextNapTime ?? Date())
+            ? orchestrator.snapshot?.night.recommendation.value
+            : orchestrator.snapshot?.daytime.recommendation.value
     }
 
     private var isBedtimeAction: Bool {
@@ -719,7 +730,7 @@ struct InsightsView: View {
                 id: "dim_lights",
                 icon: "lamp.desk.fill", iconColor: .orange, iconBackground: Color.orange.opacity(0.15),
                 title: "Start dimming lights",
-                subtitle: "Begin by \(time(actionTargetTime.addingMinutes(-45)))",
+                subtitle: actionTargetTime.map { "Begin by \(time($0.addingMinutes(-45)))" } ?? "Dim the lights before sleep",
                 offsetMinutesBeforeTarget: 45
             ),
             PreSleepActionItem(
@@ -733,7 +744,7 @@ struct InsightsView: View {
                 id: "feed",
                 icon: "cup.and.saucer.fill", iconColor: CoachColor.purpleDeep, iconBackground: CoachColor.purple.opacity(0.15),
                 title: "Feed before bedtime",
-                subtitle: "Finish feeding by \(time(actionTargetTime.addingMinutes(-15)))",
+                subtitle: actionTargetTime.map { "Finish feeding by \(time($0.addingMinutes(-15)))" } ?? "Feed before the usual bedtime routine",
                 offsetMinutesBeforeTarget: 15
             ),
             PreSleepActionItem(
@@ -773,7 +784,7 @@ struct InsightsView: View {
                 id: "dim_room",
                 icon: "lamp.desk.fill", iconColor: .orange, iconBackground: Color.orange.opacity(0.15),
                 title: "Dim the room",
-                subtitle: "Begin by \(time(actionTargetTime.addingMinutes(-10)))",
+                subtitle: actionTargetTime.map { "Begin by \(time($0.addingMinutes(-10)))" } ?? "Start the usual nap routine",
                 offsetMinutesBeforeTarget: 10
             ),
             PreSleepActionItem(
@@ -794,18 +805,9 @@ struct InsightsView: View {
     }
     
     private func loadTodayRecordsForBreakdown() -> [SleepRecord] {
-        guard let data = UserDefaults.standard.data(forKey: "sleepRecords"),
-              let decoded = try? JSONDecoder().decode([SleepRecord].self, from: data)
-        else { return [] }
-        let now = orchestrator.snapshot?.generatedAt ?? Date()
-        return SleepAccounting(records: decoded, now: now, calendar: .current).records(on: now)
-    }
-
-    private func loadWakeRecordsForBreakdown() -> [DailyWakeRecord] {
-        guard let data = UserDefaults.standard.data(forKey: "dailyWakeRecords_v1"),
-              let decoded = try? JSONDecoder().decode([DailyWakeRecord].self, from: data)
-        else { return [] }
-        return decoded
+        guard let snapshot = orchestrator.snapshot, let records = SleepRecordPersistence().load() else { return [] }
+        return SleepAccounting(records: records, now: snapshot.generatedAt, calendar: snapshot.evaluationCalendar)
+            .records(on: snapshot.generatedAt)
     }
 
     private func expectedLastNapEndTime(profile: AgeBasedSleepProfile, napCount: Int, anchor: Date) -> Date {
@@ -941,28 +943,17 @@ struct InsightsView: View {
         else { return nil }
 
         let profile = DefaultAgeBasedSleepProfileProvider().profile(forAgeMonths: snapshot.ageMonths)
-        let calendar = Calendar.current
         let now = snapshot.generatedAt
-        let today = calendar.startOfDay(for: now)
-
-        let records = loadTodayRecordsForBreakdown()
-        let dayNaps = records.filter { $0.kind == .dayNap && !$0.isOngoing }.sorted { $0.date < $1.date }
-
+        let calendar = snapshot.evaluationCalendar
+        let dayNaps = loadTodayRecordsForBreakdown().filter { $0.kind == .dayNap }
+            .compactMap { $0.completedEnd(at: now) }.sorted()
         guard dayNaps.count >= profile.expectedNapCount.lowerBound,
-              let actualLastNap = dayNaps.last
-        else { return nil }
-
-        let actualLastNapEnd = actualLastNap.observedEnd ?? actualLastNap.date
-
-        let typicalWakeHour = UserDefaults.standard.object(forKey: "typicalWakeHour") as? Double ?? 7.0
-        let typicalWakeMinute = UserDefaults.standard.object(forKey: "typicalWakeMinute") as? Double ?? 0.0
-        let typicalWake = calendar.date(
-            bySettingHour: Int(typicalWakeHour), minute: Int(typicalWakeMinute), second: 0, of: today
-        ) ?? today
-
-        // Bugünün GERÇEK loglanan uyanma saati (varsa)
-        let wakeRecords = loadWakeRecordsForBreakdown()
-        let todayWakeRecord = wakeRecords.first(where: { calendar.isDate($0.day, inSameDayAs: now) })?.wakeTime
+              let actualLastNapEnd = dayNaps.last,
+              let typicalWake = snapshot.evaluationRoutine?.wake(on: now, calendar: calendar),
+              let wakeAnchor = snapshot.evaluationWake,
+              snapshot.night.source == .recordedEstimate,
+              let finalDate = snapshot.night.recommendation.value,
+              let totalDaytime = snapshot.recordedDaytime.comparableMinutes else { return nil }
 
         // Baseline: bebek typical saatte uyansaydı beklenen son nap bitişi (yaşa dayalı, bugünden bağımsız)
         let baselineLastNapEnd = expectedLastNapEndTime(
@@ -970,10 +961,8 @@ struct InsightsView: View {
         )
         let ewwMin = profile.eveningWakeWindow.lowerBound
         let baselineDate = baselineLastNapEnd.addingMinutes(ewwMin)
-        let finalDate = snapshot.night.optimalBedtimeStart
 
         // Faktör 1: Bugünün gerçek uyanma saati, typical'a göre ne kadar kaydı — günün geri kalanını öteler
-        let wakeAnchor = todayWakeRecord ?? typicalWake
         let wakeOffsetDelta = Int(wakeAnchor.timeIntervalSince(typicalWake) / 60)
 
         // Faktör 2: Wake-up ötelemesi hesaba katıldıktan SONRA, son nap ne kadar erken/geç bitti (residual — çifte sayım yok)
@@ -981,14 +970,13 @@ struct InsightsView: View {
         let napTimingDelta = Int(actualLastNapEnd.timeIntervalSince(expectedLastNapEndAdjusted) / 60)
 
         // Faktör 3: Gündüz uyku açığı telafisi — OvertiredCalculator.bedtimeWindow ile birebir aynı formül
-        let totalDaytime = SleepAccounting.netMinutes(records: records, now: now, kind: .dayNap)
         let daytimeDeficit = max(0, profile.daytimeSleepRange.lowerBound - totalDaytime)
         let adjustment = daytimeDeficit / 3
         let deficitDelta = -adjustment
 
         var factors: [PersonalizationFactorResult] = []
 
-        if todayWakeRecord != nil, abs(wakeOffsetDelta) >= 3 {
+        if abs(wakeOffsetDelta) >= 3 {
             factors.append(PersonalizationFactorResult(
                 id: "wake_up",
                 title: "Today's wake-up",
@@ -1253,20 +1241,22 @@ struct InsightsView: View {
                 ZStack(alignment: .leading) {
                     Capsule()
                         .fill(CoachColor.purple.opacity(0.10))
-                    Capsule()
-                        .fill(
-                            LinearGradient(
-                                colors: [CoachColor.purple.opacity(0.75), CoachColor.purpleDeep],
-                                startPoint: .leading,
-                                endPoint: .trailing
+                    if let score = item.score {
+                        Capsule()
+                            .fill(
+                                LinearGradient(
+                                    colors: [CoachColor.purple.opacity(0.75), CoachColor.purpleDeep],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
                             )
-                        )
-                        .frame(width: max(8, geo.size.width * CGFloat(item.score) / 100))
+                            .frame(width: geo.size.width * CGFloat(score) / 100)
+                    }
                 }
             }
             .frame(height: 5)
 
-            Text("\(item.score)%")
+            Text(item.score.map { "\($0)%" } ?? "–")
                 .font(.system(size: 10.5, weight: .bold, design: .rounded))
                 .foregroundStyle(CoachColor.ink)
                 .monospacedDigit()
@@ -1286,7 +1276,7 @@ struct InsightsView: View {
             numberedSectionHeader(number: 4, title: "CONFIDENCE DETAILS")
 
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text("\(overallConfidence)%")
+                Text(overallConfidence.map { "\($0)%" } ?? "–")
                     .font(.system(size: 30, weight: .bold, design: .rounded))
                     .foregroundStyle(CoachColor.purpleDeep)
                     .monospacedDigit()
@@ -1521,33 +1511,6 @@ struct InsightsView: View {
         case completed
     }
     
-    private var confidenceRing: some View {
-        let confidence = max(0, min(orchestrator.snapshot?.daytime.confidence ?? 0, 100))
-        return ZStack {
-            Circle()
-                .stroke(CoachColor.purple.opacity(0.14), lineWidth: 8)
-            Circle()
-                .trim(from: 0, to: CGFloat(confidence) / 100)
-                .stroke(
-                    AngularGradient(
-                        colors: [CoachColor.purple.opacity(0.45), CoachColor.purpleDeep, CoachColor.sun],
-                        center: .center
-                    ),
-                    style: StrokeStyle(lineWidth: 8, lineCap: .round)
-                )
-                .rotationEffect(.degrees(-90))
-            VStack(spacing: 0) {
-                Text("\(confidence)%")
-                    .font(.system(size: 17, weight: .bold, design: .rounded))
-                    .foregroundStyle(CoachColor.ink)
-                Text("trust")
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(CoachColor.muted)
-            }
-        }
-        .frame(width: 78, height: 78)
-    }
-
     private func metricPill(title: String, value: String, icon: String, color: Color) -> some View {
         HStack(spacing: 8) {
             iconTile(icon, color: color, size: 32)
@@ -1638,14 +1601,15 @@ struct InsightsView: View {
         return trimmed.isEmpty ? (orchestrator.snapshot?.babyName ?? "Baby") : trimmed
     }
 
-    private var overallConfidence: Int {
-        let daytime = orchestrator.snapshot?.daytime.confidence ?? 0
-        let night = orchestrator.snapshot?.night.confidence ?? daytime
-        return max(0, min(100, orchestrator.snapshot?.nextSleepKind == .bedtime ? night : daytime))
+    private var overallConfidence: Int? {
+        guard let snapshot = orchestrator.snapshot else { return nil }
+        let confidence = snapshot.nextSleepKind == .bedtime ? snapshot.night.confidence : snapshot.daytime.confidence
+        return confidence.map { max(0, min(100, $0)) }
     }
 
     private var confidenceLevelText: String {
-        switch overallConfidence {
+        guard let confidence = overallConfidence else { return "Unavailable" }
+        switch confidence {
         case 85...100: return "Very high"
         case 70..<85: return "High"
         case 50..<70: return "Learning"
@@ -1654,7 +1618,8 @@ struct InsightsView: View {
     }
 
     private var confidenceLevelColor: Color {
-        switch overallConfidence {
+        guard let confidence = overallConfidence else { return CoachColor.muted }
+        switch confidence {
         case 70...100: return CoachColor.green
         case 50..<70: return CoachColor.sun
         default: return CoachColor.red
@@ -1662,16 +1627,7 @@ struct InsightsView: View {
     }
 
     private var agentContributions: [AgentContribution] {
-        guard let snapshot = orchestrator.snapshot else {
-            return [
-                AgentContribution(id: "phase", name: "Sleep Phase Agent", icon: "moonphase.first.quarter", score: 0),
-                AgentContribution(id: "pattern", name: "Pattern Agent", icon: "chart.xyaxis.line", score: 0),
-                AgentContribution(id: "wake", name: "Wake Window Agent", icon: "clock.arrow.circlepath", score: 0),
-                AgentContribution(id: "transition", name: "Transition Agent", icon: "arrow.triangle.2.circlepath", score: 0),
-                AgentContribution(id: "risk", name: "Overtired Risk Agent", icon: "exclamationmark.triangle", score: 0),
-                AgentContribution(id: "confidence", name: "Confidence Agent", icon: "shield.checkered", score: 0)
-            ]
-        }
+        guard let snapshot = orchestrator.snapshot else { return [] }
 
         let report = snapshot.dataQualityReport
         return [
@@ -1708,9 +1664,9 @@ struct InsightsView: View {
             ),
             ConfidenceSignal(
                 id: "wake",
-                title: "Wake-up time \(orchestrator.snapshot?.daytime.usedDefaultWakeTime == true ? "using default" : "logged")",
-                detail: orchestrator.snapshot?.daytime.usedDefaultWakeTime == true ? "Add wake-up for a stronger anchor" : "Strong daily anchor",
-                isPositive: orchestrator.snapshot?.daytime.usedDefaultWakeTime != true
+                title: orchestrator.snapshot?.evaluationWake != nil ? "Wake-up time logged" : "Wake-up time unconfirmed",
+                detail: orchestrator.snapshot?.daytime.source == .routine ? "Using usual wake for guidance" : "Record an observed wake for a stronger anchor",
+                isPositive: orchestrator.snapshot?.evaluationWake != nil
             ),
             ConfidenceSignal(
                 id: "complete",
@@ -1751,7 +1707,7 @@ struct InsightsView: View {
                 id: "lastNap",
                 title: "Last nap",
                 value: signedMinutesText(todayLastNapDelta),
-                detail: todayLastNapDelta == 0 ? "stable" : (todayLastNapDelta > 0 ? "longer" : "shorter"),
+                detail: todayLastNapDelta.map { $0 == 0 ? "stable" : ($0 > 0 ? "longer" : "shorter") } ?? "Unavailable",
                 icon: "moon.zzz.fill",
                 color: CoachColor.purpleDeep
             ),
@@ -1759,9 +1715,9 @@ struct InsightsView: View {
                 id: "bedtime",
                 title: "Bedtime shift",
                 value: signedMinutesText(bedtimeShiftDelta),
-                detail: bedtimeShiftDelta == 0 ? "same" : (bedtimeShiftDelta > 0 ? "later" : "earlier"),
+                detail: bedtimeShiftDelta.map { $0 == 0 ? "same" : ($0 > 0 ? "later" : "earlier") } ?? "Unavailable",
                 icon: "sparkles",
-                color: bedtimeShiftDelta <= 0 ? CoachColor.green : CoachColor.sun
+                color: bedtimeShiftDelta.map { $0 <= 0 } == true ? CoachColor.green : CoachColor.sun
             ),
             ComparisonMetric(
                 id: "risk",
@@ -1776,8 +1732,8 @@ struct InsightsView: View {
 
     private var decisionSteps: [DecisionStep] {
         let target = orchestrator.snapshot?.nextSleepKind == .bedtime
-            ? (orchestrator.snapshot?.night.optimalBedtimeStart ?? Date())
-            : (orchestrator.snapshot?.daytime.nextNapTime ?? Date())
+            ? orchestrator.snapshot?.night.recommendation.value
+            : orchestrator.snapshot?.daytime.recommendation.value
         let lastNapEnd = todayLastNapEnd
 
         return [
@@ -1790,32 +1746,35 @@ struct InsightsView: View {
     }
 
     private var todayLastNapEnd: Date? {
-        loadTodayRecordsForBreakdown()
-            .filter { $0.kind == .dayNap && !$0.isOngoing }
-            .sorted { $0.date < $1.date }
-            .last
-            .map { $0.date.addingMinutes($0.duration) }
+        guard let snapshot = orchestrator.snapshot else { return nil }
+        return loadTodayRecordsForBreakdown().filter { $0.kind == .dayNap }
+            .compactMap { $0.completedEnd(at: snapshot.generatedAt) }.max()
     }
 
-    private var todayLastNapDelta: Int {
-        let todayNaps = loadTodayRecordsForBreakdown().filter { $0.kind == .dayNap && !$0.isOngoing }
-        guard let latest = todayNaps.sorted(by: { $0.date < $1.date }).last else { return 0 }
-        let average = orchestrator.snapshot?.pattern?.averageNapDurationMinutes ?? latest.duration
-        return latest.duration - average
+    private var todayLastNapDelta: Int? {
+        guard let snapshot = orchestrator.snapshot, let end = todayLastNapEnd,
+              let average = snapshot.pattern?.averageNapDurationMinutes,
+              let latest = loadTodayRecordsForBreakdown().first(where: {
+                  $0.kind == .dayNap && $0.completedEnd(at: snapshot.generatedAt) == end
+              }) else { return nil }
+        return Int(end.timeIntervalSince(latest.date) / 60) - average
     }
 
-    private var bedtimeShiftDelta: Int {
-        guard let shift = orchestrator.snapshot?.pattern?.estimatedBedtimeShiftMinutes else { return 0 }
-        return shift
+    private var bedtimeShiftDelta: Int? {
+        orchestrator.snapshot?.pattern?.estimatedBedtimeShiftMinutes
     }
 
     private var overtiredRiskComparisonValue: String {
-        guard let night = orchestrator.snapshot?.night else { return "Stable" }
-        return night.overtiredRiskTime <= Date() ? "Higher" : "Stable"
+        guard let risk = orchestrator.snapshot?.night.overtiredRiskTime else { return "Unavailable" }
+        return risk <= Date() ? "Higher" : "Stable"
     }
 
     private var overtiredRiskComparisonDetail: String {
-        overtiredRiskComparisonValue == "Higher" ? "act soon" : "within window"
+        switch overtiredRiskComparisonValue {
+        case "Higher": return "act soon"
+        case "Stable": return "within window"
+        default: return "Requires a bedtime estimate"
+        }
     }
 
     private var trackedDays: Int {
@@ -1851,23 +1810,39 @@ struct InsightsView: View {
     }
 
     private var napWindowText: String {
-        guard let daytime = orchestrator.snapshot?.daytime else { return "-" }
-        return "\(time(daytime.windowStart)) - \(time(daytime.windowEnd))"
+        guard let daytime = orchestrator.snapshot?.daytime else { return "Unavailable" }
+        if let start = daytime.windowStart, let end = daytime.windowEnd {
+            return "\(time(start)) – \(time(end))"
+        }
+        if let range = daytime.generalWakeWindow {
+            return "\(range.lowerBound)–\(range.upperBound) min awake"
+        }
+        return "Unavailable"
     }
 
     private var bedtimeWindowText: String {
-        guard let night = orchestrator.snapshot?.night else { return "-" }
-        return "\(time(night.optimalBedtimeStart)) - \(time(night.optimalBedtimeEnd))"
+        guard let night = orchestrator.snapshot?.night else { return "Unavailable" }
+        if let start = night.optimalBedtimeStart, let end = night.optimalBedtimeEnd {
+            return "\(time(start)) – \(time(end))"
+        }
+        if let start = night.optimalBedtimeStart { return time(start) }
+        if let range = night.generalBedtimeHours {
+            return "\(range.lowerBound):00–\(range.upperBound):00 local"
+        }
+        return "Unavailable"
     }
 
-    private func time(_ date: Date) -> String {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.dateFormat = "h:mm a"
-        return f.string(from: date)
+    private func time(_ date: Date?) -> String {
+        guard let date else { return "Unavailable" }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = orchestrator.snapshot?.evaluationCalendar.timeZone ?? .current
+        formatter.dateFormat = "h:mm a"
+        return formatter.string(from: date)
     }
 
-    private func signedMinutesText(_ minutes: Int) -> String {
+    private func signedMinutesText(_ minutes: Int?) -> String {
+        guard let minutes else { return "Unavailable" }
         guard minutes != 0 else { return "Unchanged" }
         return "\(minutes > 0 ? "+" : "-")\(abs(minutes)) min"
     }
@@ -1882,7 +1857,7 @@ struct InsightsView: View {
     }
 
     private func refresh() {
-        orchestrator.generate()
+        orchestrator.generate(confirmation: sleepConfirmation)
     }
 }
 

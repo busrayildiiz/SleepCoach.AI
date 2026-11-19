@@ -10,6 +10,12 @@ struct SleepWakeTimeWorkflowResult {
     /// Sidecar publication completed; this is not a verified-source/authorization flag.
     var evidencePublicationSucceeded = false
     var historicalRecovery: HistoricalWakeRecoveryState? = nil
+    var homeError: String? = nil
+}
+
+enum HomeWakeOperation {
+    case independent
+    case associated(SleepRecordVersion)
 }
 
 /// Existing wake question + deliberate time entry. Saving an untouched prefill mints no intent.
@@ -174,6 +180,7 @@ struct SleepWakeTimeWorkflow {
     let wakePersistence: DailyWakeRecordPersistence
     let sleepPersistence: SleepRecordPersistence
     var capture: WakeObservationCapture? = nil
+    var homeOperation: HomeWakeOperation? = nil
 
     private let pendingKey = ObservationCompletionPending.key
 
@@ -185,7 +192,7 @@ struct SleepWakeTimeWorkflow {
         defer { ObservationStorage.lock.unlock() }
         guard wakePersistence.storage.retireInvalidForwardCompletion(now: now) else { return nil }
         guard let pending = ObservationCompletionPending.load(wakePersistence.defaults),
-              pending.wakeAttested || pending.nightCompletionInput != nil,
+              pending.wakeAttested || pending.nightCompletionInput != nil || pending.creation?.operationID == pending.operationID,
               pending.canResume(defaults: wakePersistence.defaults, now: now) else {
             guard let standalone = StandaloneWakePending.load(wakePersistence.defaults) else { return nil }
             let workflow = SleepWakeTimeWorkflow(selectedWakeTime: standalone.wake.wakeTime, now: now,
@@ -230,6 +237,13 @@ struct SleepWakeTimeWorkflow {
     }
     private func inputIdentity(_ date: Date) -> String {
         ObservationProvenance.digest(LearningEvidenceIdentity.pack(["standalone-wake-input-v1", LearningEvidenceIdentity.date(date)]))
+    }
+
+    private func associatedInputIdentity(nightID: UUID, baseline: String, revision: UUID?, date: Date) -> String {
+        ObservationProvenance.digest(LearningEvidenceIdentity.pack([
+            "associated-home-wake-input-v1", nightID.uuidString, baseline, revision?.uuidString ?? "",
+            LearningEvidenceIdentity.date(date)
+        ]))
     }
 
     func recoverHistoricalWake(_ draft: HistoricalWakeDraft,
@@ -352,17 +366,30 @@ struct SleepWakeTimeWorkflow {
               now.timeIntervalSinceReferenceDate.isFinite, selectedWakeTime.timeIntervalSinceReferenceDate.isFinite,
               defaults.data(forKey: "sleepRecords") == nil || sleepPersistence.load() != nil,
               defaults.data(forKey: "dailyWakeRecords_v1") == nil || wakePersistence.load() != nil else { return result(time: nil) }
-        // A completed ordinary operation may outlive its editor or cross midnight.
-        // This receipt acknowledges the same write; it never republishes attestation.
+        // A completed operation may outlive its editor or cross midnight.
         if let capture, let id = capture.creationIntent?.recordID,
+           let metadata = ObservationProvenance.load(defaults),
            let actual = wakePersistence.load()?.first(where: { $0.id == id }),
-           let entry = ObservationProvenance.load(defaults)?.wakes[id.uuidString],
+           let entry = metadata.wakes[id.uuidString],
            entry.completedOperationID == capture.operationID,
-           entry.completedInput == inputIdentity(selectedWakeTime),
            entry.content == ObservationProvenance.wakeIdentity(actual), entry.revision == actual.persistedRevision,
            actual.wakeTime <= now,
            !capture.attestsObservation || entry.source == LearningEvidenceSource.verifiedObservation.rawValue {
-            return result(time: actual.wakeTime, wakeOK: true, evidenceOK: true)
+            if case .associated(let target) = homeOperation {
+                let input = associatedInputIdentity(nightID: target.id, baseline: target.content,
+                                                    revision: target.revision, date: selectedWakeTime)
+                if entry.completedInput == input,
+                   let completed = sleepPersistence.load()?.first(where: { $0.id == target.id }),
+                   let receipt = metadata.sleeps[target.id.uuidString],
+                   receipt.completedOperationID == capture.operationID, receipt.completedInput == input,
+                   receipt.content == ObservationProvenance.sleepIdentity(completed),
+                   receipt.revision == completed.persistedRevision, completed.observedEnd == actual.wakeTime,
+                   wakePersistence.load()?.filter({ calendar.isDate($0.day, inSameDayAs: actual.day) }).count == 1 {
+                    return result(time: actual.wakeTime, closed: completed, wakeOK: true, sleepOK: true, evidenceOK: true)
+                }
+            } else if entry.completedInput == inputIdentity(selectedWakeTime) {
+                return result(time: actual.wakeTime, wakeOK: true, evidenceOK: true)
+            }
         }
         if let recovery = resolveHistoricalRecovery() {
             var blocked = result(time: nil)
@@ -376,28 +403,56 @@ struct SleepWakeTimeWorkflow {
             blocked.historicalRecovery = .pending
             return blocked
         }
-        if let standalone, (standalone.wake.wakeTime == selectedWakeTime || standalone.selectedInput == selectedWakeTime),
-           standalone.canResume(defaults: defaults, now: now) {
-            wakePersistence.storage.adopt(standalone.operationID, by: capture?.creationIntent)
-            return completeStandalone(standalone)
-        }
-        if let pending, pending.nightCompletionInput == nil, pending.wakeAttested,
-           (pending.wake.wakeTime == selectedWakeTime || pending.selectedInput == selectedWakeTime),
-           pending.canResume(defaults: defaults, now: now) {
-            wakePersistence.storage.adopt(pending.operationID, by: capture?.creationIntent)
-            return complete(pending)
+        if let homeOperation {
+            // Home retries are authorized by the original editor, before any calendar normalization.
+            switch homeOperation {
+            case .independent:
+                if let standalone, standalone.operationID == capture?.operationID,
+                   standalone.selectedInput == selectedWakeTime,
+                   standalone.canResume(defaults: defaults, now: now) {
+                    return completeStandalone(standalone)
+                }
+            case .associated(let target):
+                if let pending, pending.nightCompletionInput == nil, pending.operationID == capture?.operationID,
+                   pending.selectedInput == selectedWakeTime, target.id == pending.originalNight.id,
+                   target.content == pending.originalNightContent, target.revision == pending.originalNightRevision,
+                   pending.canResume(defaults: defaults, now: now) {
+                    return complete(pending)
+                }
+            }
+            if defaults.data(forKey: pendingKey) != nil || defaults.data(forKey: StandaloneWakePending.key) != nil {
+                var blocked = result(time: nil)
+                blocked.homeError = "Another sleep or wake entry needs recovery. Retry its original submission before saving this wake."
+                return blocked
+            }
+        } else {
+            // Compatibility for existing callers of the wake workflow. Explicit Home commands
+            // above never enter the timestamp-only adoption path.
+            if let standalone, (standalone.wake.wakeTime == selectedWakeTime || standalone.selectedInput == selectedWakeTime),
+               standalone.canResume(defaults: defaults, now: now) {
+                wakePersistence.storage.adopt(standalone.operationID, by: capture?.creationIntent)
+                return completeStandalone(standalone)
+            }
+            if let pending, pending.nightCompletionInput == nil, pending.wakeAttested,
+               (pending.wake.wakeTime == selectedWakeTime || pending.selectedInput == selectedWakeTime),
+               pending.canResume(defaults: defaults, now: now) {
+                wakePersistence.storage.adopt(pending.operationID, by: capture?.creationIntent)
+                return complete(pending)
+            }
         }
         let today = calendar.startOfDay(for: now)
         let parts = calendar.dateComponents([.hour, .minute], from: selectedWakeTime)
-        guard let time = calendar.date(bySettingHour: parts.hour ?? 7, minute: parts.minute ?? 0, second: 0, of: today),
+        guard let hour = parts.hour, let minute = parts.minute,
+              let time = calendar.date(bySettingHour: hour, minute: minute, second: 0, of: today),
               time <= now else { return result(time: nil) }
         // A still-open editor may carry seconds on its original DatePicker value.
-        if let pending, pending.nightCompletionInput == nil, pending.wakeAttested, pending.wake.wakeTime == time,
+        if homeOperation == nil, let pending, pending.nightCompletionInput == nil, pending.wakeAttested,
+           pending.wake.wakeTime == time,
            pending.canResume(defaults: defaults, now: now) {
             wakePersistence.storage.adopt(pending.operationID, by: capture?.creationIntent)
             return complete(pending)
         }
-        if let standalone, standalone.wake.wakeTime == time,
+        if homeOperation == nil, let standalone, standalone.wake.wakeTime == time,
            standalone.canResume(defaults: defaults, now: now) {
             wakePersistence.storage.adopt(standalone.operationID, by: capture?.creationIntent)
             return completeStandalone(standalone)
@@ -406,6 +461,11 @@ struct SleepWakeTimeWorkflow {
         let wakes = wakePersistence.load() ?? []
         let todayWakes = wakes.filter { calendar.isDate($0.day, inSameDayAs: today) }
         guard todayWakes.count <= 1 else { return result(time: time) } // preserve ambiguous historical observations
+        if homeOperation != nil, wakes.contains(where: { $0.wakeTime == time && $0.day != today }) {
+            var blocked = result(time: time)
+            blocked.homeError = "A wake at this time is already recorded under a different calendar day. Review that wake before saving."
+            return blocked
+        }
         let oldWake = todayWakes.first
         if let expected = capture?.nightSnapshot,
            expected != sleeps.filter({ $0.kind == .nightSleep && $0.isOngoing }).map(ObservationProvenance.sleepIdentity).sorted() {
@@ -414,9 +474,26 @@ struct SleepWakeTimeWorkflow {
         if let capture, capture.expectedContent != oldWake.map(ObservationProvenance.wakeIdentity) ||
             capture.expectedRevision != oldWake?.persistedRevision {
             // An exact replay grants no fresh authority to a revoked revision.
+            if homeOperation != nil { return result(time: time) }
             return result(time: time, wakeOK: oldWake?.wakeTime == time,
                           evidenceOK: oldWake?.wakeTime == time &&
                             TrustedObservationAdapter(defaults: defaults).snapshot().wakes.first(where: { $0.record.id == oldWake?.id })?.source == .verifiedObservation)
+        }
+        let original: SleepRecord?
+        switch homeOperation {
+        case .independent:
+            original = nil
+        case .associated(let target):
+            guard let current = sleeps.first(where: { $0.id == target.id }), target.matches(current),
+                  current.kind == .nightSleep, current.isOngoing, current.date < time else {
+                var blocked = result(time: time)
+                blocked.homeError = "This night changed or the wake is before its start. Review the night and try again."
+                return blocked
+            }
+            original = current
+        case nil:
+            original = sleeps.filter { $0.kind == .nightSleep && $0.isOngoing && $0.date < time }
+                .max { $0.date < $1.date }
         }
         let wake = DailyWakeRecord(id: oldWake?.id ?? capture?.creationIntent?.recordID ?? UUID(), day: today, wakeTime: time)
         let attested = capture?.selected == selectedWakeTime && capture?.attestsObservation == true
@@ -426,8 +503,7 @@ struct SleepWakeTimeWorkflow {
                 content: ObservationProvenance.wakeIdentity(wake)) else { return result(time: time) }
             creation = reservation
         }
-        if let original = sleeps.filter({ $0.kind == .nightSleep && $0.isOngoing && $0.date < time })
-            .sorted(by: { $0.date > $1.date }).first {
+        if let original {
             var transaction = ObservationCompletionPending(version: 3, originalNight: original, wake: wake,
                 originalWakeContent: oldWake.map(ObservationProvenance.wakeIdentity), originalWakeRevision: oldWake?.persistedRevision)
             transaction.recordedCalendar = calendar
@@ -575,7 +651,11 @@ struct SleepWakeTimeWorkflow {
                 nightRevision: nightEntry.revision, wakeRevision: wakeEntry.revision,
                 recordedCalendar: transaction.recordedCalendar)
         }
-        if let input = transaction.nightCompletionInput {
+        let completionInput = transaction.nightCompletionInput ?? transaction.selectedInput.map {
+            associatedInputIdentity(nightID: transaction.originalNight.id, baseline: transaction.originalNightContent,
+                                    revision: transaction.originalNightRevision, date: $0)
+        }
+        if let input = completionInput {
             // Revision-bound acknowledgement for an exact retry; never a new attestation.
             metadata.wakes[wake.id.uuidString]?.completedOperationID = transaction.operationID
             metadata.wakes[wake.id.uuidString]?.completedInput = input
@@ -588,7 +668,7 @@ struct SleepWakeTimeWorkflow {
         let linkMatches = !transaction.wakeAttested ||
             (link?.nightID == closed.id && link?.wakeID == wake.id &&
              link?.nightRevision == nightEntry.revision && link?.wakeRevision == wakeEntry.revision)
-        let completionReceiptsMatch = transaction.nightCompletionInput.map { input in
+        let completionReceiptsMatch = completionInput.map { input in
             finalMetadata?.sleeps[closed.id.uuidString]?.completedOperationID == transaction.operationID &&
             finalMetadata?.sleeps[closed.id.uuidString]?.completedInput == input &&
             finalMetadata?.wakes[wake.id.uuidString]?.completedOperationID == transaction.operationID &&
@@ -605,7 +685,7 @@ struct SleepWakeTimeWorkflow {
 }
 
 struct NightSleepCompletionResult {
-    enum State { case completed, invalidSubmission, staleNight, wakeConflict, ambiguousWakes, recoveryPending, recoveryFailure, incomplete }
+    enum State { case completed, invalidSubmission, staleNight, wakeConflict, wakeCalendarConflict, ambiguousWakes, recoveryPending, recoveryFailure, incomplete }
     let state: State
     let sleepPersisted: Bool
     let wakePersisted: Bool
@@ -615,6 +695,7 @@ struct NightSleepCompletionResult {
     var message: String {
         switch state {
         case .wakeConflict: return "A different morning wake is already recorded for this day. Your existing wake was kept. Review it before finishing this night."
+        case .wakeCalendarConflict: return "A wake at this time is already recorded under a different calendar day. Review that wake before finishing this night."
         case .ambiguousWakes: return "More than one morning wake exists for this day. Review those records before finishing this night."
         case .staleNight: return "This night changed or was deleted. Reopen it before saving."
         case .invalidSubmission: return "Keep the original night start and choose a valid ending to finish this night."
@@ -729,9 +810,12 @@ struct NightSleepCompletion {
             return result(.completed, publication: true)
         }
         let day = calendar.startOfDay(for: end)
-        let candidates = wakes.filter { calendar.isDate($0.day, inSameDayAs: day) }
+        let candidates = wakes.filter { calendar.isDate($0.day, inSameDayAs: day) || $0.wakeTime == end }
         guard candidates.count <= 1 else { return result(.ambiguousWakes) }
-        if let wake = candidates.first, wake.wakeTime != end { return result(.wakeConflict) }
+        if let wake = candidates.first {
+            guard wake.wakeTime == end else { return result(.wakeConflict) }
+            guard wake.day == day else { return result(.wakeCalendarConflict) }
+        }
         // Preserve another operation, including malformed journals, rather than replacing
         // its recovery context with a new snapshot.
         guard defaults.data(forKey: ObservationCompletionPending.key) == nil,

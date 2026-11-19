@@ -60,6 +60,8 @@ final class DaytimePredictionAgentTests: XCTestCase {
         )
 
         XCTAssertTrue(result.usedDefaultWakeTime)
+        XCTAssertEqual(result.recommendation.source, .routine)
+        XCTAssertNil(result.confidence)
     }
 
     // MARK: - Last Completed Nap Anchor
@@ -85,11 +87,7 @@ final class DaytimePredictionAgentTests: XCTestCase {
         let expectedAnchor = napDate.addingTimeInterval(60 * 60)
         let expectedNextNap = expectedAnchor.addingTimeInterval(210 * 60)
 
-        XCTAssertEqual(
-            result.nextNapTime.timeIntervalSince(expectedNextNap),
-            0,
-            accuracy: 1
-        )
+        XCTAssertEqual(result.nextNapTime, expectedNextNap)
 
         XCTAssertTrue(result.reasoning.contains {
             $0.contains("last nap end time")
@@ -126,11 +124,7 @@ final class DaytimePredictionAgentTests: XCTestCase {
         let expectedAnchor = napDate.addingTimeInterval(120 * 60)
         let expectedNextNap = expectedAnchor.addingTimeInterval(210 * 60)
 
-        XCTAssertEqual(
-            result.nextNapTime.timeIntervalSince(expectedNextNap),
-            0,
-            accuracy: 1
-        )
+        XCTAssertEqual(result.nextNapTime, expectedNextNap)
     }
 
     // MARK: - Ongoing Nap Anchor
@@ -160,11 +154,7 @@ final class DaytimePredictionAgentTests: XCTestCase {
 
         let expectedNextNap = expectedAnchor.addingTimeInterval(210 * 60)
 
-        XCTAssertEqual(
-            result.nextNapTime.timeIntervalSince(expectedNextNap),
-            0,
-            accuracy: 1
-        )
+        XCTAssertEqual(result.nextNapTime, expectedNextNap)
 
         XCTAssertTrue(
             result.reasoning.contains {
@@ -196,44 +186,23 @@ final class DaytimePredictionAgentTests: XCTestCase {
         let expectedAnchor = ongoingDate.addingTimeInterval(45 * 60)
         let expectedNextNap = expectedAnchor.addingTimeInterval(210 * 60)
 
-        XCTAssertEqual(
-            result.nextNapTime.timeIntervalSince(expectedNextNap),
-            0,
-            accuracy: 1
-        )
+        XCTAssertEqual(result.nextNapTime, expectedNextNap)
     }
 
     // MARK: - Wake Record Anchor
 
-    func testUsesLatestWakeRecordWhenNoNapExists() {
-        let earlyWake = DailyWakeRecord(
-            day: now,
-            wakeTime: day(hour: 6, minute: 30)
-        )
-
-        let latestWake = DailyWakeRecord(
-            day: now,
-            wakeTime: day(hour: 7, minute: 15)
-        )
-
-        let result = agent.predictNextNap(
-            pattern: nil,
-            todayRecords: [],
-            wakeRecords: [earlyWake, latestWake],
-            ageMonths: 9,
-            trackedDays: 0,
-            now: now
-        )
-
-        let expectedNextNap = latestWake.wakeTime.addingTimeInterval(210 * 60)
-
-        XCTAssertEqual(
-            result.nextNapTime.timeIntervalSince(expectedNextNap),
-            0,
-            accuracy: 1
-        )
-
-        XCTAssertFalse(result.usedDefaultWakeTime)
+    func testUniqueObservedWakeAnchorsPredictionAndDuplicateWakesDoNot() {
+        let earlyWake = DailyWakeRecord(day: now, wakeTime: day(hour: 6, minute: 30))
+        let latestWake = DailyWakeRecord(day: now, wakeTime: day(hour: 7, minute: 15))
+        let observed = agent.predictNextNap(pattern: nil, todayRecords: [], wakeRecords: [latestWake],
+                                           ageMonths: 9, trackedDays: 0, now: now)
+        XCTAssertEqual(observed.nextNapTime, latestWake.wakeTime.addingTimeInterval(210 * 60))
+        XCTAssertEqual(observed.recommendation.source, .recordedEstimate)
+        let conflict = agent.predictNextNap(pattern: nil, todayRecords: [], wakeRecords: [earlyWake, latestWake],
+                                           ageMonths: 9, trackedDays: 0, now: now)
+        XCTAssertNil(conflict.nextNapTime)
+        XCTAssertNil(conflict.confidence)
+        XCTAssertEqual(conflict.unavailableReason, .conflict)
     }
 
     // MARK: - Wake Window Blending
@@ -259,7 +228,7 @@ final class DaytimePredictionAgentTests: XCTestCase {
         let result = agent.predictNextNap(
             pattern: pattern,
             todayRecords: [],
-            wakeRecords: [],
+            wakeRecords: [DailyWakeRecord(day: now, wakeTime: day(hour: 7))],
             ageMonths: 9,
             trackedDays: 7,
             now: now
@@ -279,7 +248,7 @@ final class DaytimePredictionAgentTests: XCTestCase {
         let result = agent.predictNextNap(
             pattern: pattern,
             todayRecords: [],
-            wakeRecords: [],
+            wakeRecords: [DailyWakeRecord(day: now, wakeTime: day(hour: 7))],
             ageMonths: 9,
             trackedDays: 14,
             now: now
@@ -296,7 +265,7 @@ final class DaytimePredictionAgentTests: XCTestCase {
         let result = agent.predictNextNap(
             pattern: pattern,
             todayRecords: [],
-            wakeRecords: [],
+            wakeRecords: [DailyWakeRecord(day: now, wakeTime: day(hour: 7))],
             ageMonths: 9,
             trackedDays: 14,
             now: now
@@ -314,7 +283,7 @@ final class DaytimePredictionAgentTests: XCTestCase {
         let result = agent.predictNextNap(
             pattern: pattern,
             todayRecords: [],
-            wakeRecords: [],
+            wakeRecords: [DailyWakeRecord(day: now, wakeTime: day(hour: 7))],
             ageMonths: 9,
             trackedDays: 14,
             now: now
@@ -351,7 +320,7 @@ final class DaytimePredictionAgentTests: XCTestCase {
         let result = agent.predictNextNap(
             pattern: pattern,
             todayRecords: [],
-            wakeRecords: [],
+            wakeRecords: [DailyWakeRecord(day: now, wakeTime: day(hour: 7))],
             ageMonths: 9,
             trackedDays: 7,
             now: now
@@ -417,45 +386,47 @@ final class DaytimePredictionAgentTests: XCTestCase {
 
     // MARK: - Prediction Mode
 
-    func testPredictionModeIsAgeBaselineForZeroToSixTrackedDays() {
+    func testPredictionModeIsAgeBaselineForZeroToSixTrackedDays() throws {
         let result = agent.predictNextNap(
             pattern: nil,
             todayRecords: [],
-            wakeRecords: [],
+            wakeRecords: [DailyWakeRecord(day: now, wakeTime: day(hour: 7))],
             ageMonths: 9,
             trackedDays: 6,
             now: now
         )
 
+        let nextNapTime = try XCTUnwrap(result.nextNapTime)
         XCTAssertEqual(result.mode, .ageBaseline)
         XCTAssertEqual(
             result.windowStart,
-            result.nextNapTime.addingTimeInterval(-20 * 60)
+            nextNapTime.addingTimeInterval(-20 * 60)
         )
         XCTAssertEqual(
             result.windowEnd,
-            result.nextNapTime.addingTimeInterval(20 * 60)
+            nextNapTime.addingTimeInterval(20 * 60)
         )
     }
 
-    func testPredictionModeIsBlendedForSevenToThirteenTrackedDays() {
+    func testPredictionModeIsBlendedForSevenToThirteenTrackedDays() throws {
         let result = agent.predictNextNap(
             pattern: nil,
             todayRecords: [],
-            wakeRecords: [],
+            wakeRecords: [DailyWakeRecord(day: now, wakeTime: day(hour: 7))],
             ageMonths: 9,
             trackedDays: 7,
             now: now
         )
 
+        let nextNapTime = try XCTUnwrap(result.nextNapTime)
         XCTAssertEqual(result.mode, .blended)
         XCTAssertEqual(
             result.windowStart,
-            result.nextNapTime.addingTimeInterval(-15 * 60)
+            nextNapTime.addingTimeInterval(-15 * 60)
         )
         XCTAssertEqual(
             result.windowEnd,
-            result.nextNapTime.addingTimeInterval(15 * 60)
+            nextNapTime.addingTimeInterval(15 * 60)
         )
     }
 
@@ -472,32 +443,33 @@ final class DaytimePredictionAgentTests: XCTestCase {
         XCTAssertEqual(result.mode, .blended)
     }
 
-    func testPredictionModeIsPersonalizedAtFourteenDaysWithPattern() {
+    func testPredictionModeIsPersonalizedAtFourteenDaysWithPattern() throws {
         let pattern = makePattern()
 
         let result = agent.predictNextNap(
             pattern: pattern,
             todayRecords: [],
-            wakeRecords: [],
+            wakeRecords: [DailyWakeRecord(day: now, wakeTime: day(hour: 7))],
             ageMonths: 9,
             trackedDays: 14,
             now: now
         )
 
+        let nextNapTime = try XCTUnwrap(result.nextNapTime)
         XCTAssertEqual(result.mode, .personalized)
         XCTAssertEqual(
             result.windowStart,
-            result.nextNapTime.addingTimeInterval(-10 * 60)
+            nextNapTime.addingTimeInterval(-10 * 60)
         )
         XCTAssertEqual(
             result.windowEnd,
-            result.nextNapTime.addingTimeInterval(10 * 60)
+            nextNapTime.addingTimeInterval(10 * 60)
         )
     }
 
     // MARK: - Confidence
 
-    func testConfidenceForAgeBaselineWithoutSignals() {
+    func testMissingAnchorWithholdsDatedPredictionAndConfidence() {
         let result = agent.predictNextNap(
             pattern: nil,
             todayRecords: [],
@@ -507,7 +479,9 @@ final class DaytimePredictionAgentTests: XCTestCase {
             now: now
         )
 
-        XCTAssertEqual(result.confidence, 44)
+        XCTAssertNil(result.confidence)
+        XCTAssertNil(result.nextNapTime)
+        XCTAssertEqual(result.generalWakeWindow, 180...240)
     }
 
     func testConfidenceAddsWakeTimeAndPattern() {
@@ -552,38 +526,19 @@ final class DaytimePredictionAgentTests: XCTestCase {
         )
 
         // 44 - 10 = 34
-        XCTAssertEqual(result.confidence, 42)
+        XCTAssertEqual(result.confidence, 34)
+        XCTAssertEqual(result.recommendation.source, .activityEstimate)
     }
 
     // MARK: - Reasoning
 
-    func testReasoningExplainsMissingWakeTime() {
-        let result = agent.predictNextNap(
-            pattern: nil,
-            todayRecords: [],
-            wakeRecords: [],
-            ageMonths: 9,
-            trackedDays: 0,
-            now: now
-        )
+    func testReasoningExplainsMissingObservationsAndGeneralGuidance() {
+        let result = agent.predictNextNap(pattern: nil, todayRecords: [], wakeRecords: [],
+                                          ageMonths: 9, trackedDays: 0, now: now)
 
-        XCTAssertTrue(
-            result.reasoning.contains {
-                $0.contains("using your saved typical wake-up time")
-            }
-        )
-
-        XCTAssertTrue(
-            result.reasoning.contains {
-                $0.contains("age baseline")
-            }
-        )
-
-        XCTAssertTrue(
-            result.reasoning.contains {
-                $0.contains("14 more tracked days")
-            }
-        )
+        XCTAssertTrue(result.reasoning.contains { $0.contains("Missing observations") })
+        XCTAssertTrue(result.reasoning.contains { $0.contains("age-based") })
+        XCTAssertNil(result.recommendation.source)
     }
 
     func testReasoningExplainsWakeOrLastNapAnchor() {
@@ -624,7 +579,7 @@ final class DaytimePredictionAgentTests: XCTestCase {
         let result = agent.predictNextNap(
             pattern: makePattern(),
             todayRecords: [],
-            wakeRecords: [],
+            wakeRecords: [DailyWakeRecord(day: now, wakeTime: day(hour: 7))],
             ageMonths: 9,
             trackedDays: 14,
             now: now
@@ -646,7 +601,7 @@ final class DaytimePredictionAgentTests: XCTestCase {
         let result = agent.predictNextNap(
             pattern: makePattern(),
             todayRecords: [],
-            wakeRecords: [],
+            wakeRecords: [DailyWakeRecord(day: now, wakeTime: day(hour: 7))],
             ageMonths: 9,
             trackedDays: 14,
             now: now

@@ -1472,3 +1472,124 @@ extension NightSleepCompletionTests {
         XCTAssertNil(ObservationProvenance.load(defaults)?.sleeps[original.id.uuidString]?.completedOperationID)
     }
 }
+
+extension NightSleepCompletionTests {
+    func testIndependentHomeWakeCannotAdoptCombinedJournalAtRawOrNormalizedTime() throws {
+        let original = try night()
+        let rawTime = endpoint.addingTimeInterval(0.375)
+        var origin = WakeObservationDraft(initial: endpoint.addingTimeInterval(-3600))
+        origin.selected = rawTime
+        var capture: WakeObservationCapture?
+        _ = origin.submit { _, value in capture = value; return false }
+        let originCapture = try XCTUnwrap(capture)
+        let wakeStore = DailyWakeRecordPersistence(defaults: defaults)
+        let failingNights = SleepRecordPersistence(defaults: defaults, writer: failing("sleepRecords"))
+        let target = HomeWakeOperation.associated(SleepRecordVersion(original))
+        let interrupted = SleepWakeTimeWorkflow(selectedWakeTime: rawTime, now: now, calendar: calendar,
+            wakeRecords: [], sleepRecords: [], wakePersistence: wakeStore, sleepPersistence: failingNights,
+            capture: originCapture, homeOperation: target).execute()
+        XCTAssertTrue(interrupted.wakePersistenceSucceeded)
+        XCTAssertFalse(interrupted.sleepPersistenceSucceeded)
+        let journal = try XCTUnwrap(ObservationCompletionPending.load(defaults))
+        let journalBytes = defaults.data(forKey: ObservationCompletionPending.key)
+        let wakeBytes = defaults.data(forKey: "dailyWakeRecords_v1")
+        for input in [rawTime, journal.wake.wakeTime] {
+            var independentDraft = WakeObservationDraft(initial: input.addingTimeInterval(-60), existing: wakes.load()?.first)
+            independentDraft.selected = input
+            var independentCapture: WakeObservationCapture?
+            _ = independentDraft.submit { _, value in independentCapture = value; return false }
+            let result = SleepWakeTimeWorkflow(selectedWakeTime: input, now: now, calendar: calendar,
+                wakeRecords: [], sleepRecords: [], wakePersistence: wakeStore, sleepPersistence: sleeps,
+                capture: try XCTUnwrap(independentCapture), homeOperation: .independent).execute()
+            XCTAssertFalse(result.sleepPersistenceSucceeded)
+            XCTAssertFalse(result.wakePersistenceSucceeded)
+            XCTAssertNotNil(result.homeError)
+            XCTAssertEqual(defaults.data(forKey: ObservationCompletionPending.key), journalBytes)
+            XCTAssertEqual(defaults.data(forKey: "dailyWakeRecords_v1"), wakeBytes)
+            XCTAssertEqual(sleeps.load()?.first?.isOngoing, true)
+        }
+        let retried = SleepWakeTimeWorkflow(selectedWakeTime: rawTime, now: now.addingTimeInterval(121 * 3600), calendar: calendar,
+            wakeRecords: [], sleepRecords: [], wakePersistence: wakeStore, sleepPersistence: sleeps,
+            capture: originCapture, homeOperation: target).execute()
+        XCTAssertTrue(retried.evidencePublicationSucceeded)
+        XCTAssertEqual(sleeps.load()?.first?.observedEnd, journal.wake.wakeTime)
+        XCTAssertEqual(wakes.load()?.map(\.id), [journal.wake.id])
+        XCTAssertNil(ObservationCompletionPending.load(defaults))
+        let savedNightBytes = defaults.data(forKey: "sleepRecords")
+        let savedWakeBytes = defaults.data(forKey: "dailyWakeRecords_v1")
+        let replay = SleepWakeTimeWorkflow(selectedWakeTime: rawTime, now: now.addingTimeInterval(122 * 3600), calendar: calendar,
+            wakeRecords: [], sleepRecords: [], wakePersistence: wakeStore, sleepPersistence: sleeps,
+            capture: originCapture, homeOperation: target).execute()
+        XCTAssertTrue(replay.evidencePublicationSucceeded)
+        XCTAssertEqual(replay.closedNightRecord?.id, original.id)
+        XCTAssertEqual(defaults.data(forKey: "sleepRecords"), savedNightBytes)
+        XCTAssertEqual(defaults.data(forKey: "dailyWakeRecords_v1"), savedWakeBytes)
+    }
+
+    func testIndependentHomeWakeLeavesAnOlderNightOpen() throws {
+        let original = try night()
+        let result = SleepWakeTimeWorkflow(selectedWakeTime: endpoint, now: now.addingTimeInterval(3 * 86400),
+            calendar: calendar, wakeRecords: [], sleepRecords: [], wakePersistence: wakes,
+            sleepPersistence: sleeps, homeOperation: .independent).execute()
+        XCTAssertTrue(result.evidencePublicationSucceeded)
+        XCTAssertNil(result.closedNightRecord)
+        XCTAssertEqual(sleeps.load()?.first?.id, original.id)
+        XCTAssertEqual(sleeps.load()?.first?.isOngoing, true)
+        XCTAssertNil(snapshot.wakes.first?.completedNightID)
+    }
+
+    func testAssociatedHomeWakeRestartsAnOrdinarySubmissionWithoutGrantingTrust() throws {
+        let original = try night()
+        let draft = WakeObservationDraft(initial: endpoint)
+        let interrupted = draft.submit { time, capture in
+            let result = SleepWakeTimeWorkflow(selectedWakeTime: time, now: now, calendar: calendar,
+                wakeRecords: [], sleepRecords: [], wakePersistence: wakes,
+                sleepPersistence: .init(defaults: defaults, writer: failing("sleepRecords")),
+                capture: capture, homeOperation: .associated(SleepRecordVersion(original))).execute()
+            XCTAssertTrue(result.wakePersistenceSucceeded)
+            return result.evidencePublicationSucceeded
+        }
+        XCTAssertFalse(interrupted)
+        let stored = try XCTUnwrap(wakes.load()?.first)
+        XCTAssertNotNil(ObservationCompletionPending.load(defaults))
+
+        XCTAssertTrue(recover()?.evidencePublicationSucceeded == true)
+        XCTAssertEqual(sleeps.load()?.first?.observedEnd, stored.wakeTime)
+        XCTAssertEqual(wakes.load()?.map(\.id), [stored.id])
+        XCTAssertNil(ObservationCompletionPending.load(defaults))
+        XCTAssertNotEqual(snapshot.wakes.first?.source, .verifiedObservation)
+        XCTAssertNil(snapshot.wakes.first?.completedNightID)
+    }
+
+    func testStillSleepingPreservesStoredLegacyNightBytes() throws {
+        let legacy = SleepRecord(date: endpoint.addingTimeInterval(-121 * 3600), duration: 135, kind: .nightSleep,
+                                 isOngoing: true, createdAt: endpoint.addingTimeInterval(-121 * 3600))
+        XCTAssertTrue(sleeps.save([legacy]))
+        let original = try XCTUnwrap(sleeps.load()?.first)
+        let records = defaults.data(forKey: "sleepRecords")
+        let metadata = defaults.data(forKey: ObservationProvenance.key)
+        var draft = SleepRecordingDraft(defaultDate: original.date, editing: original, now: now)
+        draft.prepareForEnding(at: now, calendar: calendar, requireConfirmation: true)
+        draft.isOngoing = true
+
+        var submission = RecordingSubmission()
+        submission.submit(draft: draft, kind: .nightSleep, editing: original, now: now,
+            save: { self.sleeps.saveRecording($0, now: self.now) }, dismiss: {})
+        XCTAssertTrue(submission.isSubmitted)
+        XCTAssertEqual(defaults.data(forKey: "sleepRecords"), records)
+        XCTAssertEqual(defaults.data(forKey: ObservationProvenance.key), metadata)
+        XCTAssertNil(wakes.load())
+    }
+
+    func testMatchingWakeWithDifferentDayKeyFailsWithoutWritingOrDuplication() throws {
+        let original = try night()
+        let sameInstant = DailyWakeRecord(day: calendar.startOfDay(for: endpoint).addingTimeInterval(-3600),
+                                         wakeTime: endpoint)
+        XCTAssertTrue(wakes.save([sameInstant]))
+        let before = defaults.data(forKey: "dailyWakeRecords_v1")
+        XCTAssertEqual(complete(try submitted(original)).state, .wakeCalendarConflict)
+        XCTAssertEqual(defaults.data(forKey: "dailyWakeRecords_v1"), before)
+        XCTAssertEqual(sleeps.load()?.first?.isOngoing, true)
+        XCTAssertNil(ObservationCompletionPending.load(defaults))
+    }
+}

@@ -61,7 +61,7 @@ final class SleepTimelineCalculatorTests: XCTestCase {
         for record in records {
             let result = try item(record, in: items)
             XCTAssertEqual(result.visualState, .unavailable)
-            XCTAssertEqual(result.unavailableReason, .invalidRecord)
+            XCTAssertEqual(result.unavailableReason, record.id == records[0].id ? .endUnconfirmed : .invalidRecord)
             XCTAssertNil(result.durationMinutes)
             XCTAssertNil(result.elapsedMinutes)
             XCTAssertNil(result.observedEnd)
@@ -244,7 +244,10 @@ final class SleepTimelineCalculatorTests: XCTestCase {
         let current = SleepRecord(date: at(25), duration: 30)
         let stale = SleepRecord(date: at(-1), duration: 0, kind: .nightSleep, isOngoing: true)
         let items = calculate(records: [first, carryover, current, stale], now: at(27))
-        XCTAssertEqual(try item(carryover, in: items).kind, .nap(index: 2))
+        XCTAssertFalse(items.contains { $0.source == .recorded(carryover.id) })
+        let history = SleepTimelineCalculator(records: [first, carryover, current, stale], wakeRecord: nil,
+            now: at(27), calendar: calendar, day: day).calculate()
+        XCTAssertTrue(try item(carryover, in: history).isEndUnconfirmed)
         XCTAssertEqual(try item(current, in: items).kind, .nap(index: 1))
         XCTAssertFalse(items.contains { $0.source == .recorded(first.id) || $0.source == .recorded(stale.id) })
     }
@@ -252,14 +255,14 @@ final class SleepTimelineCalculatorTests: XCTestCase {
     func testCarryoverUsesCalendarPreviousDayAcrossDaylightSavingTransition() throws {
         var local = Calendar(identifier: .gregorian)
         local.timeZone = try XCTUnwrap(TimeZone(identifier: "America/New_York"))
-        let start = try XCTUnwrap(local.date(from: DateComponents(year: 2026, month: 11, day: 1, hour: 0, minute: 30)))
-        let now = try XCTUnwrap(local.date(from: DateComponents(year: 2026, month: 11, day: 2, hour: 1)))
+        let start = try XCTUnwrap(local.date(from: DateComponents(year: 2026, month: 3, day: 8, hour: 0, minute: 30)))
+        let now = try XCTUnwrap(local.date(from: DateComponents(year: 2026, month: 3, day: 9, hour: 1)))
         let night = SleepRecord(date: start, duration: 0, kind: .nightSleep, isOngoing: true)
         let items = SleepTimelineCalculator(records: [night], wakeRecord: nil, now: now, calendar: local).calculate()
         let result = try item(night, in: items)
         XCTAssertTrue(result.isCarryover)
         XCTAssertEqual(result.sleepDay, local.startOfDay(for: start))
-        XCTAssertEqual(result.elapsedMinutes, 25 * 60 + 30)
+        XCTAssertEqual(result.elapsedMinutes, 23 * 60 + 30)
         XCTAssertNil(result.observedEnd)
     }
 
@@ -498,7 +501,7 @@ final class SleepTimelineCalculatorTests: XCTestCase {
         XCTAssertEqual(homePlan([record], now: overnightNow, predictions: [invalid[0]]).morningWake?.source, .unavailable)
     }
 
-    func testMorningGraceKeepsNightActiveAndPastRoutineUnconfirmed() {
+    func testMorningGraceKeepsOriginalContextWithoutElapsedOrEnd() {
         let record = night()
         let routine = TodaySleepHeroModel.Routine(wakeHour: 7, bedHour: 19)
         for now in [at(31.5), at(32), at(35)] {
@@ -508,7 +511,8 @@ final class SleepTimelineCalculatorTests: XCTestCase {
             let display = TodayPlanPresentation.make(records: [record], wakes: [], hero: hero,
                 now: now, calendar: calendar, routine: routine)
             XCTAssertTrue(display.overnightEndUnconfirmed, "The wording follows the Hero's existing morning grace state.")
-            XCTAssertEqual(display.items.first?.visualState, .active)
+            XCTAssertTrue(display.items.first?.isEndUnconfirmed == true)
+            XCTAssertNil(display.items.first?.elapsedMinutes)
             XCTAssertNil(display.items.first?.observedEnd)
             XCTAssertEqual(display.morningWake?.source, .routine)
             XCTAssertEqual(display.morningWake?.time, at(31), "Do not roll a missed routine into tomorrow.")
@@ -520,12 +524,10 @@ final class SleepTimelineCalculatorTests: XCTestCase {
         let record = night()
         let wake = DailyWakeRecord(day: at(24), wakeTime: at(31.25))
         let display = homePlan([record], wakes: [wake], now: at(32), routine: .init(wakeHour: 7))
-        XCTAssertTrue(display.isOvernight)
+        XCTAssertFalse(display.isOvernight)
         XCTAssertNil(display.morningWake)
-        XCTAssertTrue(display.overnightEndUnconfirmed, "An observed wake does not silently close an unresolved sleep.")
-        XCTAssertEqual(display.items.map(\.source), [.recorded(record.id), .recorded(wake.id)])
-        XCTAssertEqual(display.items.map(\.visualState), [.active, .completed])
-        XCTAssertNil(display.items[0].observedEnd)
+        XCTAssertEqual(display.items.map(\.source), [.recorded(wake.id)])
+        XCTAssertEqual(display.items.map(\.visualState), [.completed])
         XCTAssertFalse(display.isConfirmedConnector(after: 0))
         XCTAssertTrue(record.isOngoing)
     }
@@ -586,13 +588,19 @@ final class SleepTimelineCalculatorTests: XCTestCase {
         XCTAssertEqual(display.items.first?.elapsedMinutes, 45)
     }
 
-    func testUnclosedNightRemainsContextAfterMoreThanOneCalendarBoundary() {
+    func testUnclosedNightStaysOnOriginalSleepDayAndDoesNotDriveLaterPlan() throws {
         let record = night()
         let display = homePlan([record], now: at(49), routine: .init(wakeHour: 7))
-        XCTAssertTrue(display.isOvernight)
-        XCTAssertEqual(display.items.first?.source, .recorded(record.id))
-        XCTAssertEqual(display.items.first?.sleepDay, day)
-        XCTAssertEqual(display.morningWake?.time, at(31), "Keep this night's unresolved reference, not a new synthetic cycle.")
+        XCTAssertFalse(display.isOvernight)
+        XCTAssertTrue(display.items.isEmpty)
+        XCTAssertNil(display.morningWake)
+        XCTAssertEqual(display.routineWake, at(55))
+        let historical = try XCTUnwrap(SleepTimelineCalculator(records: [record], wakeRecord: nil, now: at(49), calendar: calendar, day: day).calculate()
+            .first { $0.source == .recorded(record.id) })
+        XCTAssertEqual(historical.sleepDay, day)
+        XCTAssertTrue(historical.isEndUnconfirmed)
+        XCTAssertNil(historical.elapsedMinutes)
+        XCTAssertNil(historical.observedEnd)
     }
 
     func testDeletingOrEditingNightReprojectsContextWithoutDuplicateIDs() {
@@ -620,7 +628,7 @@ final class SleepTimelineCalculatorTests: XCTestCase {
         var local = calendar
         local.timeZone = try XCTUnwrap(TimeZone(identifier: "America/New_York"))
         let start = try XCTUnwrap(local.date(from: DateComponents(year: 2026, month: 11, day: 1, hour: 0, minute: 30)))
-        let now = try XCTUnwrap(local.date(from: DateComponents(year: 2026, month: 11, day: 2, hour: 1)))
+        let now = try XCTUnwrap(local.date(from: DateComponents(year: 2026, month: 11, day: 1, hour: 2)))
         let record = SleepRecord(date: start, duration: 0, kind: .nightSleep, isOngoing: true, createdAt: start)
         for zone in ["America/New_York", "Europe/Istanbul"] {
             local.timeZone = try XCTUnwrap(TimeZone(identifier: zone))
@@ -632,7 +640,7 @@ final class SleepTimelineCalculatorTests: XCTestCase {
             XCTAssertTrue(display.isOvernight)
             XCTAssertEqual(display.items.first?.time, start)
             XCTAssertEqual(display.items.first?.sleepDay, local.startOfDay(for: start))
-            XCTAssertEqual(display.items.first?.elapsedMinutes, 25 * 60 + 30)
+            XCTAssertEqual(display.items.first?.elapsedMinutes, 150)
             let morning = try XCTUnwrap(display.morningWake?.time)
             XCTAssertEqual(local.component(.hour, from: morning), 7)
             XCTAssertEqual(local.component(.minute, from: morning), 0)
@@ -642,15 +650,18 @@ final class SleepTimelineCalculatorTests: XCTestCase {
     func testOvernightWordingDistinguishesMorningGraceFromExplicitStillSleepingConfirmation() {
         let record = night()
         let routine = TodaySleepHeroModel.Routine(wakeHour: 7, bedHour: 19)
-        for confirmation in [nil, TodaySleepHeroModel.StillSleepingConfirmation(recordID: record.id, date: at(31.75))] {
+        for confirmation in [nil, StillSleepingConfirmation(record: record, date: at(31.75))] {
             let hero = TodaySleepHeroModel.make(records: [record], wakeRecords: [], now: at(32),
                 calendar: calendar, routine: routine, displayName: "Parent", babyName: "Baby", confirmation: confirmation)
             let display = TodayPlanPresentation.make(records: [record], wakes: [], hero: hero,
                 now: at(32), calendar: calendar, routine: routine)
             XCTAssertEqual(display.overnightEndUnconfirmed, confirmation == nil)
+            XCTAssertEqual(display.isOvernight, confirmation == nil)
+            XCTAssertEqual(display.currentConfirmation, confirmation?.date)
             XCTAssertEqual(hero.mode, confirmation == nil ? .morningUnconfirmed : .nightActive)
             XCTAssertEqual(display.items.first?.source, .recorded(record.id))
-            XCTAssertEqual(display.items.first?.elapsedMinutes, 795)
+            XCTAssertNil(display.items.first?.elapsedMinutes)
+            XCTAssertEqual(display.items.first?.isActive, confirmation != nil)
             XCTAssertNil(display.items.first?.observedEnd)
             XCTAssertEqual(display.completedEventCount, 0)
         }

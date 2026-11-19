@@ -40,8 +40,10 @@ struct AddBreakView: View {
                     ScrollView {
                         RecordingCard {
                             Text(parentDates).recordingFont(14).foregroundStyle(RecordingColor.secondary)
-                            Text("Saved net sleep: \(RecordingFormat.duration(draft.parent.totalMinutes(breaks: existingBreaks, at: Date())))")
-                                .recordingFont(15, weight: .semibold)
+                            if draft.parent.completedEnd(at: Date()) != nil {
+                                Text("Saved net sleep: \(RecordingFormat.duration(draft.parent.totalMinutes(breaks: existingBreaks, at: Date())))")
+                                    .recordingFont(15, weight: .semibold)
+                            }
                         }
                         .padding(16)
                     }
@@ -105,8 +107,8 @@ struct AddBreakView: View {
 
     private var parentDates: String {
         let start = RecordingFormat.date(draft.parent.date, year: false) + ", " + draft.parent.date.formatted(date: .omitted, time: .shortened)
-        guard let end = draft.parent.observedEnd else {
-            return start + (draft.parent.isOngoing ? " · still sleeping" : " · end not recorded")
+        guard let end = draft.parent.completedEnd(at: Date()) else {
+            return start + " · end unconfirmed"
         }
         let sameDay = Calendar.current.isDate(draft.parent.date, inSameDayAs: end)
         return start + " – " + (sameDay ? "" : RecordingFormat.date(end, year: false) + ", ") + end.formatted(date: .omitted, time: .shortened)
@@ -122,10 +124,14 @@ struct AddBreakView: View {
     private func feedback(start: Date, end: Date) -> String {
         let preview = preview(start: start, end: end)
         let minutes = max(0, Int(end.timeIntervalSince(start) / 60))
-        guard preview.validationMessage(existing: existingBreaks, now: Date()) == nil else {
+        let now = Date()
+        guard draft.parent.completedEnd(at: now) != nil else {
+            return "Awake \(TimeFormat.minutes(minutes)) · Sleep end unconfirmed"
+        }
+        guard preview.validationMessage(existing: existingBreaks, now: now) == nil else {
             return "Awake \(TimeFormat.minutes(minutes)) · Choose valid times to preview net sleep"
         }
-        return "Awake \(TimeFormat.minutes(minutes)) · Net sleep \(TimeFormat.minutes(preview.netMinutes(existing: existingBreaks, now: Date())))"
+        return "Awake \(TimeFormat.minutes(minutes)) · Net sleep \(TimeFormat.minutes(preview.netMinutes(existing: existingBreaks, now: now)))"
     }
 
     private func validation(start: Date, end: Date) -> String? {
@@ -155,23 +161,31 @@ private struct AwakeBreakFeedback: View {
 
     @ViewBuilder private func summary(now: Date) -> some View {
         let proposed = draft.record(existing: existing, now: now)
+        let net = draft.parent.completedEnd(at: now).map { _ in
+            proposed == nil ? draft.parent.totalMinutes(breaks: existing, at: now)
+                : draft.netMinutes(existing: existing, now: now)
+        }
         let presentation = proposed.flatMap { candidate in
             RecordingIntervalPresentation(parent: draft.parent, existing: existing,
                                           proposed: candidate, editingID: draft.editing?.id, now: now)
         }
-        let net = proposed == nil ? draft.parent.totalMinutes(breaks: existing, at: now)
-            : draft.netMinutes(existing: existing, now: now)
         VStack(alignment: .leading, spacing: 10) {
             RecordingSectionLabel(title: "Sleep Summary")
             RecordingCard(padding: 20) {
-                if let presentation, !dynamicType.isAccessibilitySize {
-                    ViewThatFits(in: .horizontal) {
-                        ringSummary(presentation, net: net, proposed: proposed != nil, diameter: 144)
-                        ringSummary(presentation, net: net, proposed: proposed != nil, diameter: 112)
+                if let net {
+                    if let presentation, !dynamicType.isAccessibilitySize {
+                        ViewThatFits(in: .horizontal) {
+                            ringSummary(presentation, net: net, proposed: proposed != nil, diameter: 144)
+                            ringSummary(presentation, net: net, proposed: proposed != nil, diameter: 112)
+                        }
+                    } else {
+                        summaryValues(net: net, proposed: proposed != nil)
+                        if let presentation { RecordingIntervalStrip(presentation: presentation) }
                     }
                 } else {
-                    summaryValues(net: net, proposed: proposed != nil)
-                    if let presentation { RecordingIntervalStrip(presentation: presentation) }
+                    awakeDuration
+                    Text("Sleep end unconfirmed")
+                        .recordingFont(13).foregroundStyle(RecordingColor.secondary)
                 }
             }
         }
@@ -188,10 +202,15 @@ private struct AwakeBreakFeedback: View {
 
     private func summaryValues(net: Int, proposed: Bool, ringVisible: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 20) {
-            summaryValue("Awake duration", minutes: max(0, Int(draft.end.timeIntervalSince(draft.start) / 60)), color: CoachColor.sun, identifier: "recording.awakeDuration")
-            summaryValue(proposed ? (draft.parent.isOngoing ? "Net sleep so far" : "Resulting net sleep") : "Saved net sleep",
+            awakeDuration
+            summaryValue(proposed ? "Resulting net sleep" : "Saved net sleep",
                          minutes: net, color: RecordingColor.accent, identifier: ringVisible ? "recording.resultingNetSleep" : "recording.netSleep")
         }
+    }
+
+    private var awakeDuration: some View {
+        summaryValue("Awake duration", minutes: max(0, Int(draft.end.timeIntervalSince(draft.start) / 60)),
+                     color: CoachColor.sun, identifier: "recording.awakeDuration")
     }
 
     private func summaryValue(_ title: String, minutes: Int, color: Color, identifier: String) -> some View {

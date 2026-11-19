@@ -24,7 +24,7 @@ final class SleepRecordingFlowTests: XCTestCase {
                           SleepListView.ActiveSheet.addSleep(editing: nil, defaultDate: start).id)
         XCTAssertTrue(SleepListView.ActiveSheet.addBreak(parentID: parent.id).isRecording)
         XCTAssertFalse(SleepListView.ActiveSheet.dayDetail(.init(day: start)).isRecording)
-        XCTAssertFalse(SleepListView.ActiveSheet.wakeTime.isRecording)
+        XCTAssertFalse(SleepListView.ActiveSheet.wakeTime().isRecording)
     }
 
     func testOngoingNightDoesNotRequireEndAndPreservesIdentityOnEdit() throws {
@@ -197,5 +197,73 @@ final class SleepRecordingFlowTests: XCTestCase {
         }
         XCTAssertEqual(saved, 1)
         XCTAssertEqual(dismissed, 1)
+    }
+}
+
+extension SleepRecordingFlowTests {
+    func testExplicitHistoricalConfirmationAcceptsAnUnchangedEndAndClearsOnEditRevert() throws {
+        let now = Date(timeIntervalSinceReferenceDate: 500_000)
+        let night = SleepRecord(date: now.addingTimeInterval(-48 * 3600), duration: 0,
+                                kind: .nightSleep, isOngoing: true)
+        var draft = SleepRecordingDraft(defaultDate: night.date, editing: night, now: now)
+        draft.prepareForEnding(at: now, calendar: .current, requireConfirmation: true)
+        XCTAssertNil(draft.record(kind: .nightSleep, editing: night, now: now))
+        draft.confirmObservedEnd(now: now)
+        XCTAssertTrue(draft.isReadyToSubmit)
+        var submission = RecordingSubmission()
+        var captured: SleepRecord?
+        submission.submit(draft: draft, kind: .nightSleep, editing: night, now: now,
+                          save: { captured = $0; return false }, dismiss: {})
+        let first = try XCTUnwrap(captured)
+        XCTAssertEqual(first.endDate, now)
+        XCTAssertEqual(first.observationCapture?.confirmsStart, false)
+        XCTAssertNotNil(first.nightCompletionIntent)
+        XCTAssertFalse(submission.isSubmitted)
+        XCTAssertTrue(draft.isReadyToSubmit, "Retry retains the exact confirmation.")
+
+        draft.end = now.addingTimeInterval(-60)
+        draft.end = now
+        XCTAssertFalse(draft.isReadyToSubmit)
+        XCTAssertNil(draft.record(kind: .nightSleep, editing: night, now: now))
+        draft.isOngoing = true
+        XCTAssertTrue(draft.isReadyToSubmit)
+    }
+
+    func testHistoricalEndpointCompositionPreservesDateAndTimeInBothPickerOrders() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "Europe/Istanbul"))
+        func date(_ day: Int, _ hour: Int, _ minute: Int) throws -> Date {
+            try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 11, day: day, hour: hour, minute: minute)))
+        }
+        let initial = try date(19, 20, 11).addingTimeInterval(3.125)
+        let pickedDay = try date(15, 0, 0)
+        let pickedTime = try date(19, 7, 21)
+        let dateFirst = try XCTUnwrap(RecordingEndpointSelection.combine(day: pickedDay, time: initial, preserving: initial, calendar: calendar))
+        let timeAfterDate = RecordingEndpointSelection.combine(day: dateFirst, time: pickedTime, preserving: dateFirst, calendar: calendar)
+        let timeFirst = try XCTUnwrap(RecordingEndpointSelection.combine(day: initial, time: pickedTime, preserving: initial, calendar: calendar))
+        let dateAfterTime = RecordingEndpointSelection.combine(day: pickedDay, time: timeFirst, preserving: timeFirst, calendar: calendar)
+        XCTAssertEqual(timeAfterDate, try date(15, 7, 21))
+        XCTAssertEqual(timeAfterDate, dateAfterTime)
+        XCTAssertEqual(RecordingEndpointSelection.combine(day: initial, time: initial, preserving: initial, calendar: calendar), initial)
+    }
+}
+
+extension SleepRecordingFlowTests {
+    func testHistoricalEndpointCompositionRejectsDSTGapAndRetainsSelectedFold() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "America/New_York"))
+        func local(_ month: Int, _ day: Int, _ hour: Int, _ minute: Int) throws -> Date {
+            try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: month, day: day, hour: hour, minute: minute)))
+        }
+
+        let beforeGap = try local(3, 7, 2, 30)
+        let gapDay = try local(3, 8, 0, 0)
+        XCTAssertNil(RecordingEndpointSelection.combine(day: gapDay, time: beforeGap, preserving: beforeGap, calendar: calendar))
+
+        let firstOccurrence = try local(11, 1, 1, 30)
+        let secondOccurrence = firstOccurrence.addingTimeInterval(3600)
+        XCTAssertEqual(calendar.component(.hour, from: secondOccurrence), 1)
+        XCTAssertEqual(RecordingEndpointSelection.combine(day: firstOccurrence, time: secondOccurrence,
+                                                          preserving: firstOccurrence, calendar: calendar), secondOccurrence)
     }
 }

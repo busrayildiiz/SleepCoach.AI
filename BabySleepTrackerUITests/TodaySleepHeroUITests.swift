@@ -2,7 +2,7 @@ import XCTest
 
 @MainActor
 final class TodaySleepHeroUITests: XCTestCase {
-    private func launch(_ scenario: String, live: Bool = false, large: Bool = false, dark: Bool = false) -> XCUIApplication {
+    private func launch(_ scenario: String, live: Bool = false, large: Bool = false, dark: Bool = false, xxl: Bool = false) -> XCUIApplication {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchEnvironment["RECORDING_UI_TESTS"] = "1" // Existing offline LLM agent.
@@ -10,6 +10,7 @@ final class TodaySleepHeroUITests: XCTestCase {
         app.launchEnvironment["SLEEP_HERO_SCENARIO"] = scenario
         if live { app.launchEnvironment["SLEEP_HERO_LIVE_CLOCK"] = "1" }
         if dark { app.launchEnvironment["SLEEP_HERO_DARK"] = "1" }
+        if xxl { app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXL"] }
         if large { app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"] }
         app.launch()
         XCTAssertTrue(app.staticTexts["TEST FIXTURE — NOT A PREDICTION"].waitForExistence(timeout: 10))
@@ -301,5 +302,50 @@ extension TodaySleepHeroUITests {
             format: "identifier BEGINSWITH %@ AND label CONTAINS[c] %@", "home.plan.event.record:", "wake")).firstMatch
         XCTAssertFalse(recordedWake.exists)
         capture("night-still-sleeping-no-wake-large", app: app)
+    }
+}
+
+extension TodaySleepHeroUITests {
+    func testStaleNightCanBeReviewedLaterOrConfirmedWithoutAnElapsedTimer() {
+        let app = launch("staleNight", live: true, xxl: true)
+        let review = app.buttons["hero.reviewEnd"]
+        XCTAssertTrue(review.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["hero.endSleep"].exists)
+        XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "home.plan.overnight.elapsed").firstMatch.exists)
+        reveal(review, app: app)
+        review.tap()
+
+        let editor = app.navigationBars["Edit Night Sleep"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["recording.start.edit"].exists)
+        XCTAssertFalse(app.buttons["recording.save"].isEnabled)
+        let deferReview = app.buttons["recording.cancel"]
+        XCTAssertEqual(deferReview.label, "Review later")
+        deferReview.tap()
+        dismissed(editor)
+        XCTAssertTrue(review.exists)
+
+        reveal(review, app: app)
+        review.tap()
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        let ongoing = app.switches["recording.ongoing"]
+        reveal(ongoing, app: app)
+        ongoing.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 0.5))
+            .withOffset(CGVector(dx: -20, dy: 0)).tap()
+        let selected = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "1"), object: ongoing)
+        XCTAssertEqual(XCTWaiter.wait(for: [selected], timeout: 5), .completed)
+        let save = app.buttons["recording.save"]
+        reveal(save, app: app)
+        XCTAssertTrue(save.isEnabled)
+        save.tap()
+        dismissed(editor)
+
+        let summary = app.descendants(matching: .any).matching(identifier: "home.sleep.summary").firstMatch
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label CONTAINS %@", "Still sleeping confirmed"), object: summary)], timeout: 5), .completed)
+        XCTAssertFalse(summary.label.contains("elapsed"))
+        XCTAssertTrue(app.buttons["hero.endSleep"].exists)
+        XCTAssertTrue(app.buttons["home.wake.add"].exists)
+        capture("stale-night-still-sleeping-xxl", app: app)
     }
 }

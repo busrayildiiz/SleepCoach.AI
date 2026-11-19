@@ -74,7 +74,7 @@ final class SleepOverviewCalculatorTests: XCTestCase {
 
         let varied = calculate([
             record(dayOffset: 0, duration: 1),
-            record(dayOffset: -1, duration: 10_000)
+            record(dayOffset: -1, duration: 1_200)
         ])
         XCTAssertEqual(varied.consistencyPercent, 55)
     }
@@ -87,7 +87,9 @@ final class SleepOverviewCalculatorTests: XCTestCase {
 
         let metrics = calculate([nap, ongoingNap, night, yesterdayNap])
 
-        XCTAssertEqual(metrics.todayNapCount, 2)
+        XCTAssertEqual(metrics.todayNapCount, 1)
+        XCTAssertEqual(metrics.recordedDaytime, .incomplete(60, reason: .unresolved))
+        XCTAssertNil(metrics.recordedGoalProgress)
         XCTAssertEqual(metrics.todayGoalProgress, min(Double(metrics.rolling24hMinutes) / 660.0, 1.0))
     }
 
@@ -336,5 +338,26 @@ extension SleepAccountingRegressionTests {
             .predictNextNap(pattern: nil, todayRecords: [nap, wake], wakeRecords: [], ageMonths: 9,
                             trackedDays: 0, now: date("2026-09-01T12:00:00Z"))
         XCTAssertEqual(result.nextNapTime, date("2026-09-01T15:00:42Z"))
+    }
+}
+
+extension SleepAccountingRegressionTests {
+    func testCompletedSubtotalKeepsAwakeBreakAttachedToUnresolvedParent() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let day = Date(timeIntervalSince1970: 0)
+        let now = day.addingTimeInterval(14 * 3600)
+        let night = SleepRecord(date: day, duration: 0, kind: .nightSleep, isOngoing: true)
+        let nap = SleepRecord(date: day.addingTimeInterval(12 * 3600), duration: 60)
+        let awake = SleepRecord(date: nap.date.addingTimeInterval(15 * 60), duration: 15,
+                                kind: .break, parentNapID: night.id)
+        let records = [night, nap, awake]
+        let accounting = SleepAccounting(records: records, now: now, calendar: calendar)
+        XCTAssertEqual(accounting.completedSubtotal(on: day), .incomplete(45, reason: .unresolved))
+        XCTAssertEqual(accounting.completedRolling24h, .incomplete(45, reason: .unresolved))
+        XCTAssertEqual(accounting.completedSubtotal(on: day, kind: .dayNap).minutes, 45)
+        XCTAssertNil(SleepOverviewCalculator(records: records, now: now, calendar: calendar,
+                                              totalSleepReference: 600...800).calculate().recordedGoalProgress)
+        XCTAssertNil(night.observedEnd)
     }
 }

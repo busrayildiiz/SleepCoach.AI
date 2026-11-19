@@ -3,6 +3,7 @@ import SwiftUI
 struct AddRecordView: View {
     let defaultDate: Date
     let editingRecord: SleepRecord?
+    let reviewUnconfirmed: Bool
     let onSave: (SleepRecord) -> Bool
     let onNightCompletion: ((SleepRecord) -> NightSleepCompletionResult)?
 
@@ -17,18 +18,22 @@ struct AddRecordView: View {
     @State private var existingBreaks: [SleepRecord] = []
 
     init(defaultDate: Date, editingRecord: SleepRecord? = nil, vm: AddRecordViewModel,
-         initialKind: SleepKind? = nil, endingOngoing: Bool = false,
+         initialKind: SleepKind? = nil, endingOngoing: Bool = false, reviewUnconfirmed: Bool = false,
          onNightCompletion: ((SleepRecord) -> NightSleepCompletionResult)? = nil,
          onSave: @escaping (SleepRecord) -> Bool) {
         self.defaultDate = defaultDate
         self.editingRecord = editingRecord
+        self.reviewUnconfirmed = reviewUnconfirmed
         self.onSave = onSave
         self.onNightCompletion = onNightCompletion
         self.vm = vm
         if let editingRecord { vm.kind = editingRecord.kind }
         else if let initialKind { vm.kind = initialKind }
         var initialDraft = SleepRecordingDraft(defaultDate: defaultDate, editing: editingRecord)
-        if endingOngoing { initialDraft.prepareForEnding(at: Date()) }
+        if endingOngoing {
+            initialDraft.prepareForEnding(at: Date(), calendar: editingRecord?.kind == .nightSleep ? .current : nil,
+                                          requireConfirmation: reviewUnconfirmed && editingRecord?.kind == .nightSleep)
+        }
         _draft = State(initialValue: initialDraft)
     }
 
@@ -41,15 +46,26 @@ struct AddRecordView: View {
         NavigationStack {
             RecordingScreen(title: title,
                             saveTitle: editingRecord == nil ? (vm.kind == .nightSleep ? "Save Night Sleep" : "Save Nap") : "Save Changes",
-                            saveEnabled: !submission.isSubmitted && draft.validationMessage(now: Date()) == nil,
-                            onCancel: cancel, onSave: save, spacing: 28) {
-                RecordingKindPicker(selection: $vm.kind)
-                    .padding(.horizontal, 2)
-                    .padding(.top, 8)
+                            saveEnabled: !submission.isSubmitted && draft.isReadyToSubmit && draft.validationMessage(now: Date()) == nil,
+                            onCancel: cancel, onSave: save, spacing: 28,
+                            cancelTitle: reviewUnconfirmed && !draft.requiresExplicitCancellation ? "Review later" : "Cancel") {
+                if draft.completionCalendar == nil {
+                    RecordingKindPicker(selection: $vm.kind)
+                        .padding(.horizontal, 2)
+                        .padding(.top, 8)
+                }
                 VStack(spacing: 24) {
                     RecordingIntervalCard(start: $draft.start, end: $draft.end,
-                                          ongoing: vm.kind == .nightSleep || draft.isOngoing ? $draft.isOngoing : nil,
+                                          ongoing: vm.kind == .nightSleep || editingRecord?.isOngoing == true || draft.isOngoing ? $draft.isOngoing : nil,
+                                          lockedStartCalendar: draft.completionCalendar,
                                           feedback: feedback, validation: validation)
+                    if draft.requiresEndConfirmation && !draft.isOngoing {
+                        Button(draft.hasConfirmedEnd ? "Observed end confirmed" : "Confirm observed end") {
+                            draft.confirmObservedEnd(now: Date())
+                        }
+                        .disabled(draft.hasConfirmedEnd || draft.validationMessage(now: Date()) != nil)
+                        .accessibilityIdentifier("recording.end.confirm")
+                    }
                     if let message = draft.validationMessage(now: Date()) {
                         RecordingValidation(message: message)
                     }
@@ -92,6 +108,10 @@ struct AddRecordView: View {
     }
 
     private func feedback(start: Date, end: Date) -> String {
+        if draft.isOngoing && editingRecord?.isOngoing == true { return "End unconfirmed" }
+        if draft.requiresEndConfirmation && (!draft.hasConfirmedEnd || end != draft.end) {
+            return "Choose the observed sleep end"
+        }
         let minutes = max(0, Int((draft.isOngoing ? Date() : end).timeIntervalSince(start) / 60))
         return "\(draft.isOngoing ? "Elapsed so far" : "Duration"): \(TimeFormat.minutes(minutes))"
     }
@@ -102,8 +122,20 @@ struct AddRecordView: View {
 
     private func save() {
         cancellationFailed = false
-        submission.submit(draft: draft, kind: vm.kind, editing: editingRecord, now: Date(), save: { record in
-            let result = RecordingSubmission.saveHomeRecord(record, now: Date(), onSave: onSave, onNightCompletion: onNightCompletion)
+        let now = Date()
+        let kind = draft.completionCalendar == nil ? vm.kind : (editingRecord?.kind ?? vm.kind)
+        submission.submit(draft: draft, kind: kind, editing: editingRecord, now: now, save: { record in
+            let persistence = SleepRecordPersistence()
+            let prior = record.isOngoing ? persistence.load()?.first { $0.id == record.id } : nil
+            let canConfirm = prior.map { SleepRecordVersion($0) == editingRecord.map(SleepRecordVersion.init) } ?? (editingRecord == nil)
+            let result = RecordingSubmission.saveHomeRecord(record, now: now, onSave: onSave,
+                onNightCompletion: onNightCompletion, confirmation: { saved in
+                    guard canConfirm, let stored = persistence.load()?.first(where: { $0.id == saved.id }),
+                          ObservationProvenance.sleepIdentity(stored) == ObservationProvenance.sleepIdentity(saved) else { return nil }
+                    if let prior, ObservationProvenance.sleepIdentity(prior) == ObservationProvenance.sleepIdentity(stored),
+                       prior.persistedRevision != stored.persistedRevision { return nil }
+                    return StillSleepingConfirmation(record: stored, date: now, instant: ContinuousClock.now)
+                })
             completionMessage = result.message
             saveFailed = !result.succeeded
             return result.succeeded
@@ -130,7 +162,9 @@ private struct SleepRecordingFeedback: View {
     var body: some View {
         TimelineView(.periodic(from: .now, by: 60)) { context in
             let end = draft.isOngoing ? context.date : draft.end
-            let minutes = max(0, Int(end.timeIntervalSince(draft.start) / 60))
+            let hidesDuration = (draft.isOngoing && editingRecord?.isOngoing == true) ||
+                (draft.requiresEndConfirmation && !draft.hasConfirmedEnd)
+            let minutes = hidesDuration ? nil : max(0, Int(end.timeIntervalSince(draft.start) / 60))
             VStack(alignment: .leading, spacing: 12) {
                 Group {
                     if dynamicType.isAccessibilitySize {
@@ -143,7 +177,7 @@ private struct SleepRecordingFeedback: View {
                 .padding(.vertical, 12)
                 .frame(maxWidth: .infinity, minHeight: 56, alignment: .leading)
                 .background(RoundedRectangle(cornerRadius: 16).fill(RecordingColor.inset))
-                if let editingRecord {
+                if let editingRecord, editingRecord.completedEnd(at: context.date) != nil {
                     Text("Saved net sleep: \(RecordingFormat.duration(editingRecord.totalMinutes(breaks: breaks, at: context.date)))")
                         .recordingFont(12).foregroundStyle(RecordingColor.secondary)
                         .accessibilityIdentifier("recording.netSleep")
@@ -167,8 +201,8 @@ private struct SleepRecordingFeedback: View {
         .foregroundStyle(RecordingColor.accent)
     }
 
-    private func value(_ minutes: Int) -> some View {
-        Text(RecordingFormat.duration(minutes))
+    private func value(_ minutes: Int?) -> some View {
+        Text(minutes.map(RecordingFormat.duration) ?? "End unconfirmed")
             .recordingFont(22, weight: .semibold, rounded: true)
             .foregroundStyle(RecordingColor.accent)
             .monospacedDigit()

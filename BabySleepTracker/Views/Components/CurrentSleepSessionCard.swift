@@ -19,10 +19,10 @@ struct HomeSleepCardPresentation {
 
     static func make(records: [SleepRecord], now: Date, calendar: Calendar,
                      estimate: Estimate? = nil, eligibilityVerified: Bool = false) -> Self {
-        let active = records.filter { $0.kind != .break && $0.isOngoing && $0.date <= now }
-            .max { $0.date < $1.date }
-        if let active {
-            return session(record: active, records: records, now: now, calendar: calendar)
+        let state = SleepStateCalculator.assess(records: records, wakes: [],
+            evaluation: .init(now: now, calendar: calendar))
+        if let active = state.active {
+            return session(record: active.record, records: records, now: now, calendar: calendar)
         }
         if eligibilityVerified, let estimate, estimate.kind != .break,
            estimate.start <= now, estimate.wake > now, estimate.wake > estimate.start {

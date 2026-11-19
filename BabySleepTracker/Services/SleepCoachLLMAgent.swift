@@ -95,18 +95,22 @@ final class DefaultSleepCoachLLMAgent: SleepCoachLLMAgentProtocol {
         trigger:  LLMTrigger
     ) -> String {
 
-        let formatter        = DateFormatter()
-        formatter.locale     = Locale(identifier: "en_US_POSIX")
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = snapshot.evaluationCalendar.timeZone
         formatter.dateFormat = "h:mm a"
+        func time(_ date: Date?) -> String { date.map(formatter.string) ?? "Unavailable" }
 
-        let breaks  = records.filter { $0.kind == .break }
-        let dayNaps = records.filter { $0.kind == .dayNap }
-
-        let last7Summary = buildLast7DaysSummary(
-            dayNaps: dayNaps,
-            breaks:  breaks
-        )
-
+        let last7Summary = buildLast7DaysSummary(records: records, now: snapshot.generatedAt,
+                                                calendar: snapshot.evaluationCalendar)
+        let nap = snapshot.daytime
+        let night = snapshot.night
+        let napTiming = nap.recommendation.value.map { "\(time($0)) (\(nap.source.rawValue))" }
+            ?? nap.generalWakeWindow.map { "Age-based wake window \($0.lowerBound)–\($0.upperBound) min" } ?? "Unavailable"
+        let bedtimeTiming = night.recommendation.value.map { "\(time($0)) (\(night.source.rawValue))" }
+            ?? night.generalBedtimeHours.map { "Age-based bedtime range \($0.lowerBound):00–\($0.upperBound):00 local" } ?? "Unavailable"
+        let napWindow = nap.windowStart.flatMap { start in nap.windowEnd.map { "\(time(start)) – \(time($0))" } } ?? "Unavailable"
+        let bedtimeWindow = night.optimalBedtimeEnd.map { "\(bedtimeTiming) – \(time($0))" } ?? bedtimeTiming
         let triggerContext = describeTrigger(trigger)
 
         let phaseDescription: String
@@ -135,14 +139,15 @@ final class DefaultSleepCoachLLMAgent: SleepCoachLLMAgentProtocol {
         - Tracked days: \(snapshot.readiness.daysUntilPersonalized == 0 ? "14+" : String(14 - (snapshot.readiness.daysUntilPersonalized)))
 
         RULE ENGINE OUTPUT:
-        - Next nap prediction: \(formatter.string(from: snapshot.daytime.nextNapTime))
-        - Prediction window: \(formatter.string(from: snapshot.daytime.windowStart)) – \(formatter.string(from: snapshot.daytime.windowEnd))
-        - Confidence: \(snapshot.daytime.confidence)%
-        - Wake window used: \(snapshot.daytime.wakeWindowUsed) minutes
-        - Bedtime window: \(formatter.string(from: snapshot.night.optimalBedtimeStart)) – \(formatter.string(from: snapshot.night.optimalBedtimeEnd))
-        - Overtired risk after: \(formatter.string(from: snapshot.night.overtiredRiskTime))
-        - Today's total sleep: \(snapshot.todayTotalMinutes) minutes
-        - Daily sleep status: \(snapshot.sleepStatus.label)
+        - Next nap guidance: \(napTiming)
+        - Nap window: \(napWindow)
+        - Prediction confidence: \(nap.confidence.map { "\($0)%" } ?? "Unavailable")
+        - Bedtime: \(bedtimeWindow)
+        - Overtired risk after: \(time(night.overtiredRiskTime))
+        - Sleep Day completed-recorded subtotal: \(snapshot.recordedSleepDay.display)
+        - Rolling 24h completed-recorded subtotal: \(snapshot.recordedRolling24h.display)
+        - Daily sleep status: \(snapshot.sleepStatus?.label ?? "Unavailable")
+        Treat routine and age guidance as guidance. Incomplete subtotals cannot establish sleep deficit or surplus.
         - Nap transition: \(transitionNote)
 
         DATA QUALITY REPORT:
@@ -345,34 +350,25 @@ final class DefaultSleepCoachLLMAgent: SleepCoachLLMAgentProtocol {
 
     // MARK: - Last 7 Days Summary
 
-    private func buildLast7DaysSummary(
-        dayNaps: [SleepRecord],
-        breaks:  [SleepRecord]
-    ) -> String {
-
-        let cal   = Calendar.current
-        let today = cal.startOfDay(for: Date())
-
-        var lines = [String]()
-        let formatter        = DateFormatter()
-        formatter.locale     = Locale(identifier: "en_US_POSIX")
+    func buildLast7DaysSummary(records: [SleepRecord], now: Date, calendar: Calendar) -> String {
+        let accounting = SleepAccounting(records: records, now: now, calendar: calendar)
+        let today = calendar.startOfDay(for: now)
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = calendar.timeZone
         formatter.dateFormat = "EEE MMM d"
 
-        for offset in 0..<7 {
-            guard let day = cal.date(byAdding: .day, value: -offset, to: today) else { continue }
-            let naps = dayNaps
-                .filter { cal.isDate($0.date, inSameDayAs: day) }
-                .sorted { $0.date < $1.date }
-
-            if naps.isEmpty {
-                lines.append("- \(formatter.string(from: day)): No naps logged")
-            } else {
-                let total = naps.map { $0.totalMinutes(breaks: breaks) }.reduce(0, +)
-                lines.append("- \(formatter.string(from: day)): \(naps.count) nap(s), \(total) min total")
+        return (0..<7).compactMap { offset in
+            guard let day = calendar.date(byAdding: .day, value: -offset, to: today) else { return nil }
+            let naps = records.filter {
+                $0.kind == .dayNap && $0.date <= now && calendar.isDate($0.date, inSameDayAs: day)
             }
-        }
-
-        return lines.joined(separator: "\n")
+            let label = formatter.string(from: day)
+            guard !naps.isEmpty else { return "- \(label): No naps logged" }
+            let count = naps.filter { $0.completedEnd(at: now) != nil }.count
+            let subtotal = accounting.completedSubtotal(on: day, kind: .dayNap)
+            return "- \(label): \(count) completed nap(s). Completed-recorded subtotal: \(subtotal.display)"
+        }.joined(separator: "\n")
     }
 
     // MARK: - Response Parser

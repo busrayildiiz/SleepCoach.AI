@@ -55,6 +55,16 @@ enum RecordingFormat {
         return hours == 0 ? "\(remainder) m" : "\(hours) h" + (remainder == 0 ? "" : " \(remainder) m")
     }
 
+    static func timestamp(_ value: Date, calendar: Calendar) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        let zone = calendar.timeZone.abbreviation(for: value) ?? calendar.timeZone.identifier
+        return "\(formatter.string(from: value)) \(zone)"
+    }
+
     static func date(_ value: Date, year: Bool = true) -> String {
         let formatter = DateFormatter()
         formatter.locale = .current
@@ -81,6 +91,7 @@ struct RecordingScreen<Content: View>: View {
     let onCancel: () -> Void
     let onSave: () -> Void
     var spacing: CGFloat = 34
+    var cancelTitle = "Cancel"
     @ViewBuilder let content: () -> Content
 
     var body: some View {
@@ -108,7 +119,7 @@ struct RecordingScreen<Content: View>: View {
         .toolbarBackground(.hidden, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
-                Button("Cancel", action: onCancel)
+                Button(cancelTitle, action: onCancel)
                     .accessibilityIdentifier("recording.cancel")
             }
         }
@@ -165,6 +176,7 @@ struct RecordingIntervalCard: View {
     @Binding var end: Date
     var ongoing: Binding<Bool>? = nil
     var style: RecordingIntervalStyle = .sleep
+    var lockedStartCalendar: Calendar? = nil
     let feedback: (Date, Date) -> String
     let validation: (Date, Date) -> String?
     @Environment(\.dynamicTypeSize) private var dynamicType
@@ -182,7 +194,7 @@ struct RecordingIntervalCard: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if style == .sleep {
+            if style == .sleep && lockedStartCalendar == nil {
                 Button { endpoint = .start } label: {
                     HStack(spacing: 14) {
                         Image(systemName: "calendar").recordingFont(20, weight: .medium)
@@ -234,6 +246,7 @@ struct RecordingIntervalCard: View {
                 title: endpoint == .start ? "Start time" : "End time",
                 identifier: "recording.\(endpoint.rawValue)",
                 initialValue: endpoint == .start ? start : end,
+                fixedCalendar: lockedStartCalendar,
                 feedback: { value in feedback(endpoint == .start ? value : start, endpoint == .end ? value : end) },
                 validation: { value in validation(endpoint == .start ? value : start, endpoint == .end ? value : end) },
                 onDone: { value in
@@ -247,9 +260,19 @@ struct RecordingIntervalCard: View {
 
     @ViewBuilder private var endpoints: some View { startButton; endControl }
 
-    private var startButton: some View {
-        RecordingTimeButton(title: "Start", date: start, showsDate: style == .awake && crossesMidnight,
-                            style: style, identifier: "recording.start.edit") { endpoint = .start }
+    @ViewBuilder private var startButton: some View {
+        if let calendar = lockedStartCalendar {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Recorded start").recordingFont(12, weight: .medium)
+                Text(RecordingFormat.timestamp(start, calendar: calendar))
+                    .recordingFont(15, weight: .semibold).fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .accessibilityIdentifier("recording.start.fixed")
+        } else {
+            RecordingTimeButton(title: "Start", date: start, showsDate: style == .awake && crossesMidnight,
+                                style: style, identifier: "recording.start.edit") { endpoint = .start }
+        }
     }
 
     @ViewBuilder private var endControl: some View {
@@ -262,8 +285,9 @@ struct RecordingIntervalCard: View {
             }
             .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
         } else {
-            RecordingTimeButton(title: "End", date: end, showsDate: style == .awake && crossesMidnight,
-                                style: style, identifier: "recording.end.edit") { endpoint = .end }
+            RecordingTimeButton(title: lockedStartCalendar == nil ? "End" : "End date and time", date: end,
+                                showsDate: style == .awake && crossesMidnight, style: style,
+                                identifier: "recording.end.edit", calendar: lockedStartCalendar) { endpoint = .end }
         }
     }
 }
@@ -274,6 +298,7 @@ private struct RecordingTimeButton: View {
     let showsDate: Bool
     let style: RecordingIntervalStyle
     let identifier: String
+    var calendar: Calendar? = nil
     let action: () -> Void
 
     var body: some View {
@@ -283,9 +308,9 @@ private struct RecordingTimeButton: View {
                 VStack(alignment: .leading, spacing: 6) {
                     if style == .sleep { label }
                     HStack(spacing: 4) {
-                        Text(date.formatted(date: .omitted, time: .shortened))
+                        Text(calendar.map { RecordingFormat.timestamp(date, calendar: $0) } ?? date.formatted(date: .omitted, time: .shortened))
                             .recordingFont(style == .sleep ? 22 : 20, weight: .semibold, rounded: true)
-                            .monospacedDigit().lineLimit(1).minimumScaleFactor(0.8)
+                            .monospacedDigit().lineLimit(calendar == nil ? 1 : nil).minimumScaleFactor(0.8)
                         Spacer(minLength: 0)
                         Image(systemName: "chevron.right").recordingFont(12, weight: .medium)
                             .foregroundStyle(RecordingColor.secondary)
@@ -307,7 +332,7 @@ private struct RecordingTimeButton: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("\(title) time")
-        .accessibilityValue(date.formatted(date: .complete, time: .shortened))
+        .accessibilityValue(calendar.map { RecordingFormat.timestamp(date, calendar: $0) } ?? date.formatted(date: .complete, time: .shortened))
         .accessibilityHint("Opens the time and date editor")
         .accessibilityIdentifier(identifier)
     }
@@ -323,10 +348,12 @@ private struct RecordingTimeEditor: View {
     let feedback: (Date) -> String
     let validation: (Date) -> String?
     let onDone: (Date) -> Void
+    let fixedCalendar: Calendar?
+    @State private var invalidSelection = false
     @Environment(\.dismiss) private var dismiss
     @State private var selection: Date
 
-    init(title: String, identifier: String, initialValue: Date,
+    init(title: String, identifier: String, initialValue: Date, fixedCalendar: Calendar? = nil,
          feedback: @escaping (Date) -> String, validation: @escaping (Date) -> String?,
          onDone: @escaping (Date) -> Void) {
         self.title = title
@@ -334,17 +361,33 @@ private struct RecordingTimeEditor: View {
         self.feedback = feedback
         self.validation = validation
         self.onDone = onDone
+        self.fixedCalendar = fixedCalendar
         _selection = State(initialValue: initialValue)
+    }
+
+    private func pickerBinding(changesDay: Bool) -> Binding<Date> {
+        guard let calendar = fixedCalendar else { return $selection }
+        return Binding(get: { selection }, set: { selected in
+            let day = changesDay ? selected : selection
+            let time = changesDay ? selection : selected
+            if let combined = RecordingEndpointSelection.combine(day: day, time: time,
+                    preserving: selection, calendar: calendar) {
+                selection = combined
+                invalidSelection = false
+            } else {
+                invalidSelection = true
+            }
+        })
     }
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
-                    DatePicker("Date", selection: $selection, displayedComponents: .date)
+                    DatePicker("Date", selection: pickerBinding(changesDay: true), displayedComponents: .date)
                         .datePickerStyle(.compact)
                         .accessibilityIdentifier("\(identifier).date")
-                    DatePicker(title, selection: $selection, displayedComponents: .hourAndMinute)
+                    DatePicker(title, selection: pickerBinding(changesDay: false), displayedComponents: .hourAndMinute)
                         .datePickerStyle(.wheel)
                         .labelsHidden()
                         .accessibilityLabel(title)
@@ -353,7 +396,13 @@ private struct RecordingTimeEditor: View {
                     Text(feedback(selection)).font(.subheadline.weight(.semibold))
                         .foregroundStyle(RecordingColor.accent)
                         .accessibilityIdentifier("recording.editor.feedback")
-                    if let message = validation(selection) {
+                    if let calendar = fixedCalendar {
+                        Text(RecordingFormat.timestamp(selection, calendar: calendar))
+                            .recordingFont(13).accessibilityIdentifier("recording.end.selection")
+                    }
+                    if invalidSelection {
+                        RecordingValidation(message: "Choose a valid local time for this date.")
+                    } else if let message = validation(selection) {
                         RecordingValidation(message: message)
                     }
                 }
@@ -368,11 +417,14 @@ private struct RecordingTimeEditor: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { onDone(selection); dismiss() }
+                        .disabled(invalidSelection)
                         .fontWeight(.semibold)
                         .accessibilityIdentifier("recording.time.done")
                 }
             }
         }
+        .environment(\.calendar, fixedCalendar ?? .current)
+        .environment(\.timeZone, (fixedCalendar ?? .current).timeZone)
         .tint(RecordingColor.accent)
     }
 }

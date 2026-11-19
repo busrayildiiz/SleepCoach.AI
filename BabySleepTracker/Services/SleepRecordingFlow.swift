@@ -8,13 +8,22 @@ extension Notification.Name {
 /// Transient form state; the persisted SleepRecord format is unchanged.
 struct SleepRecordingDraft {
     var start: Date
-    var end: Date
-    var isOngoing: Bool
+    var end: Date {
+        didSet { if end != oldValue { confirmedEnd = nil } }
+    }
+    var isOngoing: Bool {
+        didSet { if isOngoing { confirmedEnd = nil } }
+    }
     private let observationID: UUID
     private let creationIntent: ObservationCreationIntent?
     private let initialStart: Date
     private var initialEnd: Date
     private var nightCompletionIntent: ObservationCreationIntent? = nil
+    private var confirmedEnd: Date?
+    private(set) var completionCalendar: Calendar?
+    private(set) var requiresEndConfirmation = false
+    var hasConfirmedEnd: Bool { confirmedEnd == end }
+    var isReadyToSubmit: Bool { isOngoing || !requiresEndConfirmation || hasConfirmedEnd }
 
     init(defaultDate: Date, editing: SleepRecord? = nil, now: Date = Date()) {
         observationID = editing?.id ?? UUID()
@@ -27,13 +36,20 @@ struct SleepRecordingDraft {
     }
 
     /// Presentation draft only; Cancel never changes the stored ongoing session.
-    mutating func prepareForEnding(at now: Date) {
+    mutating func prepareForEnding(at now: Date, calendar: Calendar? = nil, requireConfirmation: Bool = false) {
         guard isOngoing else { return }
         isOngoing = false
         end = now
         initialEnd = end
+        completionCalendar = calendar
+        requiresEndConfirmation = requireConfirmation
         if nightCompletionIntent == nil { nightCompletionIntent = ObservationCreationIntent(recordID: UUID()) }
     }
+    mutating func confirmObservedEnd(now: Date) {
+        guard nightCompletionIntent != nil, !isOngoing, validationMessage(now: now) == nil else { return }
+        confirmedEnd = end
+    }
+
     var requiresExplicitCancellation: Bool {
         creationIntent?.requiresExplicitCancellation == true || nightCompletionIntent?.requiresExplicitCancellation == true
     }
@@ -54,29 +70,71 @@ struct SleepRecordingDraft {
     }
 
     func record(kind: SleepKind, editing: SleepRecord? = nil, now: Date) -> SleepRecord? {
-        guard kind != .break, validationMessage(now: now) == nil else { return nil }
+        guard kind != .break, isReadyToSubmit, validationMessage(now: now) == nil else { return nil }
+        if nightCompletionIntent != nil, let editing, (kind != editing.kind || start != editing.date) {
+            // The command still validates the exact original start for all direct submissions.
+            if completionCalendar != nil { return nil }
+        }
+        let unchangedOngoing = editing.flatMap { original in
+            isOngoing && original.isOngoing && original.date == start && original.kind == kind ? original : nil
+        }
         var record = SleepRecord(
             id: observationID, date: start,
-            duration: isOngoing ? 0 : Int(end.timeIntervalSince(start) / 60),
+            duration: isOngoing ? (unchangedOngoing?.duration ?? 0) : Int(end.timeIntervalSince(start) / 60),
             kind: kind, parentNapID: editing?.parentNapID, isOngoing: isOngoing,
-            createdAt: editing?.createdAt ?? now, endDate: isOngoing ? nil : end
+            createdAt: editing?.createdAt ?? now, endDate: isOngoing ? unchangedOngoing?.endDate : end
         )
         record.recordingDraft = true
         record.recordingBaseline = editing.map(ObservationProvenance.sleepIdentity)
         record.recordingRevision = editing?.persistedRevision
         record.creationIntent = creationIntent
         record.nightCompletionIntent = nightCompletionIntent
+        record.recordingCalendar = completionCalendar
         return record
     }
 
     fileprivate func captureForSubmission(_ record: SleepRecord, editing: SleepRecord?) -> SleepObservationCapture? {
         // Save is an actual observation submission only when applicable boundaries were
         // deliberately entered. Constructors and automatic End Sleep prefills never attest.
+        if nightCompletionIntent != nil, hasConfirmedEnd, !isOngoing, start == initialStart {
+            return SleepObservationCapture(record: record, previous: editing, confirmsStart: false)
+        }
         if (start != initialStart && (isOngoing || end != initialEnd)) ||
             (editing?.isOngoing == true && start == initialStart && end != initialEnd) {
             return SleepObservationCapture(record: record, previous: editing, confirmsStart: start != initialStart)
         }
         return nil
+    }
+}
+
+enum RecordingEndpointSelection {
+    static func combine(day: Date, time: Date, preserving existing: Date, calendar: Calendar) -> Date? {
+        let components = calendar.dateComponents([.hour, .minute], from: time)
+        guard let hour = components.hour, let minute = components.minute else { return nil }
+        let zone = calendar.timeZone
+        let selectedOffset = calendar.isDate(time, inSameDayAs: day) ? zone.secondsFromGMT(for: time) : nil
+        if calendar.isDate(day, inSameDayAs: existing),
+           components == calendar.dateComponents([.hour, .minute], from: existing),
+           selectedOffset.map({ $0 == zone.secondsFromGMT(for: existing) }) ?? true {
+            return existing
+        }
+
+        // Actual picker edits have minute precision. Preserve the selected offset in a fold
+        // when the picker supplies it, and reject nonexistent local times in a gap.
+        let scope = calendar.startOfDay(for: day)
+        func resolve(_ repeated: Calendar.RepeatedTimePolicy) -> Date? {
+            guard let result = calendar.nextDate(after: scope.addingTimeInterval(-1),
+                     matching: DateComponents(hour: hour, minute: minute, second: 0),
+                     matchingPolicy: .strict, repeatedTimePolicy: repeated),
+                  calendar.isDate(result, inSameDayAs: day) else { return nil }
+            return result
+        }
+        guard let first = resolve(.first) else { return nil }
+        if let selectedOffset, selectedOffset != zone.secondsFromGMT(for: first),
+           let last = resolve(.last), zone.secondsFromGMT(for: last) == selectedOffset {
+            return last
+        }
+        return first
     }
 }
 
@@ -170,14 +228,17 @@ struct RecordingSubmission {
     /// recording action and must not enter canonical night completion.
     static func saveHomeRecord(_ record: SleepRecord, now: Date,
                                onSave: (SleepRecord) -> Bool,
-                               onNightCompletion: ((SleepRecord) -> NightSleepCompletionResult)?) -> (succeeded: Bool, message: String?) {
+                               onNightCompletion: ((SleepRecord) -> NightSleepCompletionResult)?,
+                               confirmation: ((SleepRecord) -> StillSleepingConfirmation?)? = nil) -> (succeeded: Bool, message: String?) {
         if !record.isOngoing, let onNightCompletion {
             let result = onNightCompletion(record)
             return (result.succeeded, result.message)
         }
         let saved = onSave(record)
         if saved && record.isOngoing {
-            NotificationCenter.default.post(name: .sleepStillSleepingConfirmed, object: record.id, userInfo: ["confirmedAt": now])
+            var details: [AnyHashable: Any] = ["confirmedAt": now]
+            if let confirmed = confirmation?(record) { details["confirmation"] = confirmed }
+            NotificationCenter.default.post(name: .sleepStillSleepingConfirmed, object: record.id, userInfo: details)
         }
         return (saved, nil)
     }

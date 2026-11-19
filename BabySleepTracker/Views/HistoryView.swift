@@ -67,9 +67,11 @@ struct HistoryView: View {
         selectedDayRecords.filter { $0.kind == .break }
     }
 
-    private var selectedDayNetSleep: Int {
-        totalMinutes(for: selectedDayRecords)
+    private var accounting: SleepAccounting {
+        SleepAccounting(records: records, now: calculationDate, calendar: calendar)
     }
+
+    private var selectedDaySubtotal: CompletedRecordedSubtotal { accounting.completedSubtotal(on: selectedDate) }
 
     private var selectedDayWakePeriods: Int {
         selectedDayBreaks.count
@@ -88,8 +90,10 @@ struct HistoryView: View {
 
         private var timelineRecords: [SleepRecord] {
             records.filter { record in
-                let end = record.observedEnd ?? calculationDate
-                return end > timelineWindowStart && record.date < timelineWindowEnd
+                guard record.date < timelineWindowEnd, record.date <= calculationDate else { return false }
+                if let end = record.completedEnd(at: calculationDate) { return end > timelineWindowStart }
+                return record.kind != .break && calendar.isDate(record.date, inSameDayAs: selectedDate) &&
+                    record.date >= timelineWindowStart
             }
         }
 
@@ -97,17 +101,18 @@ struct HistoryView: View {
         private var timelineNapSegments: [SleepRecord]   { timelineRecords.filter { $0.kind == .dayNap } }
         private var timelineBreakSegments: [SleepRecord] { timelineRecords.filter { $0.kind == .break } }
 
-        private var timelineTotalSleepMinutes: Int {
-            SleepAccounting.netMinutes(records: records, now: calculationDate,
-                window: DateInterval(start: timelineWindowStart, end: timelineWindowEnd))
+        private var timelineWindow: DateInterval {
+            DateInterval(start: timelineWindowStart, end: timelineWindowEnd)
         }
+
+        private var timelineSubtotal: CompletedRecordedSubtotal { accounting.completedSubtotal(in: timelineWindow) }
 
         private var timelineNapCount: Int { timelineNapSegments.count }
 
-        private var timelineLongestStretchMinutes: Int {
-            Int((SleepAccounting.netIntervals(records: records, now: calculationDate,
-                window: DateInterval(start: timelineWindowStart, end: timelineWindowEnd))
-                .map(\.duration).max() ?? 0) / 60)
+        private var timelineLongestStretchMinutes: Int? {
+            guard !timelineSubtotal.isIncomplete else { return nil }
+            return accounting.completedIntervals(sleepIDs: Set(timelineRecords.map(\.id)), window: timelineWindow)
+                .map(\.duration).max().map { Int($0 / 60) }
         }
 
         private var timelineDateLabel: String {
@@ -231,11 +236,11 @@ struct HistoryView: View {
                 }
 
                 HStack(spacing: 0) {
-                    timelineStat(icon: "sparkles", iconColor: HistoryColor.purple, label: "Window sleep", value: TimeFormat.minutes(timelineTotalSleepMinutes) + (timelineRecords.contains { $0.kind != .break && ($0.isOngoing || $0.observedEnd == nil) } ? " · provisional" : ""), valueColor: HistoryColor.purple)
+                    timelineStat(icon: "sparkles", iconColor: HistoryColor.purple, label: "Window sleep", value: timelineSubtotal.display, valueColor: HistoryColor.purple)
                     Divider().frame(height: 30)
                     timelineStat(icon: nil, iconColor: HistoryColor.green, label: "Naps", value: "\(timelineNapCount)", valueColor: HistoryColor.green)
                     Divider().frame(height: 30)
-                    timelineStat(icon: nil, iconColor: HistoryColor.purple, label: "Longest stretch", value: TimeFormat.minutes(timelineLongestStretchMinutes), valueColor: HistoryColor.purple)
+                    timelineStat(icon: nil, iconColor: HistoryColor.purple, label: "Longest stretch", value: timelineLongestStretchMinutes.map(TimeFormat.minutes) ?? "Unavailable", valueColor: HistoryColor.purple)
                 }
                 .padding(.vertical, 12)
                 .padding(.horizontal, 14)
@@ -277,14 +282,6 @@ struct HistoryView: View {
             }
         }
 
-        /// Ongoing kayıt için "canlı bitiş" — bugünse Date(), değilse kayıtlı effectiveDuration
-        private func liveEnd(for record: SleepRecord, now: Date) -> Date {
-            guard record.isOngoing else {
-                return record.observedEnd ?? record.date
-            }
-            return min(now, timelineWindowEnd)
-        }
-
         private func timelineRow(
             icon: String,
             iconColor: Color,
@@ -306,9 +303,10 @@ struct HistoryView: View {
                             .frame(height: rowHeight)
 
                         ForEach(segments) { record in
-                            let end = liveEnd(for: record, now: now)
+                            let end = record.completedEnd(at: now)
+                            let isUnconfirmed = end == nil
                             let startX = fraction(for: record.date) * geo.size.width
-                            let endX = fraction(for: end) * geo.size.width
+                            let endX = fraction(for: end ?? record.date) * geo.size.width
                             let width = max(6, endX - startX)
 
                             Button {
@@ -318,8 +316,7 @@ struct HistoryView: View {
                                     .fill(barStyle)
                                     .frame(width: width, height: rowHeight)
                                     .overlay(
-                                        // ongoing ise ucunda hafif nabız efekti
-                                        record.isOngoing
+                                        isUnconfirmed
                                         ? RoundedRectangle(cornerRadius: rowHeight / 2.4, style: .continuous)
                                             .stroke(HistoryColor.purple.opacity(0.28), lineWidth: 2)
                                             .padding(-2)
@@ -327,6 +324,7 @@ struct HistoryView: View {
                                     )
                             }
                             .buttonStyle(.plain)
+                            .accessibilityLabel(isUnconfirmed ? "Sleep start recorded, end unconfirmed" : "Recorded sleep interval")
                             .offset(x: startX)
                         }
 
@@ -375,13 +373,12 @@ struct HistoryView: View {
 
     // MARK: - Yesterday comparison
 
-    private var yesterdayNetSleep: Int {
-        guard let yesterday = calendar.date(byAdding: .day, value: -1, to: selectedDate) else { return 0 }
-        let recs = SleepAccounting(records: records, now: calculationDate, calendar: calendar).records(on: yesterday)
-        return totalMinutes(for: recs)
+    private var recordedDeltaFromYesterday: Int? {
+        guard let yesterday = calendar.date(byAdding: .day, value: -1, to: selectedDate),
+              let prior = accounting.completedSubtotal(on: yesterday).comparableMinutes,
+              let selected = selectedDaySubtotal.comparableMinutes else { return nil }
+        return selected - prior
     }
-
-    private var vsYesterday: Int { selectedDayNetSleep - yesterdayNetSleep }
 
     // MARK: - Week chart data
 
@@ -389,7 +386,7 @@ struct HistoryView: View {
         let id = UUID()
         let date: Date
         let label: String
-        let minutes: Int
+        let subtotal: CompletedRecordedSubtotal
     }
 
     private var weekChartData: [DailySleep] {
@@ -397,33 +394,27 @@ struct HistoryView: View {
         dayFormatter.locale = Locale(identifier: "en_US")
         dayFormatter.dateFormat = "EEE"
         return weekDays.map { day in
-            let recs = SleepAccounting(records: records, now: calculationDate, calendar: calendar).records(on: day)
-            return DailySleep(
+            DailySleep(
                 date: day,
                 label: dayFormatter.string(from: day),
-                minutes: totalMinutes(for: recs)
+                subtotal: accounting.completedSubtotal(on: day)
             )
         }
     }
 
-    private var weekTotal: Int {
+    private var weekSubtotal: CompletedRecordedSubtotal {
         let ids = Set(records.filter { record in
             record.kind != .break && weekDays.contains { calendar.isDate(record.date, inSameDayAs: $0) }
         }.map(\.id))
-        return SleepAccounting.netMinutes(records: records, now: calculationDate, sleepIDs: ids)
+        let data = weekChartData.map(\.subtotal)
+        guard data.contains(where: { $0.minutes != nil }) else { return .incomplete(nil, reason: .missing) }
+        let minutes = accounting.completedMinutes(sleepIDs: ids)
+        return data.contains(where: \.isIncomplete) ? .incomplete(minutes, reason: .incomplete) : .comparable(minutes)
     }
 
     private var chartMax: Int {
-        let maxVal = weekChartData.map { $0.minutes }.max() ?? 60
+        let maxVal = weekChartData.compactMap { $0.subtotal.minutes }.max() ?? 60
         return max(120, Int(ceil(Double(maxVal) / 60.0)) * 60)
-    }
-
-    // MARK: - Helpers
-
-    private func totalMinutes(for items: [SleepRecord]) -> Int {
-        let sleeps = items.filter { $0.kind != .break }
-        let ids = Set(sleeps.map(\.id))
-        return SleepAccounting.netMinutes(records: records, now: calculationDate, sleepIDs: ids)
     }
 
     private func hasRecords(on day: Date) -> Bool {
@@ -438,11 +429,9 @@ struct HistoryView: View {
     }
 
     private var dayMessage: String {
-        let summary = SleepAccounting(records: records, now: calculationDate, calendar: calendar).sleepDay(on: selectedDate)
-        if !summary.subtotalsAreReliable { return "Overlapping records make Sleep Day subtotals unreliable. Review the original records." }
-        return summary.isProvisional
-            ? "Sleep Day total is provisional until its recorded night sleep is completed."
-            : "Sleep Day total includes naps and the night sleep starting on this day."
+        selectedDaySubtotal.isIncomplete
+            ? "Sleep Day is incomplete. Review unconfirmed or conflicting records."
+            : "Sleep Day includes naps and night sleep starting on this day."
     }
 
     // MARK: - Body
@@ -477,8 +466,8 @@ struct HistoryView: View {
                     }
 
                     // ── Comparison banner ──────────────────
-                    if yesterdayNetSleep > 0 || selectedDayNetSleep > 0 {
-                        comparisonBanner
+                    if let delta = recordedDeltaFromYesterday {
+                        comparisonBanner(delta: delta)
                     }
 
                     // ── Week overview chart ────────────────
@@ -747,7 +736,7 @@ struct HistoryView: View {
                 iconColor: .indigo,
                 iconBg: Color.indigo.opacity(0.12),
                 label: "Sleep Day",
-                value: selectedDayNetSleep > 0 ? TimeFormat.minutes(selectedDayNetSleep) : "–"
+                value: selectedDaySubtotal.display
             )
             Divider().frame(height: 44)
             statCell(
@@ -804,8 +793,8 @@ struct HistoryView: View {
         VStack(spacing: 0) {
             ForEach(selectedDayNaps) { nap in
                 let napBreaks = selectedDayBreaks.filter { $0.parentNapID == nap.id }.sorted { $0.date < $1.date }
-                let napEnd = nap.date.addingTimeInterval(TimeInterval(nap.duration * 60))
-                let net = nap.totalMinutes(breaks: selectedDayBreaks)
+                let napEnd = nap.completedEnd(at: calculationDate)
+                let net = napEnd.map { _ in accounting.completedMinutes(sleepIDs: [nap.id]) }
 
                 VStack(spacing: 0) {
                     // Nap row
@@ -823,7 +812,7 @@ struct HistoryView: View {
                             Text(nap.kind == .nightSleep ? "Night Sleep" : "Day Nap")
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(.indigo)
-                            Text("\(TimeFormat.ampm(nap.date)) – \(TimeFormat.ampm(napEnd))")
+                            Text(TimeFormat.ampm(nap.date) + (napEnd.map { " – \(TimeFormat.ampm($0))" } ?? " · End unconfirmed"))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                                 .monospacedDigit()
@@ -832,10 +821,10 @@ struct HistoryView: View {
                         Spacer()
 
                         VStack(alignment: .trailing, spacing: 2) {
-                            Text(TimeFormat.minutes(net))
+                            Text(net.map(TimeFormat.minutes) ?? "–")
                                 .font(.subheadline.weight(.bold))
                                 .foregroundStyle(.indigo)
-                            Text("Net Sleep")
+                            Text(net == nil ? "Incomplete" : "Net Sleep")
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }
@@ -904,21 +893,21 @@ struct HistoryView: View {
 
     // MARK: - Comparison Banner
 
-    private var comparisonBanner: some View {
+    private func comparisonBanner(delta: Int) -> some View {
         HStack(spacing: 12) {
-            Image(systemName: vsYesterday >= 0 ? "arrow.up.right" : "arrow.down.right")
+            Image(systemName: delta >= 0 ? "arrow.up.right" : "arrow.down.right")
                 .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(vsYesterday >= 0 ? .orange : .indigo)
+                .foregroundStyle(delta >= 0 ? .orange : .indigo)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text("Compared to yesterday")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
-                Text(vsYesterday == 0
+                Text(delta == 0
                      ? "Same as yesterday"
-                     : "\(vsYesterday > 0 ? "+" : "")\(TimeFormat.minutes(abs(vsYesterday))) \(vsYesterday > 0 ? "more" : "less") sleep")
+                     : "\(delta > 0 ? "+" : "")\(TimeFormat.minutes(abs(delta))) \(delta > 0 ? "more" : "less") sleep")
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(vsYesterday >= 0 ? .orange : .indigo)
+                    .foregroundStyle(delta >= 0 ? .orange : .indigo)
             }
 
             Spacer()
@@ -942,10 +931,10 @@ struct HistoryView: View {
                 Text("Week Overview")
                     .font(.headline.weight(.semibold))
                 Spacer()
-                Text("Total Sleep")
+                Text("Recorded sleep")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Text(TimeFormat.minutes(weekTotal))
+                Text(weekSubtotal.display)
                     .font(.subheadline.weight(.bold))
                     .foregroundStyle(.indigo)
             }
@@ -955,7 +944,7 @@ struct HistoryView: View {
 
                 BarMark(
                     x: .value("Day", item.label),
-                    y: .value("Min", animateChart ? item.minutes : 0)
+                    y: .value("Min", animateChart ? (item.subtotal.minutes ?? 0) : 0)
                 )
                 .cornerRadius(8)
                 .foregroundStyle(
@@ -965,8 +954,9 @@ struct HistoryView: View {
                 )
                 .annotation(position: .bottom) {
                     VStack(spacing: 1) {
-                        if item.minutes > 0 {
-                            Text(TimeFormat.minutes(item.minutes))
+                        if let minutes = item.subtotal.minutes {
+                            Text(TimeFormat.minutes(minutes))
+                                .accessibilityLabel(item.subtotal.display)
                                 .font(.system(size: 9, weight: isSelected ? .bold : .regular))
                                 .foregroundStyle(isSelected ? .orange : .secondary)
                         } else {

@@ -104,6 +104,15 @@ final class NapTransitionAgentTests: XCTestCase {
         )
     }
 
+    func testOngoingNapsWithZeroStoredDurationDoNotCountAsRejection() {
+        let records = (1...3).map { offset in
+            SleepRecord(date: now.addingTimeInterval(-Double(offset) * 86400),
+                        duration: 0, kind: .dayNap, isOngoing: true)
+        }
+        let assessment = agent.assess(records: records, wakeRecords: [], ageMonths: 9, now: now)
+        XCTAssertFalse(assessment.signals.contains { $0.type == .napRejection })
+    }
+
     func testFewerThanThreeShortNapsDoNotProduceNapRejectionSignal() {
         let records = [
             makeNap(daysAgo: 1, hour: 9, duration: 20),

@@ -37,18 +37,16 @@ struct SettingsView: View {
         records.filter { $0.kind != .break }
     }
 
-    private var breaksOnly: [SleepRecord] {
-        records.filter { $0.kind == .break }
-    }
-
-    private var avgDailyNap: Int {
-        let sevenAgo = Calendar.current.date(byAdding: .day, value: -7, to: Date())!
-        let thisWeek = napsOnly.filter { $0.date >= sevenAgo }
-        guard !thisWeek.isEmpty else { return 0 }
-        let total = thisWeek.reduce(0) { $0 + $1.totalMinutes(breaks: breaksOnly) }
-        return total / max(1, Set(thisWeek.map {
-            Calendar.current.startOfDay(for: $0.date)
-        }).count)
+    private func avgDailyNap(_ accounting: SleepAccounting) -> Int? {
+        let subtotals = (0..<7).compactMap { offset -> CompletedRecordedSubtotal? in
+            guard let day = accounting.calendar.date(byAdding: .day, value: -offset, to: accounting.now) else { return nil }
+            let subtotal = accounting.completedSubtotal(on: day, kind: .dayNap)
+            if case .incomplete(nil, reason: .missing) = subtotal { return nil }
+            return subtotal
+        }
+        let minutes = subtotals.compactMap(\.comparableMinutes)
+        guard !minutes.isEmpty, minutes.count == subtotals.count else { return nil }
+        return minutes.reduce(0, +) / minutes.count
     }
 
     private var consistencyLabel: String {
@@ -67,19 +65,16 @@ struct SettingsView: View {
         }
     }
 
-    private var weekVsLastWeek: Int {
-        let cal = Calendar.current
-        let now = Date()
-        let thisStart  = cal.date(byAdding: .day, value: -7,  to: now)!
-        let lastStart  = cal.date(byAdding: .day, value: -14, to: now)!
-        func total(_ from: Date, _ to: Date) -> Int {
-            let recs = napsOnly.filter { $0.date >= from && $0.date < to }
-            return recs.reduce(0) { $0 + $1.totalMinutes(breaks: breaksOnly) }
+    private func weekVsLastWeek(_ accounting: SleepAccounting) -> Int? {
+        func total(_ offsets: Range<Int>) -> Int? {
+            let subtotals = offsets.compactMap { offset -> Int? in
+                guard let day = accounting.calendar.date(byAdding: .day, value: -offset, to: accounting.now) else { return nil }
+                return accounting.completedSubtotal(on: day).comparableMinutes
+            }
+            return subtotals.count == offsets.count ? subtotals.reduce(0, +) : nil
         }
-        let t = total(thisStart, now)
-        let l = total(lastStart, thisStart)
-        guard l > 0 else { return 0 }
-        return Int(Double(t - l) / Double(l) * 100)
+        guard let recent = total(1..<8), let previous = total(8..<15), previous > 0 else { return nil }
+        return Int(Double(recent - previous) / Double(previous) * 100)
     }
 
     private var appearanceLabel: String {
@@ -102,13 +97,14 @@ struct SettingsView: View {
     // MARK: - Body
 
     var body: some View {
+        let accounting = SleepAccounting(records: records, now: Date(), calendar: .current)
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     headerSection
                     profileCard
-                    sleepInsightCard
-                    atAGlanceCard
+                    sleepInsightCard(change: weekVsLastWeek(accounting))
+                    atAGlanceCard(averageNap: avgDailyNap(accounting))
                     napRemindersSection
                     babyProfileSection
                     preferencesAndQuickActions
@@ -230,7 +226,7 @@ struct SettingsView: View {
 
     // MARK: - Sleep Insight Card
 
-    private var sleepInsightCard: some View {
+    private func sleepInsightCard(change: Int?) -> some View {
         ZStack(alignment: .leading) {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .fill(Color.indigo.opacity(0.07))
@@ -251,11 +247,10 @@ struct SettingsView: View {
                         .foregroundStyle(.indigo)
                 }
 
-                let pct = abs(weekVsLastWeek)
-                let direction = weekVsLastWeek >= 0 ? "longer" : "shorter"
-                Text(pct > 0
-                     ? "\(babyName) slept \(pct)% \(direction) this week than last week."
-                     : "Keep tracking to see weekly insights.")
+                Text(change.map { change in
+                    if change == 0 { return "Recorded sleep was the same across the last two weeks." }
+                    return "Recorded sleep was \(abs(change))% \(change > 0 ? "longer" : "shorter") over the last seven days than the previous seven."
+                } ?? "Complete more sleep records to compare weekly sleep.")
                     .font(.subheadline)
                     .foregroundStyle(.primary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -267,7 +262,7 @@ struct SettingsView: View {
 
     // MARK: - At a Glance
 
-    private var atAGlanceCard: some View {
+    private func atAGlanceCard(averageNap: Int?) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("\(babyName) at a Glance")
                 .font(.headline.weight(.semibold))
@@ -282,7 +277,7 @@ struct SettingsView: View {
                 Divider().frame(height: 44)
                 glanceCell(icon: "moon.fill", iconColor: .indigo,
                            label: "Avg Daily Nap",
-                           value: avgDailyNap > 0 ? TimeFormat.minutes(avgDailyNap) : "–")
+                           value: averageNap.map(TimeFormat.minutes) ?? "–")
                 Divider().frame(height: 44)
                 glanceCell(icon: "chart.line.uptrend.xyaxis", iconColor: .green,
                            label: "Consistency",

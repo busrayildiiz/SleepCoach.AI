@@ -39,9 +39,9 @@ struct SleepListView: View {
         case addSleep(editing: SleepRecord?, defaultDate: Date)
         case addNightSleep(defaultDate: Date)
         case addBreak(parentID: UUID)
-        case endSleep(parent: SleepRecord)
+        case endSleep(parent: SleepRecord, review: Bool = false)
         case dayDetail(SelectedDay)
-        case wakeTime
+        case wakeTime(associatedNight: SleepRecord? = nil)
 
         var isRecording: Bool {
             switch self {
@@ -58,12 +58,12 @@ struct SleepListView: View {
                 return "addNightSleep-\(date.timeIntervalSince1970)"
             case .addBreak(let id):
                 return "addBreak-\(id)"
-            case .endSleep(let parent):
+            case .endSleep(let parent, _):
                 return "endSleep-\(parent.id)"
             case .dayDetail(let day):
                 return "dayDetail-\(day.id)"
-            case .wakeTime:
-                return "wakeTime"
+            case .wakeTime(let night):
+                return "wakeTime-\(night?.id.uuidString ?? "independent")"
             }
         }
     }
@@ -83,7 +83,11 @@ struct SleepListView: View {
     @AppStorage("parentName") private var parentName: String = ""
 
     @State private var heroShowsPlan = false
-    @State private var stillSleepingConfirmation: TodaySleepHeroModel.StillSleepingConfirmation?
+    @Binding var sleepConfirmation: StillSleepingConfirmation?
+
+    init(sleepConfirmation: Binding<StillSleepingConfirmation?> = .constant(nil)) {
+        _sleepConfirmation = sleepConfirmation
+    }
 
     // MARK: - Persistence
 
@@ -93,7 +97,7 @@ struct SleepListView: View {
         return true
     }
     private func completeNight(_ record: SleepRecord) -> NightSleepCompletionResult {
-        let result = NightSleepCompletion(submitted: record, now: Date(), calendar: .current,
+        let result = NightSleepCompletion(submitted: record, now: Date(), calendar: record.recordingCalendar ?? .current,
             sleepPersistence: sleepRecordPersistence, wakePersistence: dailyWakeRecordPersistence).execute()
         loadRecords()
         loadWakeRecords()
@@ -114,25 +118,28 @@ struct SleepListView: View {
         wakeRecords = dailyWakeRecordPersistence.load() ?? []
     }
 
-    private func saveWakeTime(_ selectedTime: Date, capture: WakeObservationCapture?) -> String? {
+    private func saveWakeTime(_ selectedTime: Date, capture: WakeObservationCapture?,
+                              operation: HomeWakeOperation, calendar: Calendar) -> String? {
         #if DEBUG && targetEnvironment(simulator)
         if HomeCardTestFixture.enabled && ProcessInfo.processInfo.environment["HOME_WAKE_SAVE_FAIL"] == "1" { return "Saving did not finish. Review your wake time and try again." }
         #endif
         let result = SleepWakeTimeWorkflow(
             selectedWakeTime: selectedTime,
             now: Date(),
-            calendar: .current,
+            calendar: calendar,
             wakeRecords: wakeRecords,
             sleepRecords: records,
             wakePersistence: dailyWakeRecordPersistence,
             sleepPersistence: sleepRecordPersistence,
-            capture: capture
+            capture: capture,
+            homeOperation: operation
         ).execute()
         var state = HomeWakeCardState(records: wakeRecords)
         state.accept(result)
         wakeRecords = state.records
         if result.sleepPersistenceSucceeded { records = result.updatedSleepRecords }
         if let recovery = result.historicalRecovery { return recovery.message }
+        if let error = result.homeError { return error }
         if result.wakePersistenceSucceeded && result.evidencePublicationSucceeded &&
             (result.closedNightRecord == nil || result.sleepPersistenceSucceeded) { return nil }
         return "Saving did not finish. Review your wake time and try again."
@@ -164,7 +171,12 @@ struct SleepListView: View {
     }
 
     private var todayWakeRecord: DailyWakeRecord? {
-        wakeRecords.first { Calendar.current.isDateInToday($0.day) }
+        let now = Date()
+        let calendar = Calendar.current
+        let candidates = wakeRecords.filter { calendar.isDate($0.day, inSameDayAs: now) }
+        guard candidates.count == 1, let record = candidates.first,
+              calendar.isDate(record.wakeTime, inSameDayAs: now), record.wakeTime <= now else { return nil }
+        return record
     }
 
     private var hasPassedTypicalWakeTime: Bool {
@@ -209,7 +221,6 @@ struct SleepListView: View {
     private var previous7DaysAverage: Int { overviewMetrics.previous7DaysAverage }
     private var averageNapMinutes: Int { overviewMetrics.averageNapMinutes }
     private var latestNapDelta: Int { overviewMetrics.latestNapDelta }
-    private var consistencyPercent: Int { overviewMetrics.consistencyPercent }
 
     private var nextNapAnchor: Date {
         if let last = todaySleeps.last {
@@ -267,30 +278,14 @@ struct SleepListView: View {
         guard let napTime = orchestrator.snapshot?.daytime.nextNapTime else { return false }
         return napTime < Date()
     }
-    private var wakeWindowBeforeLatest: Int {
-        guard let firstNap = todaySleeps
-            .filter({ $0.kind == .dayNap })
-            .sorted(by: { $0.date < $1.date })
-            .first
-        else { return 158 }
-
-        if let wt = todayWakeRecord?.wakeTime {
-            return max(0, Int(firstNap.date.timeIntervalSince(wt) / 60))
-        }
-
-        // Wake record yok — önceki naptan tahmin et
-        let older = todaySleeps
-            .filter { $0.date < firstNap.date }
-            .sorted { $0.date > $1.date }
-
-        if let prev = older.first,
-           let prevEnd = Calendar.current.date(
-               byAdding: .minute, value: prev.duration, to: prev.date
-           ) {
-            return max(0, Int(firstNap.date.timeIntervalSince(prevEnd) / 60))
-        }
-
-        return 120 // fallback
+    private var wakeWindowBeforeLatest: Int? {
+        let now = Date()
+        guard let firstNap = todaySleeps.filter({ $0.kind == .dayNap && $0.completedEnd(at: now) != nil })
+            .min(by: { $0.date < $1.date }) else { return nil }
+        let earlierEnd = todaySleeps.compactMap { $0.completedEnd(at: now) }.filter { $0 <= firstNap.date }.max()
+        let wake = todayWakeRecord?.wakeTime
+        guard let anchor = [earlierEnd, wake].compactMap({ $0 }).filter({ $0 <= firstNap.date }).max() else { return nil }
+        return Int(firstNap.date.timeIntervalSince(anchor) / 60)
     }
 
     private var insightText: String {
@@ -310,8 +305,9 @@ struct SleepListView: View {
 
     private func planPresentation(at actual: Date) -> TodayPlanPresentation {
         let now = planNow(actual)
-        let hero = sleepHero(at: now)
-        let routine = TodaySleepHeroModel.Routine.load(defaults: .standard)
+        let calendar = Calendar.current
+        let routine = SleepRoutine.load(defaults: .standard)
+        let hero = sleepHero(at: now, calendar: calendar, routine: routine)
         #if DEBUG && targetEnvironment(simulator)
         if TodayPlanUITestFixture.enabled {
             return TodayPlanUITestFixture.presentation(records: records, wakes: wakeRecords, hero: hero, routine: routine)
@@ -319,7 +315,7 @@ struct SleepListView: View {
         #endif
         // No verified provider exists. No legacy phase, DQS or LLM timestamp is used.
         return TodayPlanPresentation.make(records: records, wakes: wakeRecords, hero: hero,
-            now: now, calendar: .current, routine: routine)
+            now: now, calendar: calendar, routine: routine)
     }
 
     // MARK: - Helpers
@@ -385,31 +381,28 @@ struct SleepListView: View {
                 loadRecords()
                 loadWakeRecords()
                 orchestrator.loadCachedLLMResponse()
-                orchestrator.generate()
+                orchestrator.generate(confirmation: sleepConfirmation)
             }
             .onReceive(NotificationCenter.default.publisher(for: .sleepRecordsDidChange)) { _ in
                 loadRecords()
-                generationCoalescer.request { orchestrator.generate() }
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .sleepStillSleepingConfirmed)) { event in
-                if let id = event.object as? UUID, let date = event.userInfo?["confirmedAt"] as? Date {
-                    stillSleepingConfirmation = .init(recordID: id, date: date)
-                }
+                generationCoalescer.request { orchestrator.generate(confirmation: sleepConfirmation) }
             }
             .onReceive(NotificationCenter.default.publisher(for: .dailyWakeRecordsDidChange)) { _ in
                 loadWakeRecords()
-                generationCoalescer.request { orchestrator.generate() }
+                generationCoalescer.request { orchestrator.generate(confirmation: sleepConfirmation) }
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.significantTimeChangeNotification)) { _ in
                 loadRecords()
                 loadWakeRecords()
+                orchestrator.generate(confirmation: sleepConfirmation, requestCoaching: false)
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
                 loadRecords()
                 loadWakeRecords()
+                orchestrator.generate(confirmation: sleepConfirmation, requestCoaching: false)
             }
             .onReceive(NotificationCenter.default.publisher(for: .babyProfileDidChange)) { _ in
-                generationCoalescer.request { orchestrator.generate() }
+                generationCoalescer.request { orchestrator.generate(confirmation: sleepConfirmation) }
             }
             .environment(\.locale, Locale(identifier: "en_US"))
             .onChange(of: heroShowsPlan) { requested in
@@ -615,7 +608,9 @@ struct SleepListView: View {
     // MARK: - Sleep Overview Card
 
     private var sleepOverviewCard: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        let metrics = overviewMetrics
+        let rhythm = orchestrator.snapshot?.pattern?.averageWakeWindowMinutes ?? wakeWindowBeforeLatest
+        return VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .center) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("SLEEP OVERVIEW")
@@ -650,62 +645,65 @@ struct SleepListView: View {
                 summaryCell(
                     icon: "moon.fill",
                     iconColor: Color(red: 0.55, green: 0.48, blue: 0.96),
-                    title: !overviewMetrics.subtotalsAreReliable ? "Sleep Day · unreliable" : (overviewMetrics.sleepDayIsProvisional ? "Sleep Day · provisional" : "Sleep Day"),
-                    value: todayTotal > 0 ? "\(todayTotal / 60)h \(todayTotal % 60)m" : "0m",
-                    badge: "24h: \(TimeFormat.minutes(overviewMetrics.rolling24hMinutes))" + (overviewMetrics.rolling24hIsProvisional ? " · provisional" : ""),
-                    badgeColor: goalBadgeColor
+                    title: "Sleep Day",
+                    value: metrics.recordedSleepDay.display,
+                    badge: "24h: \(metrics.recordedRolling24h.display)",
+                    badgeColor: goalBadgeColor(progress: metrics.recordedGoalProgress)
                 )
 
                 summaryCell(
                     icon: "moon.zzz.fill",
                     iconColor: Color(red: 0.26, green: 0.72, blue: 0.56),
                     title: "Naps",
-                    value: "\(todayNapCount)",
-                    badge: napBadgeText,
-                    badgeColor: napBadgeColor
+                    value: "\(metrics.todayNapCount)",
+                    badge: napBadgeText(metrics),
+                    badgeColor: napBadgeColor(metrics)
                 )
 
                 summaryCell(
                     icon: "waveform.path",
                     iconColor: Color(red: 1.0, green: 0.68, blue: 0.24),
                     title: "Rhythm",
-                    value: TimeFormat.minutes(orchestrator.snapshot?.pattern?.averageWakeWindowMinutes ?? wakeWindowBeforeLatest),
-                    badge: wakeWindowBadgeText,
-                    badgeColor: wakeWindowBadgeColor
+                    value: rhythm.map(TimeFormat.minutes) ?? "Unavailable",
+                    badge: rhythm == nil ? "Needs records" : "From records",
+                    badgeColor: Color(.secondaryLabel)
                 )
             }
 
-            VStack(spacing: 5) {
-                GeometryReader { geo in
-                    ZStack(alignment: .leading) {
-                        Capsule()
-                            .fill(Color(red: 0.55, green: 0.45, blue: 0.98).opacity(0.12))
-                        Capsule()
-                            .fill(
-                                LinearGradient(
-                                    colors: [
-                                        Color(red: 0.55, green: 0.45, blue: 0.98),
-                                        Color(red: 1.0, green: 0.72, blue: 0.30)
-                                    ],
-                                    startPoint: .leading,
-                                    endPoint: .trailing
+            if let progress = metrics.recordedGoalProgress {
+                VStack(spacing: 5) {
+                    GeometryReader { geo in
+                        ZStack(alignment: .leading) {
+                            Capsule()
+                                .fill(Color(red: 0.55, green: 0.45, blue: 0.98).opacity(0.12))
+                            Capsule()
+                                .fill(
+                                    LinearGradient(
+                                        colors: [
+                                            Color(red: 0.55, green: 0.45, blue: 0.98),
+                                            Color(red: 1.0, green: 0.72, blue: 0.30)
+                                        ],
+                                        startPoint: .leading,
+                                        endPoint: .trailing
+                                    )
                                 )
-                            )
-                            .frame(width: max(8, geo.size.width * todayGoalProgress))
+                                .frame(width: geo.size.width * progress)
+                        }
+                    }
+                    .frame(height: 7)
+
+                    HStack {
+                        Text("\(Int(progress * 100))% of 24h minimum reference")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(Color(.secondaryLabel))
+                        Spacer()
+                        Text("Goal: 14h")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(Color(.tertiaryLabel))
                     }
                 }
-                .frame(height: 7)
-
-                HStack {
-                    Text("\(Int(todayGoalProgress * 100))% of 24h minimum reference")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(Color(.secondaryLabel))
-                    Spacer()
-                    Text("Goal: 14h")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(Color(.tertiaryLabel))
-                }
             }
+
 
             if !groupedByDay.isEmpty {
                 Divider().overlay(Color(red: 0.55, green: 0.45, blue: 0.98).opacity(0.12))
@@ -839,56 +837,30 @@ struct SleepListView: View {
 
     // MARK: - Badge Helpers
 
-    private var todayNapCount: Int {
-        overviewMetrics.todayNapCount
-    }
-
-    private var todayGoalProgress: Double {
-        overviewMetrics.todayGoalProgress
-    }
-
-    private var goalBadgeText: String {
-        let pct = Int(todayGoalProgress * 100)
-        if pct >= 100 { return "Goal reached ✓" }
-        if pct >= 70  { return "\(pct)% of goal" }
-        return "\(pct)% of goal"
-    }
-
-    private var goalBadgeColor: Color {
-        let pct = Int(todayGoalProgress * 100)
-        if pct >= 100 { return Color(red: 0.16, green: 0.68, blue: 0.46) }
-        if pct >= 70  { return Color(red: 0.45, green: 0.35, blue: 0.92) }
+    private func goalBadgeColor(progress: Double?) -> Color {
+        guard let progress else { return Color(.secondaryLabel) }
+        if progress >= 1 { return Color(red: 0.16, green: 0.68, blue: 0.46) }
+        if progress >= 0.7 { return Color(red: 0.45, green: 0.35, blue: 0.92) }
         return Color(.secondaryLabel)
     }
 
-    private var napBadgeText: String {
-        guard let ageMonths = orchestrator.snapshot?.ageMonths else { return "–" }
+    private func napBadgeText(_ metrics: SleepOverviewMetrics) -> String {
+        guard !metrics.recordedDaytime.isIncomplete else { return "Incomplete" }
+        guard let ageMonths = orchestrator.snapshot?.ageMonths else { return "Completed" }
         let profile = DefaultAgeBasedSleepProfileProvider().profile(forAgeMonths: ageMonths)
         let expected = profile.expectedNapCount
-        if todayNapCount >= expected.lowerBound { return "On track" }
-        let remaining = expected.lowerBound - todayNapCount
+        if metrics.todayNapCount >= expected.lowerBound { return "On track" }
+        let remaining = expected.lowerBound - metrics.todayNapCount
         return "\(remaining) more needed"
     }
 
-    private var napBadgeColor: Color {
-        guard let ageMonths = orchestrator.snapshot?.ageMonths else { return Color(.secondaryLabel) }
+    private func napBadgeColor(_ metrics: SleepOverviewMetrics) -> Color {
+        guard !metrics.recordedDaytime.isIncomplete, let ageMonths = orchestrator.snapshot?.ageMonths else {
+            return Color(.secondaryLabel)
+        }
         let profile = DefaultAgeBasedSleepProfileProvider().profile(forAgeMonths: ageMonths)
         let expected = profile.expectedNapCount
-        if todayNapCount >= expected.lowerBound { return Color(red: 0.16, green: 0.68, blue: 0.46) }
-        return Color(.secondaryLabel)
-    }
-
-    private var wakeWindowBadgeText: String {
-        let pct = consistencyPercent
-        if pct >= 80 { return "Good" }
-        if pct >= 60 { return "Building" }
-        return "Low"
-    }
-
-    private var wakeWindowBadgeColor: Color {
-        let pct = consistencyPercent
-        if pct >= 80 { return Color(red: 0.16, green: 0.68, blue: 0.46) }
-        if pct >= 60 { return Color(red: 0.45, green: 0.35, blue: 0.92) }
+        if metrics.todayNapCount >= expected.lowerBound { return Color(red: 0.16, green: 0.68, blue: 0.46) }
         return Color(.secondaryLabel)
     }
     
@@ -936,15 +908,21 @@ struct SleepListView: View {
             TodaySleepHeroCard(model: model,
                 addNap: { activeSheet = .addSleep(editing: nil, defaultDate: Date()) },
                 recordNight: { activeSheet = .addNightSleep(defaultDate: Date()) },
-                endSleep: { if let record = model.record { activeSheet = .endSleep(parent: record) } },
+                endSleep: {
+                    if let record = model.record {
+                        activeSheet = .endSleep(parent: record, review: model.elapsedMinutes == nil)
+                    }
+                },
+                reviewEnd: { activeSheet = .endSleep(parent: $0, review: true) },
                 addBreak: { if model.canAddBreak, let record = model.record { activeSheet = .addBreak(parentID: record.id) } },
                 viewDetails: { activeSheet = .dayDetail(SelectedDay(day: model.sleepDay ?? context.date)) },
                 viewPlan: { heroShowsPlan = true },
-                confirmWake: { activeSheet = .wakeTime })
+                confirmWake: { activeSheet = .wakeTime(associatedNight: model.assessment.reminderNight) })
         }
     }
 
-    private func sleepHero(at now: Date) -> TodaySleepHeroModel {
+    private func sleepHero(at now: Date, calendar: Calendar = .current,
+                           routine: SleepRoutine? = .load(defaults: .standard)) -> TodaySleepHeroModel {
         #if DEBUG && targetEnvironment(simulator)
         if TodayPlanUITestFixture.enabled {
             return TodaySleepHeroModel.make(records: records, wakeRecords: wakeRecords,
@@ -953,7 +931,7 @@ struct SleepListView: View {
                 displayName: displayedParentName, babyName: babyName,
                 proposals: TodayPlanUITestFixture.wakePredictions(records: records))
         }
-        if HeroUITestFixture.enabled { return HeroUITestFixture.model(records: records, wakes: wakeRecords) }
+        if HeroUITestFixture.enabled { return HeroUITestFixture.model(records: records, wakes: wakeRecords, confirmation: sleepConfirmation) }
         if HomeCardTestFixture.enabled { return HeroUITestFixture.legacyModel(records: records, wakes: wakeRecords) }
         #endif
         let defaults = UserDefaults.standard
@@ -961,9 +939,9 @@ struct SleepListView: View {
         // No verified eligibility provider exists. Do not feed the legacy counter,
         // DQS or LLM text into this prediction display contract.
         return TodaySleepHeroModel.make(records: records, wakeRecords: wakeRecords,
-            now: now, calendar: .current, routine: routine,
+            now: now, calendar: calendar, routine: routine,
             displayName: displayedParentName, babyName: babyName,
-            confirmation: stillSleepingConfirmation)
+            confirmation: sleepConfirmation, instant: ContinuousClock.now)
     }
 
     @ViewBuilder private func homeCardArtwork(kind: SleepKind?) -> some View {
@@ -999,7 +977,7 @@ struct SleepListView: View {
     private var todayWakeSection: some View {
         TimelineView(.periodic(from: .now, by: 60)) { context in
             if HomeWakeCardState(records: wakeRecords).isVisible(now: context.date, calendar: .current) {
-                HomeWakeTimeCard { activeSheet = .wakeTime }
+                HomeWakeTimeCard { activeSheet = .wakeTime() }
             } else if let wakeTime = todayWakeRecord?.wakeTime {
                 WakeUpCard(time: wakeTime)
             }
@@ -1692,8 +1670,7 @@ struct SleepListView: View {
     }
 
     private func premiumDayRow(group: (day: Date, items: [SleepRecord]), rank: Int) -> some View {
-        let summary = SleepAccounting(records: records, now: Date(), calendar: .current).sleepDay(on: group.day)
-        let total = summary.totalMinutes
+        let summary = SleepAccounting(records: records, now: Date(), calendar: .current).completedSubtotal(on: group.day)
         let sessions = group.items.filter { $0.kind != .break }.count
 
         return HStack(spacing: 14) {
@@ -1735,14 +1712,14 @@ struct SleepListView: View {
             Spacer(minLength: 8)
 
             VStack(alignment: .trailing, spacing: 3) {
-                Text(TimeFormat.minutes(total) + (!summary.subtotalsAreReliable ? " · unreliable" : (summary.isProvisional ? " · provisional" : "")))
+                Text(summary.display)
                     .font(.system(size: 15, weight: .bold, design: .rounded))
                     .foregroundStyle(Color.sleepInk)
                     .monospacedDigit()
                     .lineLimit(1)
                     .minimumScaleFactor(0.75)
 
-                Text(!summary.subtotalsAreReliable ? "Review records" : (summary.isProvisional ? "Provisional" : "Finalized"))
+                Text(summary.isIncomplete ? "Review records" : "Finalized")
                     .font(.system(size: 10, weight: .bold))
                     .foregroundStyle(Color.sleepMuted)
                     .lineLimit(1)

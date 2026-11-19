@@ -3,15 +3,22 @@ import Foundation
 // MARK: - Daytime Prediction
 
 struct DaytimePredictionAgent {
-    let nextNapTime:             Date
-    let windowStart:             Date
-    let windowEnd:               Date
+    let nextNapTime:             Date?
+    let windowStart:             Date?
+    let windowEnd:               Date?
     let expectedDurationMinutes: Int
     let wakeWindowUsed:          Int
-    let confidence:              Int      // 0–94
+    let confidence:              Int?      // 0–94
     let mode:                    PredictionMode
     let reasoning:               [String]
-    let usedDefaultWakeTime:     Bool     
+    let usedDefaultWakeTime:     Bool
+    var source: SleepPlanningSource = .recordedEstimate
+    var unavailableReason: SleepPlanningUnavailable = .missing
+    var generalWakeWindow: ClosedRange<Int>? = nil
+
+    var recommendation: SleepPlanningValue<Date> {
+        nextNapTime.map { .available($0, source: source) } ?? .unavailable(unavailableReason)
+    }
 }
 enum PredictionMode {
     case ageBaseline      // 0–6 gün
@@ -28,8 +35,17 @@ protocol DaytimePredictionAgentProtocol {
         wakeRecords:  [DailyWakeRecord],
         ageMonths:    Int,
         trackedDays:  Int,
-        now:          Date
+        now:          Date,
+        planning:     SleepPredictionContext?
     ) -> DaytimePredictionAgent
+}
+
+extension DaytimePredictionAgentProtocol {
+    func predictNextNap(pattern: BabyPattern?, todayRecords: [SleepRecord], wakeRecords: [DailyWakeRecord],
+                        ageMonths: Int, trackedDays: Int, now: Date) -> DaytimePredictionAgent {
+        predictNextNap(pattern: pattern, todayRecords: todayRecords, wakeRecords: wakeRecords,
+                       ageMonths: ageMonths, trackedDays: trackedDays, now: now, planning: nil)
+    }
 }
 
 // MARK: - DefaultDaytimePredictionAgent
@@ -55,131 +71,63 @@ final class DefaultDaytimePredictionAgent: DaytimePredictionAgentProtocol {
         wakeRecords:  [DailyWakeRecord],
         ageMonths:    Int,
         trackedDays:  Int,
-        now:          Date
+        now:          Date,
+        planning:     SleepPredictionContext?
     ) -> DaytimePredictionAgent {
-
-        let profile  = profileProvider.profile(forAgeMonths: ageMonths)
-        let breaks   = todayRecords.filter { $0.kind == .break }
-
-        let todayNaps = todayRecords
-            .filter { $0.kind == .dayNap && $0.observedEnd.map { $0 <= now } == true }
-            .sorted { $0.date < $1.date }
-
-        let ongoingNap = todayRecords.first { $0.kind == .dayNap && $0.isOngoing }
-
-        // 1. Anchor
-        let anchor = predictionAnchor(
-            todayNaps:   todayNaps,
-            ongoingNap:  ongoingNap,
-            breaks:      breaks,
-            wakeRecords: wakeRecords,
-            now:         now
-        )
-
-        // 2. Wake window
-        let wakeWindow = blendedWakeWindow(
-            profile:     profile,
-            pattern:     pattern,
-            trackedDays: trackedDays
-        )
-
-        // 3. Tahmin zamanı
-        let nextNapTime = anchor.time.addingMinutes(wakeWindow)
-
-        // 4. Mod ve pencere
-        let mode         = predictionMode(trackedDays: trackedDays, pattern: pattern)
-        let windowRadius = windowRadius(for: mode)
-
-        let windowStart = nextNapTime.addingMinutes(-windowRadius)
-        let windowEnd   = nextNapTime.addingMinutes(windowRadius)
-
-        // 5. Beklenen süre
-        let expectedDuration = expectedNapDuration(
-            profile:  profile,
-            pattern:  pattern,
-            napIndex: todayNaps.count
-        )
-
-        // 6. Güven skoru
-        let confidence = calculateConfidence(
-            mode:          mode,
-            trackedDays:   trackedDays,
-            hasWakeTime:   anchor.hasTodayWakeTime,
-            hasPattern:    pattern != nil,
-            hasOngoingNap: ongoingNap != nil
-        )
-
-        // 7. Gerekçeler
-        let reasoning = buildReasoning(
-            mode:          mode,
-            anchor:        anchor,
-            wakeWindow:    wakeWindow,
-            ageMonths:     ageMonths,
-            trackedDays:   trackedDays,
-            hasOngoingNap: ongoingNap != nil
-        )
-
-        return DaytimePredictionAgent (
-            nextNapTime:             nextNapTime,
-            windowStart:             windowStart,
-            windowEnd:               windowEnd,
-            expectedDurationMinutes: expectedDuration,
-            wakeWindowUsed:          wakeWindow,
-            confidence:              confidence,
-            mode:                    mode,
-            reasoning:               reasoning,
-            usedDefaultWakeTime:     !anchor.hasTodayWakeTime
-        )
-    }
-
-    // MARK: - Anchor
-
-    private func predictionAnchor(
-        todayNaps:   [SleepRecord],
-        ongoingNap:  SleepRecord?,
-        breaks:      [SleepRecord],
-        wakeRecords: [DailyWakeRecord],
-        now:         Date
-    ) -> (time: Date, hasTodayWakeTime: Bool) {
-
-        // Ongoing nap — bebek hâlâ uyuyor
-        if let ongoing = ongoingNap {
-            let elapsed      = max(0, Int(now.timeIntervalSince(ongoing.date) / 60))
-            let estimatedEnd = ongoing.date.addingMinutes(max(45, elapsed + 30))
-            let anchorTime   = estimatedEnd > now ? estimatedEnd : now
-            return (anchorTime, true)
+        let context = planning ?? SleepPredictionContext(records: todayRecords, wakes: wakeRecords,
+            evaluation: .init(now: now, calendar: calendar, routine: .load(defaults: .standard)))
+        let evaluation = context.evaluation
+        let profile = profileProvider.profile(forAgeMonths: ageMonths)
+        let todayNaps = todayRecords.filter { $0.kind == .dayNap && $0.completedEnd(at: now) != nil }
+        let assessment = context.assessment
+        let anchor: Date?
+        let source: SleepPlanningSource
+        if let active = assessment.active {
+            if active.record.kind == .dayNap, let elapsed = active.elapsed {
+                anchor = active.record.date.addingMinutes(max(45, elapsed + 30))
+                source = .activityEstimate
+            } else {
+                anchor = nil
+                source = .ageGuidance
+            }
+        } else if let observed = assessment.anchor {
+            anchor = observed.date
+            source = .recordedEstimate
+        } else if let wake = evaluation.routine?.wake(on: now, calendar: evaluation.calendar) {
+            anchor = wake
+            source = .routine
+        } else {
+            anchor = nil
+            source = .ageGuidance
         }
 
-        // Tamamlanmış son napın net bitiş saati
-        if let lastNap = todayNaps.last {
-            return (lastNap.observedEnd ?? lastNap.date, true)
+        let usesPattern = source == .recordedEstimate || source == .activityEstimate
+        let wakeWindow = blendedWakeWindow(profile: profile, pattern: usesPattern ? pattern : nil, trackedDays: trackedDays)
+        let mode = predictionMode(trackedDays: trackedDays, pattern: pattern)
+        let radius = windowRadius(for: mode)
+        let target = anchor.map { $0.addingMinutes(wakeWindow) }
+        let confidence = usesPattern ? calculateConfidence(mode: mode, trackedDays: trackedDays,
+            hasWakeTime: source == .recordedEstimate, hasPattern: pattern != nil,
+            hasOngoingNap: source == .activityEstimate) : nil
+        let reasoning: [String]
+        if usesPattern {
+            reasoning = buildReasoning(mode: mode, wakeWindow: wakeWindow, ageMonths: ageMonths,
+                trackedDays: trackedDays, hasOngoingNap: source == .activityEstimate)
+        } else if source == .routine {
+            reasoning = ["Routine-based guidance from the saved usual wake time."]
+        } else {
+            reasoning = ["\(assessment.unavailableReason.rawValue). General age-based wake window guidance is available."]
         }
-
-        // Bugünün wake record'u — en son girileni kullan
-        let todayWakes = wakeRecords
-            .filter { calendar.isDate($0.day, inSameDayAs: now) }
-            .sorted { $0.wakeTime < $1.wakeTime }
-
-        if let latestWake = todayWakes.last {
-            return (latestWake.wakeTime, true)
-        }
-
-        // Hiç kayıt yoksa — Settings'te kaydedilen "typical wake time"ı her zaman kullan.
-        // "now" kullanılmaz çünkü kayıt eksikliği "şimdi uyandı" anlamına gelmez,
-        // "muhtemelen typicalWake'de uyandı ama henüz loglanmadı" anlamına gelir.
-        let today = calendar.startOfDay(for: now)
-
-        let wakeHour   = UserDefaults.standard.object(forKey: "typicalWakeHour")   as? Double ?? 7.0
-        let wakeMinute = UserDefaults.standard.object(forKey: "typicalWakeMinute") as? Double ?? 0.0
-
-        let typicalWake = calendar.date(
-            bySettingHour: Int(wakeHour),
-            minute:        Int(wakeMinute),
-            second:        0,
-            of:            today
-        ) ?? now
-
-        return (typicalWake, false)   // false = bu gerçek bir kayıt değil, varsayım
+        return DaytimePredictionAgent(
+            nextNapTime: target,
+            windowStart: target.map { $0.addingMinutes(-radius) },
+            windowEnd: target.map { $0.addingMinutes(radius) },
+            expectedDurationMinutes: expectedNapDuration(profile: profile, pattern: usesPattern ? pattern : nil,
+                                                        napIndex: todayNaps.count),
+            wakeWindowUsed: wakeWindow, confidence: confidence, mode: mode, reasoning: reasoning,
+            usedDefaultWakeTime: source == .routine, source: source, unavailableReason: assessment.unavailableReason,
+            generalWakeWindow: target == nil ? profile.wakeWindowRange : nil
+        )
     }
 
     // MARK: - Blended Wake Window
@@ -266,7 +214,6 @@ final class DefaultDaytimePredictionAgent: DaytimePredictionAgentProtocol {
 
     private func buildReasoning(
         mode:          PredictionMode,
-        anchor:        (time: Date, hasTodayWakeTime: Bool),
         wakeWindow:    Int,
         ageMonths:     Int,
         trackedDays:   Int,
@@ -276,10 +223,8 @@ final class DefaultDaytimePredictionAgent: DaytimePredictionAgentProtocol {
 
         if hasOngoingNap {
             parts.append("Baby is currently sleeping — prediction based on estimated nap end time.")
-        } else if anchor.hasTodayWakeTime {
-            parts.append("Calculated from today's wake-up or last nap end time.")
         } else {
-            parts.append("No wake time logged today — using your saved typical wake-up time as a default.")
+            parts.append("Calculated from today's wake-up or last nap end time.")
         }
 
         switch mode {

@@ -14,11 +14,15 @@ struct TodayPlanPresentation {
     let isOvernight: Bool
     let morningWake: MorningWake?
     let predictionsUnavailable: Bool
+    let routineWake: Date?
+    let routineBedtime: Date?
+    let currentConfirmation: Date?
     /// Presentation wording follows the existing Hero, never a new wake-time rule.
     let overnightEndUnconfirmed: Bool
 
     init(items: [SleepTimelineItem], isOvernight: Bool = false, morningWake: MorningWake? = nil,
-         overnightEndUnconfirmed: Bool = false) {
+         overnightEndUnconfirmed: Bool = false, routineWake: Date? = nil, routineBedtime: Date? = nil,
+         currentConfirmation: Date? = nil) {
         // Unavailable/default predictions are an indicator, never a scheduled node.
         self.items = items.filter { item in
             switch item.source {
@@ -30,6 +34,9 @@ struct TodayPlanPresentation {
         self.isOvernight = isOvernight
         self.morningWake = morningWake
         self.overnightEndUnconfirmed = overnightEndUnconfirmed
+        self.routineWake = routineWake
+        self.routineBedtime = routineBedtime
+        self.currentConfirmation = currentConfirmation
         predictionsUnavailable = !isOvernight && items.contains {
             $0.kind == .plan || $0.source == .defaultValue || $0.source == .guidance ||
                 ($0.source == .estimate && $0.visualState == .unavailable)
@@ -53,28 +60,21 @@ struct TodayPlanPresentation {
                      proposals: [SleepTimelineProposal] = [],
                      eligibility: SleepTimelineCalculator.PredictionEligibility = .unavailable) -> Self {
         let day = calendar.startOfDay(for: now)
-        let dayWakes = wakes.filter { calendar.isDate($0.day, inSameDayAs: now) }
-        let confirmedWake = dayWakes.filter { calendar.isDate($0.wakeTime, inSameDayAs: now) && $0.wakeTime <= now }
-            .max { $0.wakeTime < $1.wakeTime }
-        let wake = confirmedWake ?? dayWakes.max { $0.wakeTime < $1.wakeTime }
-        let today = SleepTimelineCalculator(records: records, wakeRecord: wake, now: now,
-            calendar: calendar, proposals: proposals, predictionEligibility: eligibility).calculate()
+        let assessment = hero.assessment
+        let today = SleepTimelineCalculator(records: records, wakeRecord: assessment.recordedWake, now: now,
+            calendar: calendar, proposals: proposals, predictionEligibility: eligibility,
+            assessment: assessment).calculate()
         func projected(_ record: SleepRecord) -> SleepTimelineItem? {
             var result = SleepTimelineCalculator(records: records, wakeRecord: nil, now: now,
-                calendar: calendar, day: record.date).calculate().first { $0.source == .recorded(record.id) }
+                calendar: calendar, day: record.date, assessment: assessment).calculate()
+                .first { $0.source == .recorded(record.id) }
             result?.isCarryover = !calendar.isDate(record.date, inSameDayAs: now)
             return result
         }
-        if let context = hero.record, let night = records.first(where: { $0.id == context.id }),
-           night.isOngoing, night.kind == .nightSleep,
-           let event = projected(night), event.isActive {
-            let endUnconfirmed = hero.mode == .morningUnconfirmed || hero.mode == .morningConfirmed
-            // A daytime wake before this night belongs to history, not its morning.
-            // A separately saved later wake never silently closes an unresolved sleep.
-            if let confirmedWake, confirmedWake.wakeTime > night.date,
-               let observed = today.first(where: { $0.source == .recorded(confirmedWake.id) }) {
-                return Self(items: [event, observed], isOvernight: true, overnightEndUnconfirmed: endUnconfirmed)
-            }
+        let ongoingNight = assessment.active.flatMap { $0.elapsed != nil ? $0.record : nil }
+        if let night = ongoingNight ?? assessment.reminderNight, night.kind == .nightSleep,
+           let event = projected(night) {
+            let endUnconfirmed = event.isEndUnconfirmed
             let predicted = hero.predictions.first {
                 $0.kind == .morningWake && $0.unavailableReason(now: now, record: night, wake: nil) == nil
             }?.end
@@ -82,14 +82,7 @@ struct TodayPlanPresentation {
             let id = "morning-wake:\(night.id.uuidString)"
             if let predicted {
                 reference = .init(id: id, source: .estimated, time: predicted)
-            } else if let routine, let wakeHour = routine.wakeHour,
-                      (0...23).contains(wakeHour), (0...59).contains(routine.wakeMinute),
-                      let morning = calendar.date(byAdding: .day, value: 1,
-                          to: calendar.startOfDay(for: night.date)),
-                      let time = calendar.date(bySettingHour: wakeHour, minute: routine.wakeMinute,
-                          second: 0, of: morning) {
-                // Anchor to this night, not "the next time after now". A missed routine
-                // wake remains an unconfirmed past reference after the grace boundary.
+            } else if let time = routine?.wake(after: night.date, calendar: calendar) {
                 reference = .init(id: id, source: .routine, time: time)
             } else {
                 reference = .init(id: id, source: .unavailable, time: nil)
@@ -111,7 +104,11 @@ struct TodayPlanPresentation {
             let right = $1.time ?? .distantFuture
             return left == right ? $0.id < $1.id : left < right
         }
-        return Self(items: events)
+        let useRoutine = assessment.anchor == nil && assessment.active == nil
+        return Self(items: events,
+                    routineWake: useRoutine ? routine?.wake(on: now, calendar: calendar) : nil,
+                    routineBedtime: useRoutine ? routine?.bedtime(on: now, calendar: calendar) : nil,
+                    currentConfirmation: assessment.active.flatMap { $0.elapsed == nil ? $0.confirmation : nil })
     }
 
     /// Unconfirmed routine references and unavailable entries never inflate progress.
@@ -133,7 +130,7 @@ struct TodayPlanPresentation {
     /// The full plan for a focused night retains its original daytime history.
     var focusedNightSleepDay: Date? {
         guard isOvernight else { return nil }
-        return items.first { $0.kind == .bedtime && $0.isActive }?.sleepDay
+        return items.first { $0.kind == .bedtime && ($0.isActive || $0.isEndUnconfirmed) }?.sleepDay
     }
     func isConfirmedConnector(after index: Int) -> Bool {
         guard items.indices.contains(index), items.indices.contains(index + 1) else { return false }
