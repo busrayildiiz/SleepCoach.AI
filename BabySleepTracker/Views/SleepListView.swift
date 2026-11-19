@@ -114,9 +114,9 @@ struct SleepListView: View {
         wakeRecords = dailyWakeRecordPersistence.load() ?? []
     }
 
-    private func saveWakeTime(_ selectedTime: Date, capture: WakeObservationCapture?) -> Bool {
+    private func saveWakeTime(_ selectedTime: Date, capture: WakeObservationCapture?) -> String? {
         #if DEBUG && targetEnvironment(simulator)
-        if HomeCardTestFixture.enabled && ProcessInfo.processInfo.environment["HOME_WAKE_SAVE_FAIL"] == "1" { return false }
+        if HomeCardTestFixture.enabled && ProcessInfo.processInfo.environment["HOME_WAKE_SAVE_FAIL"] == "1" { return "Saving did not finish. Review your wake time and try again." }
         #endif
         let result = SleepWakeTimeWorkflow(
             selectedWakeTime: selectedTime,
@@ -132,8 +132,10 @@ struct SleepListView: View {
         state.accept(result)
         wakeRecords = state.records
         if result.sleepPersistenceSucceeded { records = result.updatedSleepRecords }
-        return result.wakePersistenceSucceeded && result.evidencePublicationSucceeded &&
-            (result.closedNightRecord == nil || result.sleepPersistenceSucceeded)
+        if let recovery = result.historicalRecovery { return recovery.message }
+        if result.wakePersistenceSucceeded && result.evidencePublicationSucceeded &&
+            (result.closedNightRecord == nil || result.sleepPersistenceSucceeded) { return nil }
+        return "Saving did not finish. Review your wake time and try again."
     }
 
     // MARK: - Derived Data

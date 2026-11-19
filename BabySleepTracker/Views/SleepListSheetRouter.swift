@@ -10,7 +10,7 @@ struct SleepListSheetRouter: View {
     let onNightCompletion: (SleepRecord) -> NightSleepCompletionResult
     let onBreakSaved: (SleepRecord) -> Bool
     let onDeleteRecords: (Set<UUID>) -> Void
-    let onWakeTimeSave: (Date, WakeObservationCapture?) -> Bool
+    let onWakeTimeSave: (Date, WakeObservationCapture?) -> String?
 
     var body: some View {
         switch sheet {
@@ -82,13 +82,14 @@ struct SleepListSheetRouter: View {
 // MARK: - Wake Time Editor
 
 private struct WakeTimeEditorView: View {
-    let onSave: (Date, WakeObservationCapture?) -> Bool
+    let onSave: (Date, WakeObservationCapture?) -> String?
     @Environment(\.dismiss) private var dismiss
     @State private var draft: WakeObservationDraft
     @State private var saveFailed = false
+    @State private var saveFailureMessage: String?
     @State private var cancellationFailed = false
 
-    init(initialTime: Date, nightRecords: [SleepRecord], existing: DailyWakeRecord?, onSave: @escaping (Date, WakeObservationCapture?) -> Bool) {
+    init(initialTime: Date, nightRecords: [SleepRecord], existing: DailyWakeRecord?, onSave: @escaping (Date, WakeObservationCapture?) -> String?) {
         self.onSave   = onSave
         _draft = State(initialValue: WakeObservationDraft(initial: initialTime, existing: existing, nightRecords: nightRecords))
     }
@@ -135,7 +136,10 @@ private struct WakeTimeEditorView: View {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Save") {
                         cancellationFailed = false
-                        if draft.submit(save: onSave) { dismiss() } else { saveFailed = true }
+                        if draft.submit(save: { date, capture in
+                            saveFailureMessage = onSave(date, capture)
+                            return saveFailureMessage == nil
+                        }) { dismiss() } else { saveFailed = true }
                     }.accessibilityIdentifier("home.wake.save")
                         .fontWeight(.semibold)
                 }
@@ -144,9 +148,9 @@ private struct WakeTimeEditorView: View {
         .alert(cancellationFailed ? "Could not cancel wake time" : "Could not save wake time", isPresented: $saveFailed) {
             Button("OK", role: .cancel) { }
         } message: {
-            Text(cancellationFailed
+            Text(LocalizedStringKey(cancellationFailed
                  ? "Cancellation could not be saved. Your entry is still open; try Cancel again."
-                 : "Saving did not finish. Review your wake time and try again.")
+                 : saveFailureMessage ?? "Saving did not finish. Review your wake time and try again."))
         }
         .tint(Color.sleepPurpleDeep)
         .presentationDetents([.height(390)])

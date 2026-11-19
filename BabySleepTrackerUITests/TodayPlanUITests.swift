@@ -82,6 +82,66 @@ final class TodayPlanUITests: XCTestCase {
         capture("no-confirmed-records-unavailable", app: app)
     }
 
+    func testHistoricalWakeEditorGatesSaveAndReturnsToSavedDayAtAccessibilitySize() {
+        let app = launch("completed", large: true)
+        app.buttons["home.plan.details"].tap()
+        let today = app.navigationBars["Today"]
+        XCTAssertTrue(today.waitForExistence(timeout: 5))
+
+        func openEditor() {
+            app.buttons["history.day.add"].tap()
+            let open = app.buttons["history.wake.open"]
+            XCTAssertTrue(open.waitForExistence(timeout: 5))
+            open.tap()
+            XCTAssertTrue(app.navigationBars["Historical Morning Wake"].waitForExistence(timeout: 5))
+        }
+
+        openEditor()
+        let save = app.buttons["history.wake.save"]
+        let confirmation = app.switches["history.wake.confirmation"]
+        let datePicker = app.descendants(matching: .any).matching(identifier: "history.wake.dateTime").firstMatch
+        for _ in 0..<4 where !save.isHittable { app.swipeUp() }
+        XCTAssertTrue(save.exists)
+        XCTAssertFalse(save.isEnabled)
+        XCTAssertTrue(confirmation.exists)
+        XCTAssertTrue(datePicker.exists)
+        app.buttons["history.wake.cancel"].tap()
+        XCTAssertTrue(today.waitForExistence(timeout: 5))
+
+        openEditor()
+        let initialPicker = datePicker.debugDescription
+        func failureDetails(_ message: String) -> String {
+            """
+            \(message)
+            Date picker when reopened: \(initialPicker)
+            Date picker at failure: \(datePicker.debugDescription)
+            \(app.debugDescription)
+            """
+        }
+
+        let switchControl = confirmation.switches.firstMatch
+        for _ in 0..<4 where !switchControl.exists || !switchControl.isHittable { app.swipeUp() }
+        XCTAssertTrue(switchControl.exists && switchControl.isHittable,
+                      failureDetails("The nested confirmation switch could not be reached."))
+        XCTAssertTrue(confirmation.isEnabled && switchControl.isEnabled,
+                      failureDetails("The confirmation switch was disabled."))
+        XCTAssertEqual(confirmation.value as? String, "0", failureDetails("A reopened editor must start unconfirmed."))
+        // At AX XXXL, the labelled switch spans the row. Tap the nested control's center.
+        switchControl.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        let confirmed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "1"), object: confirmation)
+        XCTAssertEqual(XCTWaiter.wait(for: [confirmed], timeout: 5), .completed,
+                       failureDetails("The confirmation switch did not turn on."))
+
+        for _ in 0..<4 where !save.isHittable { app.swipeUp() }
+        let saveEnabled = XCTNSPredicateExpectation(predicate: NSPredicate(format: "enabled == true"), object: save)
+        XCTAssertEqual(XCTWaiter.wait(for: [saveEnabled], timeout: 5), .completed,
+                       failureDetails("Save did not enable after confirmation."))
+        XCTAssertTrue(save.isEnabled, failureDetails("Save was disabled before submission."))
+        save.tap()
+        XCTAssertTrue(app.navigationBars["Yesterday"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["history.wake.review"].exists)
+    }
+
     func testCompletedWakeAndNetNapNavigateToExistingTimeline() {
         let app = launch("completed")
         let nap = event("record:\(parentID)", app: app)
