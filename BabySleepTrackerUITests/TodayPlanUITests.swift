@@ -119,13 +119,15 @@ final class TodayPlanUITests: XCTestCase {
             """
         }
 
-        for _ in 0..<4 where !confirmation.isHittable { app.swipeUp() }
-        XCTAssertTrue(confirmation.isHittable, failureDetails("The confirmation switch could not be reached."))
-        XCTAssertTrue(confirmation.isEnabled, failureDetails("The confirmation switch was disabled."))
+        let switchControl = confirmation.switches.firstMatch
+        for _ in 0..<4 where !switchControl.exists || !switchControl.isHittable { app.swipeUp() }
+        XCTAssertTrue(switchControl.exists && switchControl.isHittable,
+                      failureDetails("The nested confirmation switch could not be reached."))
+        XCTAssertTrue(confirmation.isEnabled && switchControl.isEnabled,
+                      failureDetails("The confirmation switch was disabled."))
         XCTAssertEqual(confirmation.value as? String, "0", failureDetails("A reopened editor must start unconfirmed."))
-        // At AX XXXL, the switch accessibility frame includes the label. Tap its trailing thumb.
-        confirmation.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 0.5))
-            .withOffset(CGVector(dx: -20, dy: 0)).tap()
+        // At AX XXXL, the labelled switch spans the row. Tap the nested control's center.
+        switchControl.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         let confirmed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "1"), object: confirmation)
         XCTAssertEqual(XCTWaiter.wait(for: [confirmed], timeout: 5), .completed,
                        failureDetails("The confirmation switch did not turn on."))
