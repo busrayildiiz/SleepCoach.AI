@@ -49,42 +49,18 @@ struct TodaySleepHeroModel {
     enum Mode: String, CaseIterable {
         case ready, napActive, napCompleted, nightActive, morningConfirmed, morningUnconfirmed, likelyNext, bedtimeRoutine
     }
-    struct Routine {
-        let wakeHour: Int?
-        var wakeMinute: Int = 0
-        var bedHour: Int? = nil
-        var bedMinute: Int = 0
-        var graceMinutes: Int = 30
-
-        static func load(defaults: UserDefaults) -> Self? {
-            func component(_ key: String, maximum: Double) -> Int? {
-                guard let value = defaults.object(forKey: key) as? Double,
-                      value.isFinite, value >= 0, value <= maximum, value.rounded() == value else { return nil }
-                return Int(value)
-            }
-            let hour = component("typicalWakeHour", maximum: 23)
-            let minute = defaults.object(forKey: "typicalWakeMinute") == nil ? 0 : component("typicalWakeMinute", maximum: 59)
-            let bedHour = component("typicalBedHour", maximum: 23)
-            let bedMinute = defaults.object(forKey: "typicalBedMinute") == nil ? 0 : component("typicalBedMinute", maximum: 59)
-            // Either explicitly configured routine can stand alone; never invent a wake time.
-            let validWake = minute == nil ? nil : hour
-            let validBed = bedMinute == nil ? nil : bedHour
-            guard validWake != nil || validBed != nil else { return nil }
-            return Self(wakeHour: validWake, wakeMinute: minute ?? 0,
-                        bedHour: validBed, bedMinute: bedMinute ?? 0)
-        }
-    }
-    struct StillSleepingConfirmation {
-        let recordID: UUID
-        let date: Date
-    }
+    typealias Routine = SleepRoutine
     let mode: Mode
+    let assessment: SleepStateAssessment
+    var reviewRecord: SleepRecord? { assessment.reviewRecord }
+    var confirmedAt: Date? { assessment.active?.confirmation }
     /// Remains an original persisted observation, even when the mode is morningUnconfirmed.
     let record: SleepRecord?
     let sleepDay: Date?
     let wakeTime: Date?
     let routineWake: Date?
     let now: Date
+    let calendar: Calendar
     let napNumber: Int?
     let netMinutes: Int?
     let elapsedMinutes: Int?
@@ -109,133 +85,70 @@ struct TodaySleepHeroModel {
     }
     func prediction(_ kind: HeroPrediction.Kind) -> HeroPrediction? { predictions.first { $0.kind == kind } }
 
-    /// Precedence: explicit later wake / still-sleeping observation; confirmed active
-    /// (overnight may present a morning prompt); eligible bedtime routine; latest same-day nap completion;
-    /// confirmed morning wake; routine transition; eligible next estimate; neutral.
     static func make(records: [SleepRecord], wakeRecords: [DailyWakeRecord], now: Date,
                      calendar: Calendar, routine: Routine?, displayName: String, babyName: String,
-                     proposals: [HeroPrediction] = [], confirmation: StillSleepingConfirmation? = nil) -> Self {
-        let day = calendar.startOfDay(for: now)
-        let ordered = records.filter { $0.kind != .break && $0.date <= now }.sorted {
-            $0.date == $1.date ? $0.id.uuidString > $1.id.uuidString : $0.date > $1.date
-        }
-        let active = ordered.first { $0.isOngoing }
-        let naps = ordered.filter { record in
-            record.kind == .dayNap && !record.isOngoing && record.observedEnd.map { end in
-                end <= now && (calendar.isDate(end, inSameDayAs: day) || calendar.isDate(record.date, inSameDayAs: day))
-            } == true
-        }
-        let latestNap = naps.max { ($0.observedEnd ?? $0.date) < ($1.observedEnd ?? $1.date) }
-        let wake = wakeRecords.filter { calendar.isDate($0.day, inSameDayAs: day) &&
-            calendar.isDate($0.wakeTime, inSameDayAs: day) && $0.wakeTime <= now }.map(\.wakeTime).max()
-        let nightEnd = ordered.filter { $0.kind == .nightSleep && !$0.isOngoing }
-            .compactMap(\.observedEnd).filter { $0 <= now && calendar.isDate($0, inSameDayAs: day) }.max()
-        let observedWake = [wake, nightEnd].compactMap { $0 }.max()
-        func routineCycle(on base: Date) -> (wake: Date, transition: Date, end: Date)? {
-            guard let routine, let wakeHour = routine.wakeHour, (0...23).contains(wakeHour), (0...59).contains(routine.wakeMinute),
-                  (0..<1440).contains(routine.graceMinutes),
-                  let wake = calendar.date(bySettingHour: wakeHour, minute: routine.wakeMinute, second: 0, of: base),
-                  let transition = calendar.date(byAdding: .minute, value: routine.graceMinutes, to: wake) else { return nil }
-            var end = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: base))!
-            if let bedHour = routine.bedHour, (0...23).contains(bedHour), (0...59).contains(routine.bedMinute) {
-                end = calendar.date(bySettingHour: bedHour, minute: routine.bedMinute, second: 0, of: base)!
-            }
-            if end <= transition { end = calendar.date(byAdding: .day, value: 1, to: end)! }
-            return (wake, transition, end)
-        }
-        let yesterday = calendar.date(byAdding: .day, value: -1, to: day)!
-        let cycles = [day, yesterday].compactMap { routineCycle(on: $0) }
-        let cycle = cycles.first { now >= $0.transition && now < $0.end } ?? cycles.first
-        let usual = cycle?.wake
-        let transition = cycle?.transition
-        let morning = cycle.map { now >= $0.transition && now < $0.end } ?? false
-        // The most recent local bedtime belongs to one overnight window. Its morning
-        // boundary is the next configured wake + grace, not a rolling 24-hour comparison.
-        func bedtimeWindow() -> (bedtime: Date, start: Date)? {
-            guard let routine, let hour = routine.bedHour, (0...23).contains(hour),
-                  (0...59).contains(routine.bedMinute),
-                  let todayBed = calendar.date(bySettingHour: hour, minute: routine.bedMinute, second: 0, of: day),
-                  let bedtime = todayBed <= now ? todayBed : calendar.date(bySettingHour: hour, minute: routine.bedMinute, second: 0, of: yesterday)
-            else { return nil }
-            let bedDay = calendar.startOfDay(for: bedtime)
-            var start = bedDay
-            var end = calendar.date(byAdding: .day, value: 1, to: bedDay)!
-            if let wakeHour = routine.wakeHour, (0...23).contains(wakeHour),
-               (0...59).contains(routine.wakeMinute), (0..<1440).contains(routine.graceMinutes),
-               let nextWake = calendar.nextDate(after: bedtime,
-                   matching: DateComponents(hour: wakeHour, minute: routine.wakeMinute, second: 0),
-                   matchingPolicy: .nextTime, repeatedTimePolicy: .first),
-               let transition = calendar.date(byAdding: .minute, value: routine.graceMinutes, to: nextWake),
-               let wakeOnBedDay = calendar.date(bySettingHour: wakeHour, minute: routine.wakeMinute, second: 0, of: bedDay) {
-                end = transition
-                start = wakeOnBedDay <= bedtime ? wakeOnBedDay :
-                    calendar.date(bySettingHour: wakeHour, minute: routine.wakeMinute, second: 0,
-                                  of: calendar.date(byAdding: .day, value: -1, to: bedDay)!)!
-            }
-            // Without a configured wake, stop at midnight rather than inventing a morning boundary.
-            guard now >= bedtime, now < end else { return nil }
-            return (bedtime, start)
-        }
-        let bedtime = bedtimeWindow()
+                     proposals: [HeroPrediction] = [], confirmation: StillSleepingConfirmation? = nil,
+                     instant: ContinuousClock.Instant? = nil) -> Self {
+        let evaluation = SleepEvaluation(now: now, calendar: calendar, routine: routine,
+                                         confirmation: confirmation, instant: instant)
+        let assessment = SleepStateCalculator.assess(records: records, wakes: wakeRecords, evaluation: evaluation)
+        let bedtime = routine?.bedtimeWindow(at: now, calendar: calendar)
         let nightAlreadyRecorded = bedtime.map { window in
-            ordered.contains { record in
-                guard record.kind == .nightSleep, let end = record.observedEnd, end <= now else { return false }
+            records.contains { record in
+                guard record.kind == .nightSleep, let end = record.completedEnd(at: now) else { return false }
                 return record.date >= window.start || end >= window.bedtime
             }
         } ?? false
-        let recentConfirmation = active.map { record in
-            guard let transition else { return true }
-            if record.date >= transition || (record.createdAt >= transition && record.createdAt <= now) { return true }
-            return confirmation.map { $0.recordID == record.id && $0.date >= transition && $0.date <= now &&
-                calendar.isDate($0.date, inSameDayAs: now) } ?? false
-        } ?? false
-        let explicitSleepObservation = active.map { record in
-            var dates = [record.date]
-            if record.createdAt >= record.date && record.createdAt <= now { dates.append(record.createdAt) }
-            if let confirmation, confirmation.recordID == record.id,
-               confirmation.date >= record.date, confirmation.date <= now,
-               calendar.isDate(confirmation.date, inSameDayAs: now) { dates.append(confirmation.date) }
-            return dates.max()!
-        }
-        // A later observed wake supersedes an old open record for presentation.
-        // Use the same confirmation rule for active precedence and routine eligibility.
-        let confirmedActive = active.flatMap { record in
-            observedWake.map { $0 > (explicitSleepObservation ?? record.date) } == true ? nil : record
-        }
         let showsBedtime = bedtime.map { window in
-            confirmedActive == nil && !morning && !nightAlreadyRecorded &&
-                observedWake.map { $0 >= window.bedtime } != true
+            assessment.active == nil && !assessment.morningReminder && !nightAlreadyRecorded &&
+                assessment.latestWake.map { $0 >= window.bedtime } != true
         } ?? false
         let mode: Mode
         let context: SleepRecord?
-        if let active = confirmedActive {
-            context = active
-            mode = active.kind == .dayNap ? .napActive :
-                (morning && !recentConfirmation ? .morningUnconfirmed : .nightActive)
+        let observedWake: Date?
+        if let active = assessment.active {
+            context = active.record
+            mode = active.record.kind == .dayNap ? .napActive : .nightActive
+            observedWake = nil
+        } else if case .napEnd(let nap, _) = assessment.anchor {
+            context = nap
+            mode = .napCompleted
+            observedWake = assessment.latestWake
+        } else if case .wake(let wake) = assessment.anchor {
+            context = nil
+            mode = .morningConfirmed
+            observedWake = wake
         } else if showsBedtime {
-            context = nil; mode = .bedtimeRoutine
-        } else if let latestNap, observedWake.map({ $0 > (latestNap.observedEnd ?? latestNap.date) }) != true {
-            context = latestNap; mode = .napCompleted
-        } else if observedWake != nil {
-            context = active; mode = .morningConfirmed
-        } else if morning {
-            context = active; mode = .morningUnconfirmed
+            context = nil
+            mode = .bedtimeRoutine
+            observedWake = nil
+        } else if assessment.morningReminder {
+            context = assessment.reminderNight
+            mode = .morningUnconfirmed
+            observedWake = nil
         } else {
             context = nil
-            mode = proposals.contains { $0.kind == .nextSleep && $0.unavailableReason(now: now, record: nil, wake: nil) == nil } ? .likelyNext : .ready
+            observedWake = nil
+            mode = assessment.reviewRecord == nil && assessment.unavailableReason != .conflict &&
+                proposals.contains { $0.kind == .nextSleep && $0.unavailableReason(now: now, record: nil, wake: nil) == nil }
+                ? .likelyNext : .ready
         }
-        let valid = proposals.filter { mode != .bedtimeRoutine && $0.unavailableReason(now: now, record: context, wake: observedWake) == nil }
+        let valid = proposals.filter { mode != .bedtimeRoutine && (context?.isOngoing != true || assessment.active != nil) && $0.unavailableReason(now: now, record: context, wake: observedWake) == nil }
             .sorted { $0.generatedAt > $1.generatedAt }
         let napNumber = context.flatMap { record -> Int? in
             guard record.kind == .dayNap else { return nil }
             // Reuse the existing Home presentation's validated start-day nap sequencing.
             return HomeSleepCardPresentation.session(record: record, records: records, now: now, calendar: calendar).napNumber
         }
-        return Self(mode: mode, record: context,
+        return Self(mode: mode, assessment: assessment, record: context,
             sleepDay: context.map { calendar.startOfDay(for: $0.date) }, wakeTime: observedWake,
-            routineWake: usual, now: now, napNumber: napNumber,
-            netMinutes: context.flatMap { $0.isOngoing ? nil : $0.totalMinutes(breaks: records.filter { $0.kind == .break }, at: now) },
-            elapsedMinutes: context.flatMap { $0.isOngoing ? max(0, Int(now.timeIntervalSince($0.date) / 60)) : nil },
+            routineWake: (assessment.reminderNight ?? assessment.active?.record).flatMap {
+                $0.kind == .nightSleep ? routine?.wake(after: $0.date, calendar: calendar) : nil
+            } ?? routine?.wake(on: now, calendar: calendar), now: now, calendar: calendar, napNumber: napNumber,
+            netMinutes: context.flatMap {
+                $0.isOngoing ? nil : SleepAccounting(records: records, now: now, calendar: calendar).completedMinutes(sleepIDs: [$0.id])
+            },
+            elapsedMinutes: assessment.active?.elapsed,
             predictions: valid,
             displayName: displayName.isEmpty ? String(localized: "there") : displayName,
             babyName: babyName.isEmpty ? String(localized: "Baby") : babyName,
@@ -251,7 +164,13 @@ struct TodaySleepHeroModel {
 enum HeroUITestFixture {
     static var enabled: Bool { ProcessInfo.processInfo.environment["SLEEP_HERO_UI_TESTS"] == "1" }
     static var scenario: String { ProcessInfo.processInfo.environment["SLEEP_HERO_SCENARIO"] ?? "ready" }
+    // A relaunch can inspect the recorded wake on its own day through the normal Home projection.
+    static var historicalReviewTime: Date? {
+        guard enabled, scenario == "staleNight" else { return nil }
+        return date(from: "SLEEP_HERO_HISTORICAL_REVIEW_TIME")
+    }
     static var now: Date {
+        if let historicalReviewTime { return historicalReviewTime }
         if ProcessInfo.processInfo.environment["SLEEP_HERO_LIVE_CLOCK"] == "1" { return Date() }
         if scenario.hasPrefix("bedtime") {
             return Calendar.current.date(bySettingHour: scenario == "bedtimeBefore" ? 18 : 20,
@@ -262,6 +181,7 @@ enum HeroUITestFixture {
     }
     static let parentID = UUID(uuidString: "22222222-2222-2222-2222-222222222222")!
     static func prepare() {
+        guard ProcessInfo.processInfo.environment["SLEEP_HERO_RESET"] != "0" else { return }
         let defaults = UserDefaults.standard
         if let domain = Bundle.main.bundleIdentifier { defaults.removePersistentDomain(forName: domain) }
         defaults.set(ProcessInfo.processInfo.environment["SLEEP_HERO_DARK"] == "1" ? "dark" : "light", forKey: "appAppearance")
@@ -271,19 +191,28 @@ enum HeroUITestFixture {
         defaults.set("Baby", forKey: "babyName")
         let cal = Calendar.current
         let yesterday = cal.date(byAdding: .day, value: -1, to: now)!
-        let nightStart = cal.date(bySettingHour: 20, minute: 12, second: 0, of: yesterday)!
+        let usesLiveNight = scenario == "nightActive" && ProcessInfo.processInfo.environment["SLEEP_HERO_LIVE_CLOCK"] == "1"
+        let nightStart = usesLiveNight ? now.addingTimeInterval(-7200) :
+            cal.date(bySettingHour: 20, minute: 12, second: 0, of: yesterday)!
         var records: [SleepRecord] = []
         var wakes: [DailyWakeRecord] = []
         switch scenario {
-        case "napActive":
-            records = [SleepRecord(id: parentID, date: now.addingTimeInterval(-4320), duration: 0, isOngoing: true, createdAt: now.addingTimeInterval(-4320))]
-        case "bedtimeBefore", "bedtimeRoutine":
+        case "napActive", "napNetUnknown":
+            let start = scenario == "napNetUnknown" ? max(now.addingTimeInterval(-4320), cal.startOfDay(for: now))
+                : now.addingTimeInterval(-4320)
+            records = [SleepRecord(id: parentID, date: start, duration: 0, isOngoing: true, createdAt: start)]
+        case "bedtimeBefore":
             records = [SleepRecord(id: parentID, date: now.addingTimeInterval(-3 * 3600), duration: 60,
                                    createdAt: now.addingTimeInterval(-3 * 3600))]
         case "napCompleted":
             records = [SleepRecord(id: parentID, date: now.addingTimeInterval(-7200), duration: 96,
                                    createdAt: now.addingTimeInterval(-7200)),
                        SleepRecord(date: now.addingTimeInterval(-6600), duration: 10, kind: .break, parentNapID: parentID)]
+        case "staleNight":
+            let start = date(from: "SLEEP_HERO_HISTORICAL_NIGHT_START") ?? now.addingTimeInterval(-121 * 3600)
+            records = [SleepRecord(id: parentID, date: start, duration: 0, kind: .nightSleep, isOngoing: true, createdAt: start)]
+            defaults.set(cal.date(byAdding: .month, value: -9, to: now), forKey: "babyBirthDate")
+            defaults.set(Double(cal.component(.hour, from: now)), forKey: "typicalBedHour")
         case "nightActive", "morningUnconfirmed":
             records = [SleepRecord(id: parentID, date: nightStart, duration: 0, kind: .nightSleep, isOngoing: true, createdAt: nightStart)]
         case "morningConfirmed":
@@ -295,7 +224,14 @@ enum HeroUITestFixture {
         SleepRecordPersistence().save(records)
         DailyWakeRecordPersistence().save(wakes)
     }
-    static func model(records: [SleepRecord], wakes: [DailyWakeRecord]) -> TodaySleepHeroModel {
+
+    private static func date(from key: String) -> Date? {
+        guard let value = ProcessInfo.processInfo.environment[key], let seconds = Double(value), seconds.isFinite else { return nil }
+        return Date(timeIntervalSince1970: seconds)
+    }
+
+    static func model(records: [SleepRecord], wakes: [DailyWakeRecord],
+                      confirmation: StillSleepingConfirmation? = nil) -> TodaySleepHeroModel {
         let now = self.now
         var routine: TodaySleepHeroModel.Routine? = scenario.hasPrefix("morning") || scenario.hasPrefix("bedtime") ? .init(wakeHour: 7, bedHour: 19) : nil
         if scenario.hasPrefix("bedtime"), ProcessInfo.processInfo.environment["SLEEP_HERO_LIVE_CLOCK"] == "1" {
@@ -332,7 +268,8 @@ enum HeroUITestFixture {
             proposals.append(prediction(kind: .nextSleep, now: now, start: start, end: start.addingTimeInterval(4500)))
         }
         return TodaySleepHeroModel.make(records: records, wakeRecords: wakes, now: now, calendar: .current,
-            routine: routine, displayName: "Alex", babyName: "Baby", proposals: proposals)
+            routine: routine, displayName: "Alex", babyName: "Baby", proposals: proposals,
+            confirmation: confirmation, instant: ContinuousClock.now)
     }
     static func prediction(kind: HeroPrediction.Kind, now: Date, start: Date?, end: Date?,
                            record: SleepRecord? = nil, sleepKind: SleepKind = .dayNap) -> HeroPrediction {

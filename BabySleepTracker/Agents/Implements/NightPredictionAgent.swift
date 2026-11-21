@@ -10,15 +10,22 @@ import Foundation
 // MARK: - Night Prediction
 
 struct NightPredictionAgent {
-    let optimalBedtimeStart:      Date
-    let optimalBedtimeEnd:        Date
-    let overtiredRiskTime:        Date
+    let optimalBedtimeStart:      Date?
+    let optimalBedtimeEnd:        Date?
+    let overtiredRiskTime:        Date?
     let expectedNightSleepMinutes: Int
     let lastNapCutoffTime:        Date
-    let daytimeSleepStatus:       DailySleepStatus
-    let confidence:               Int
+    let daytimeSleepStatus:       DailySleepStatus?
+    let confidence:               Int?
     let reasoning:                [String]
     var daytimeSubtotalIsReliable: Bool = true
+    var source: SleepPlanningSource = .recordedEstimate
+    var unavailableReason: SleepPlanningUnavailable? = nil
+    var generalBedtimeHours: ClosedRange<Int>? = nil
+
+    var recommendation: SleepPlanningValue<Date> {
+        optimalBedtimeStart.map { .available($0, source: source, limitation: unavailableReason) } ?? .unavailable(unavailableReason ?? .missing)
+    }
 }
 
 // MARK: - Protocol
@@ -30,8 +37,17 @@ protocol NightPredictionAgentProtocol {
         wakeRecords:      [DailyWakeRecord],
         ageMonths:        Int,
         trackedDays:      Int,
-        now:              Date
+        now:              Date,
+        planning:         SleepPredictionContext?
     ) -> NightPredictionAgent
+}
+
+extension NightPredictionAgentProtocol {
+    func predictBedtime(pattern: BabyPattern?, todayRecords: [SleepRecord], wakeRecords: [DailyWakeRecord],
+                        ageMonths: Int, trackedDays: Int, now: Date) -> NightPredictionAgent {
+        predictBedtime(pattern: pattern, todayRecords: todayRecords, wakeRecords: wakeRecords,
+                       ageMonths: ageMonths, trackedDays: trackedDays, now: now, planning: nil)
+    }
 }
 
 // MARK: - DefaultNightPredictionAgent
@@ -60,205 +76,51 @@ final class DefaultNightPredictionAgent: NightPredictionAgentProtocol {
         wakeRecords:  [DailyWakeRecord],
         ageMonths:    Int,
         trackedDays:  Int,
-        now:          Date
+        now:          Date,
+        planning:     SleepPredictionContext?
     ) -> NightPredictionAgent {
-
+        let context = planning ?? SleepPredictionContext(records: todayRecords, wakes: wakeRecords,
+            evaluation: .init(now: now, calendar: calendar, routine: .load(defaults: .standard)))
+        let evaluation = context.evaluation
         let profile = profileProvider.profile(forAgeMonths: ageMonths)
-        let dayNaps = todayRecords
-            .filter { $0.kind == .dayNap }
-            .sorted { $0.date < $1.date }
+        let totalDaytime = context.accounting.completedSubtotal(on: evaluation.now, kind: .dayNap)
+        let comparable = totalDaytime.comparableMinutes
+        let sleepStatus = comparable.map { overtiredCalculator.daytimeSleepStatus(totalMinutes: $0, ageMonths: ageMonths) }
+        let cutoff = overtiredCalculator.lastNapCutoffTime(ageMonths: ageMonths, on: evaluation.now, using: evaluation.calendar)
+        let expectedNight = (profile.nightSleepRange.lowerBound + profile.nightSleepRange.upperBound) / 2
 
-        // Use the real last-nap-end whenever at least one nap was actually
-        // completed today. Waiting for the profile's full expected nap
-        // count (e.g. 2 for a 9-11mo baby) throws away real, known data on
-        // transition days or short-nap days and falls back to a generic
-        // typical-bedtime guess instead — which is strictly worse than
-        // using what we actually observed.
-        let completedNapCount = dayNaps.filter { $0.observedEnd.map { $0 <= now } == true }.count
-
-        let lastNapEnd: Date?
-        if completedNapCount >= 1 {
-            lastNapEnd = dayNaps.last(where: { $0.observedEnd.map { $0 <= now } == true }).map { nap in
-                nap.observedEnd ?? nap.date
-            }
-        } else {
-            lastNapEnd = nil
+        if context.assessment.active != nil {
+            return NightPredictionAgent(optimalBedtimeStart: nil, optimalBedtimeEnd: nil, overtiredRiskTime: nil,
+                expectedNightSleepMinutes: expectedNight, lastNapCutoffTime: cutoff, daytimeSleepStatus: nil, confidence: nil,
+                reasoning: ["Baby is currently sleeping. Check the plan after an observed end."],
+                daytimeSubtotalIsReliable: !totalDaytime.isIncomplete, source: .currentActivity, unavailableReason: .unresolved)
         }
 
-        // Toplam gündüz uykusu
-        let totalDaytime = SleepAccounting.netMinutes(records: todayRecords, now: now, kind: .dayNap)
-
-        // Bedtime window hesabı
-        let bedtimeWindow: BedtimeWindow
-
-        if let lastNapEnd {
-            // Yeterli nap var → son nap bitişinden evening WW ekle
-            bedtimeWindow = overtiredCalculator.bedtimeWindow(
-                lastNapEndTime:           lastNapEnd,
-                totalDaytimeSleepMinutes: totalDaytime,
-                ageMonths:                ageMonths,
-                now:                      now
-            )
-        } else {
-            // Henüz yeterli nap tamamlanmadı → sabit bedtime göster
-            bedtimeWindow = fixedBedtimeWindow(profile: profile, now: now)
+        if case .napEnd(_, let end) = context.assessment.anchor {
+            let window = overtiredCalculator.bedtimeWindow(lastNapEndTime: end,
+                totalDaytimeSleepMinutes: comparable, ageMonths: ageMonths, now: evaluation.now, using: evaluation.calendar)
+            let formatter = DateFormatter()
+            formatter.calendar = evaluation.calendar
+            formatter.timeZone = evaluation.calendar.timeZone
+            formatter.timeStyle = .short
+            return NightPredictionAgent(optimalBedtimeStart: window.earliest, optimalBedtimeEnd: window.latest,
+                overtiredRiskTime: comparable == nil ? nil : window.overtiredRisk, expectedNightSleepMinutes: expectedNight,
+                lastNapCutoffTime: cutoff, daytimeSleepStatus: sleepStatus, confidence: nil,
+                reasoning: ["Last recorded nap ended at \(formatter.string(from: end)).",
+                            "Estimated bedtime uses the age-based evening wake window."] +
+                    (totalDaytime.unavailableReason.map { [$0.rawValue] } ?? []),
+                daytimeSubtotalIsReliable: !totalDaytime.isIncomplete, unavailableReason: totalDaytime.unavailableReason)
         }
 
-        let cutoff = overtiredCalculator.lastNapCutoffTime(ageMonths: ageMonths, on: now)
-
-        let expectedNight = expectedNightSleep(profile: profile, pattern: pattern)
-
-        let sleepStatus = overtiredCalculator.daytimeSleepStatus(
-            totalMinutes: totalDaytime,
-            ageMonths:    ageMonths
-        )
-
-        let confidence = calculateConfidence(
-            trackedDays:   trackedDays,
-            hasLastNap:    lastNapEnd != nil,
-            hasWakeRecord: todayWakeRecord(wakeRecords: wakeRecords, now: now) != nil,
-            hasPattern:    pattern != nil
-        )
-
-        let reasoning = buildReasoning(
-            profile:      profile,
-            lastNapEnd:   lastNapEnd,
-            totalDaytime: totalDaytime,
-            bedtime:      bedtimeWindow.ideal,
-            ageMonths:    ageMonths,
-            sleepStatus:  sleepStatus
-        )
-
-        return NightPredictionAgent(
-            optimalBedtimeStart:       bedtimeWindow.earliest,
-            optimalBedtimeEnd:         bedtimeWindow.latest,
-            overtiredRiskTime:         bedtimeWindow.overtiredRisk,
-            expectedNightSleepMinutes: expectedNight,
-            lastNapCutoffTime:         cutoff,
-            daytimeSleepStatus:        sleepStatus,
-            confidence:                confidence,
-            reasoning:                 reasoning,
-            daytimeSubtotalIsReliable: !SleepAccounting(records: todayRecords, now: now, calendar: calendar).conflicts(affecting: dayNaps).classification
-        )
-    }
-
-    // MARK: - Fixed Bedtime Window
-    // Yeterli nap tamamlanmadan kullanılır.
-    // Wake time'a değil, kullanıcının kaydettiği
-    // typicalBedtime'a veya profil saatine dayanır.
-
-    private func fixedBedtimeWindow(
-        profile: AgeBasedSleepProfile,
-        now:     Date
-    ) -> BedtimeWindow {
-
-        let today = calendar.startOfDay(for: now)
-
-        let idealBedtime: Date
-
-        let hasSavedBedtime = UserDefaults.standard.object(forKey: "typicalBedHour") != nil
-
-        if hasSavedBedtime {
-            let bedHour   = UserDefaults.standard.double(forKey: "typicalBedHour")
-            let bedMinute = UserDefaults.standard.double(forKey: "typicalBedMinute")
-            idealBedtime  = calendar.date(
-                bySettingHour: Int(bedHour),
-                minute:        Int(bedMinute),
-                second:        0,
-                of:            today
-            ) ?? today
-        } else {
-            // Profildeki bedtime range'in ortasını kullan
-            let midHour  = (profile.bedtimeHourRange.lowerBound + profile.bedtimeHourRange.upperBound) / 2
-            idealBedtime = calendar.date(
-                bySettingHour: midHour,
-                minute:        0,
-                second:        0,
-                of:            today
-            ) ?? today
-        }
-
-        return BedtimeWindow(
-            earliest:      idealBedtime.addingMinutes(-30),
-            ideal:         idealBedtime,
-            latest:        idealBedtime.addingMinutes(30),
-            overtiredRisk: idealBedtime.addingMinutes(50),
-            risk:          .healthy,
-            reasoning:     hasSavedBedtime
-                ? "Naps still in progress — showing your saved typical bedtime."
-                : "Naps still in progress — showing age-based typical bedtime."
-        )
-    }
-
-    // MARK: - Expected Night Sleep
-
-    private func expectedNightSleep(
-        profile: AgeBasedSleepProfile,
-        pattern: BabyPattern?
-    ) -> Int {
-        if let avg = pattern?.averageNightSleepMinutes { return avg }
-        return (profile.nightSleepRange.lowerBound + profile.nightSleepRange.upperBound) / 2
-    }
-
-    // MARK: - Confidence
-
-    private func calculateConfidence(
-        trackedDays:   Int,
-        hasLastNap:    Bool,
-        hasWakeRecord: Bool,
-        hasPattern:    Bool
-    ) -> Int {
-        var score = 40 + min(trackedDays, 14) * 2
-        if hasLastNap    { score += 10 }
-        if hasWakeRecord { score += 6  }
-        if hasPattern    { score += 5  }
-        return min(score, 94)
-    }
-
-    // MARK: - Reasoning
-
-    private func buildReasoning(
-        profile:      AgeBasedSleepProfile,
-        lastNapEnd:   Date?,
-        totalDaytime: Int,
-        bedtime:      Date,
-        ageMonths:    Int,
-        sleepStatus:  DailySleepStatus
-    ) -> [String] {
-
-        let fmt        = DateFormatter()
-        fmt.locale     = Locale(identifier: "en_US_POSIX")
-        fmt.dateFormat = "h:mm a"
-
-        var parts = [String]()
-
-        if let napEnd = lastNapEnd {
-            parts.append("Last nap ended at \(fmt.string(from: napEnd)).")
-            let ewwCenter = (profile.eveningWakeWindow.lowerBound + profile.eveningWakeWindow.upperBound) / 2
-            parts.append("Evening wake window for \(ageMonths)-month-old is ~\(ewwCenter) min.")
-        } else {
-            parts.append("Not enough naps completed yet — showing estimated bedtime.")
-        }
-
-        switch sleepStatus {
-        case .below(let deficit):
-            parts.append("Daytime sleep is \(TimeFormat.minutes(deficit)) short — bedtime moved earlier.")
-        case .above(let excess):
-            parts.append("Daytime sleep is \(TimeFormat.minutes(excess)) over — bedtime may be delayed.")
-        case .onTrack:
-            parts.append("Daytime sleep is on target.")
-        }
-
-        parts.append("Recommended bedtime: \(fmt.string(from: bedtime)).")
-        return parts
-    }
-
-    // MARK: - Helper
-
-    private func todayWakeRecord(
-        wakeRecords: [DailyWakeRecord],
-        now:         Date
-    ) -> DailyWakeRecord? {
-        wakeRecords.first { calendar.isDate($0.day, inSameDayAs: now) }
+        let routine = evaluation.routine?.bedtime(on: evaluation.now, calendar: evaluation.calendar)
+        let reason = context.assessment.anchor != nil ? (totalDaytime.unavailableReason ?? .missing) : context.assessment.unavailableReason
+        return NightPredictionAgent(optimalBedtimeStart: routine, optimalBedtimeEnd: nil,
+            overtiredRiskTime: nil, expectedNightSleepMinutes: expectedNight, lastNapCutoffTime: cutoff,
+            daytimeSleepStatus: sleepStatus, confidence: nil,
+            reasoning: [routine == nil ? "General age-based bedtime guidance is available."
+                                      : "Routine-based guidance from the saved usual bedtime.", reason.rawValue],
+            daytimeSubtotalIsReliable: !totalDaytime.isIncomplete,
+            source: routine == nil ? .ageGuidance : .routine, unavailableReason: reason,
+            generalBedtimeHours: routine == nil ? profile.bedtimeHourRange : nil)
     }
 }

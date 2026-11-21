@@ -2,7 +2,8 @@ import XCTest
 
 @MainActor
 final class TodaySleepHeroUITests: XCTestCase {
-    private func launch(_ scenario: String, live: Bool = false, large: Bool = false, dark: Bool = false) -> XCUIApplication {
+    private func launch(_ scenario: String, live: Bool = false, large: Bool = false, dark: Bool = false,
+                        xxl: Bool = false, historicalNightStart: Date? = nil) -> XCUIApplication {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchEnvironment["RECORDING_UI_TESTS"] = "1" // Existing offline LLM agent.
@@ -10,7 +11,11 @@ final class TodaySleepHeroUITests: XCTestCase {
         app.launchEnvironment["SLEEP_HERO_SCENARIO"] = scenario
         if live { app.launchEnvironment["SLEEP_HERO_LIVE_CLOCK"] = "1" }
         if dark { app.launchEnvironment["SLEEP_HERO_DARK"] = "1" }
+        if xxl { app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXL"] }
         if large { app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"] }
+        if let historicalNightStart {
+            app.launchEnvironment["SLEEP_HERO_HISTORICAL_NIGHT_START"] = String(historicalNightStart.timeIntervalSince1970)
+        }
         app.launch()
         XCTAssertTrue(app.staticTexts["TEST FIXTURE — NOT A PREDICTION"].waitForExistence(timeout: 10))
         return app
@@ -156,9 +161,10 @@ final class TodaySleepHeroUITests: XCTestCase {
         reveal(confirm, app: app)
         capture("morning-large-type", app: app)
         confirm.tap()
-        XCTAssertTrue(app.navigationBars["Today's Wake-up"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars["Morning Wake"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["home.wake.date"].exists)
         app.buttons["home.wake.cancel"].tap()
-        dismissed(app.navigationBars["Today's Wake-up"])
+        dismissed(app.navigationBars["Morning Wake"])
         XCTAssertTrue(app.buttons["hero.confirmWake"].exists)
         let nap = app.buttons["hero.addNap"]
         reveal(nap, app: app)
@@ -301,5 +307,241 @@ extension TodaySleepHeroUITests {
             format: "identifier BEGINSWITH %@ AND label CONTAINS[c] %@", "home.plan.event.record:", "wake")).firstMatch
         XCTAssertFalse(recordedWake.exists)
         capture("night-still-sleeping-no-wake-large", app: app)
+    }
+}
+
+extension TodaySleepHeroUITests {
+    func testDayDetailShowsUnknownNetForAnOngoingNapAtLargeTextSize() {
+        let app = launch("napNetUnknown", live: true, large: true)
+        let today = app.buttons["sleep.todayRecords"]
+        reveal(today, app: app)
+        today.tap()
+        let suffix = "22222222-2222-2222-2222-222222222222"
+        let unknown = app.staticTexts["sleep.netSleepUnknown." + suffix]
+        XCTAssertTrue(unknown.waitForExistence(timeout: 5))
+        XCTAssertEqual(unknown.label, "Net sleep unknown")
+        XCTAssertFalse(app.staticTexts["sleep.netSleep." + suffix].exists)
+        capture("ongoing-nap-unknown-net-xxxl", app: app)
+    }
+
+    func testHistoricalPickerCancelPreservesConfirmationAndAcceptedRevertClearsIt() throws {
+        let app = launch("staleNight", live: true)
+        let review = app.buttons["hero.reviewEnd"]
+        reveal(review, app: app)
+        review.tap()
+        let confirmation = app.buttons["recording.end.confirm"]
+        let end = app.buttons["recording.end.edit"]
+        let save = app.buttons["recording.save"]
+        XCTAssertTrue(confirmation.waitForExistence(timeout: 5))
+        XCTAssertFalse(save.isEnabled)
+        reveal(confirmation, app: app)
+        confirmation.tap()
+        XCTAssertTrue(save.isEnabled, "The unchanged endpoint can be explicitly confirmed.")
+
+        reveal(end, app: app)
+        end.tap()
+        let picker = app.datePickers["recording.end.time"]
+        XCTAssertTrue(picker.waitForExistence(timeout: 5))
+        let minute = picker.pickerWheels.element(boundBy: 1)
+        let original = try XCTUnwrap(minute.value as? String)
+        let other = original.contains("15") ? "45" : "15"
+        minute.adjust(toPickerWheelValue: other)
+        app.buttons["recording.time.cancel"].tap()
+        dismissed(app.navigationBars["End time"])
+        XCTAssertTrue(save.isEnabled)
+
+        reveal(end, app: app)
+        end.tap()
+        XCTAssertTrue(picker.waitForExistence(timeout: 5))
+        XCTAssertEqual(minute.value as? String, original)
+        minute.adjust(toPickerWheelValue: other)
+        minute.adjust(toPickerWheelValue: original)
+        app.buttons["recording.time.done"].tap()
+        dismissed(app.navigationBars["End time"])
+        XCTAssertFalse(save.isEnabled)
+        XCTAssertTrue(confirmation.isEnabled)
+    }
+
+    func testHistoricalCompletionPersistsNightAndWakeAfterSelectingDateThenTime() throws {
+        try completeHistoricalNight(timeFirst: false)
+    }
+
+    func testHistoricalCompletionPersistsNightAndWakeAfterSelectingTimeThenDateAtAccessibilitySize() throws {
+        try completeHistoricalNight(timeFirst: true)
+    }
+
+    private func completeHistoricalNight(timeFirst: Bool) throws {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        let wakeDay = try XCTUnwrap(calendar.date(byAdding: .day, value: -1, to: today))
+        let startDay = try XCTUnwrap(calendar.date(byAdding: .day, value: -1, to: wakeDay))
+        let start = try XCTUnwrap(calendar.date(bySettingHour: 20, minute: 12, second: 0, of: startDay))
+        let wakeTime = try XCTUnwrap(calendar.date(bySettingHour: 7, minute: 21, second: 0, of: wakeDay))
+        let reviewTime = try XCTUnwrap(calendar.date(bySettingHour: 12, minute: 0, second: 0, of: wakeDay))
+        let app = launch("staleNight", live: true, xxl: timeFirst, historicalNightStart: start)
+        let review = app.buttons["hero.reviewEnd"]
+        reveal(review, app: app)
+        review.tap()
+
+        let editor = app.navigationBars["Edit Night Sleep"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["recording.start.edit"].exists)
+        XCTAssertTrue(app.staticTexts[recordingTimestamp(start, calendar: calendar)].exists)
+        let save = app.buttons["recording.save"]
+        XCTAssertFalse(save.isEnabled)
+        let end = app.buttons["recording.end.edit"]
+        reveal(end, app: app)
+        end.tap()
+
+        let datePicker = app.datePickers["recording.end.date"]
+        XCTAssertTrue(datePicker.waitForExistence(timeout: 5))
+        if timeFirst { selectMorningTime(in: app) }
+        selectHistoricalDate(wakeDay, from: today, calendar: calendar, in: app)
+        if !timeFirst { selectMorningTime(in: app) }
+        let selection = app.staticTexts["recording.end.selection"]
+        let expected = recordingTimestamp(wakeTime, calendar: calendar)
+        XCTAssertEqual(selection.label, expected)
+        app.buttons["recording.time.done"].tap()
+        dismissed(app.navigationBars["End time"])
+        XCTAssertEqual(end.value as? String, expected)
+        XCTAssertFalse(save.isEnabled)
+
+        let confirmation = app.buttons["recording.end.confirm"]
+        reveal(confirmation, app: app)
+        confirmation.tap()
+        XCTAssertEqual(confirmation.label, "Observed end confirmed")
+        reveal(save, app: app)
+        XCTAssertTrue(save.isEnabled)
+        save.tap()
+        dismissed(editor)
+        dismissed(review)
+
+        app.terminate()
+        app.launchEnvironment["SLEEP_HERO_RESET"] = "0"
+        app.launchEnvironment["SLEEP_HERO_HISTORICAL_REVIEW_TIME"] = String(reviewTime.timeIntervalSince1970)
+        app.launch()
+        XCTAssertTrue(app.staticTexts["TEST FIXTURE — NOT A PREDICTION"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["hero.reviewEnd"].exists)
+        XCTAssertFalse(app.buttons["hero.endSleep"].exists)
+
+        let wakes = app.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label CONTAINS[c] %@", "home.plan.event.record:", "Wake up"))
+        let wake = wakes.firstMatch
+        revealPlanObservation(wake, app: app)
+        XCTAssertEqual(wakes.count, 1)
+        XCTAssertTrue(wake.label.contains(wakeTime.formatted(.dateTime.hour().minute())))
+        XCTAssertTrue((wake.value as? String)?.contains(wakeDay.formatted(date: .abbreviated, time: .omitted)) == true)
+
+        let day = app.buttons["sleep.dayRecords.0"]
+        reveal(day, app: app)
+        day.tap()
+        XCTAssertTrue(app.navigationBars[startDay.formatted(.dateTime.day().month(.abbreviated))].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Night Sleep"].exists)
+        XCTAssertTrue(app.staticTexts["8:12 PM – 7:21 AM"].exists)
+        XCTAssertFalse(app.staticTexts["End unconfirmed"].exists)
+        capture(timeFirst ? "historical-time-first-persisted" : "historical-date-first-persisted", app: app)
+    }
+
+    private func selectMorningTime(in app: XCUIApplication) {
+        let wheels = app.datePickers["recording.end.time"].pickerWheels
+        let hours = wheels.element(boundBy: 0)
+        reveal(hours, app: app)
+        hours.adjust(toPickerWheelValue: "7")
+        wheels.element(boundBy: 1).adjust(toPickerWheelValue: "21")
+        if wheels.count == 3 { wheels.element(boundBy: 2).adjust(toPickerWheelValue: "AM") }
+    }
+
+    private func selectHistoricalDate(_ date: Date, from initialDay: Date, calendar: Calendar, in app: XCUIApplication) {
+        let datePicker = app.datePickers["recording.end.date"]
+        reveal(datePicker, app: app)
+        let control = datePicker.buttons.firstMatch
+        if control.exists && control.isHittable {
+            control.tap()
+        } else {
+            datePicker.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        }
+        if !calendar.isDate(date, equalTo: initialDay, toGranularity: .month) {
+            let previousMonth = app.buttons.matching(NSPredicate(
+                format: "label =[c] %@ OR identifier =[c] %@", "Previous month", "Previous month")).firstMatch
+            XCTAssertTrue(previousMonth.waitForExistence(timeout: 5))
+            previousMonth.tap()
+        }
+
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        formatter.setLocalizedDateFormatFromTemplate("MMMMd")
+        let day = String(calendar.component(.day, from: date))
+        let matcher = NSPredicate(format: "label == %@ OR label CONTAINS[c] %@", day, formatter.string(from: date))
+        let button = app.buttons.matching(matcher).firstMatch
+        if button.waitForExistence(timeout: 5), button.isHittable {
+            button.tap()
+        } else {
+            let cell = app.cells.matching(matcher).firstMatch
+            XCTAssertTrue(cell.exists && cell.isHittable, "Cannot reach the day in the native calendar. \(app.debugDescription)")
+            cell.tap()
+        }
+        if !app.datePickers["recording.end.time"].isHittable {
+            app.navigationBars["End time"].staticTexts["End time"].tap()
+        }
+    }
+
+    private func recordingTimestamp(_ date: Date, calendar: Calendar) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        let zone = calendar.timeZone.abbreviation(for: date) ?? calendar.timeZone.identifier
+        return "\(formatter.string(from: date)) \(zone)"
+    }
+
+    func testStaleNightCanBeReviewedLaterOrConfirmedWithoutAnElapsedTimer() {
+        let app = launch("staleNight", live: true, xxl: true)
+        let review = app.buttons["hero.reviewEnd"]
+        XCTAssertTrue(review.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["hero.endSleep"].exists)
+        XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "home.plan.overnight.elapsed").firstMatch.exists)
+        reveal(review, app: app)
+        review.tap()
+
+        let editor = app.navigationBars["Edit Night Sleep"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["recording.start.edit"].exists)
+        XCTAssertFalse(app.buttons["recording.save"].isEnabled)
+        let deferReview = app.buttons["recording.cancel"]
+        XCTAssertEqual(deferReview.label, "Review later")
+        deferReview.tap()
+        dismissed(editor)
+        XCTAssertTrue(review.exists)
+
+        reveal(review, app: app)
+        review.tap()
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        let ongoing = app.switches["recording.ongoing"]
+        reveal(ongoing, app: app)
+        ongoing.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 0.5))
+            .withOffset(CGVector(dx: -20, dy: 0)).tap()
+        let selected = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "1"), object: ongoing)
+        XCTAssertEqual(XCTWaiter.wait(for: [selected], timeout: 5), .completed)
+        let save = app.buttons["recording.save"]
+        reveal(save, app: app)
+        XCTAssertTrue(save.isEnabled)
+        save.tap()
+        dismissed(editor)
+
+        let summary = app.descendants(matching: .any).matching(identifier: "home.sleep.summary").firstMatch
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label CONTAINS %@", "Still sleeping confirmed"), object: summary)], timeout: 5), .completed)
+        XCTAssertFalse(summary.label.contains("elapsed"))
+        XCTAssertTrue(app.buttons["hero.endSleep"].exists)
+        XCTAssertTrue(app.buttons["home.wake.add"].exists)
+        capture("stale-night-still-sleeping-xxl", app: app)
+        app.buttons["AI Coach"].tap()
+        let current = app.staticTexts["coach.currentSleep"]
+        XCTAssertTrue(current.waitForExistence(timeout: 5))
+        XCTAssertEqual(current.label, "Sleeping tonight")
+        XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "coach.sleepPreparation").firstMatch.exists)
+        XCTAssertFalse(app.staticTexts["Time's up"].exists)
     }
 }

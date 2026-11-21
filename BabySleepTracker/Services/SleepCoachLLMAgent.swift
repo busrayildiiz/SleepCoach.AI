@@ -89,40 +89,37 @@ final class DefaultSleepCoachLLMAgent: SleepCoachLLMAgentProtocol {
 
     // MARK: - Prompt Builder
 
-    private func buildPrompt(
+    func buildPrompt(
         snapshot: OrchestratedSnapshot,
         records:  [SleepRecord],
         trigger:  LLMTrigger
     ) -> String {
 
-        let formatter        = DateFormatter()
-        formatter.locale     = Locale(identifier: "en_US_POSIX")
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = snapshot.evaluationCalendar.timeZone
         formatter.dateFormat = "h:mm a"
+        func time(_ date: Date?) -> String { date.map(formatter.string) ?? "Unavailable" }
 
-        let breaks  = records.filter { $0.kind == .break }
-        let dayNaps = records.filter { $0.kind == .dayNap }
-
-        let last7Summary = buildLast7DaysSummary(
-            dayNaps: dayNaps,
-            breaks:  breaks
-        )
-
+        let last7Summary = buildLast7DaysSummary(records: records, now: snapshot.generatedAt,
+                                                calendar: snapshot.evaluationCalendar)
+        let nap = snapshot.daytime
+        let night = snapshot.night
+        let showNap = !snapshot.hasCurrentSleep && snapshot.nextSleepKind == .nap
+        let nextSleep = snapshot.hasCurrentSleep ? "Wait for an observed end" : (showNap ? "Nap" : "Bedtime")
+        let napTiming = nap.recommendation.value.map { "\(time($0)) (\(nap.source.rawValue))" }
+            ?? nap.generalWakeWindow.map { "Age-based wake window \($0.lowerBound)–\($0.upperBound) min" } ?? "Unavailable"
+        let bedtimeTiming = night.recommendation.value.map { "\(time($0)) (\(night.source.rawValue))" }
+            ?? night.generalBedtimeHours.map { "Age-based bedtime range \($0.lowerBound):00–\($0.upperBound):00 local" } ?? "Unavailable"
+        let napWindow = nap.windowStart.flatMap { start in nap.windowEnd.map { "\(time(start)) – \(time($0))" } } ?? "Unavailable"
+        let bedtimeWindow = night.optimalBedtimeEnd.map { "\(bedtimeTiming) – \(time($0))" } ?? bedtimeTiming
         let triggerContext = describeTrigger(trigger)
 
-        let phaseDescription: String
-        switch snapshot.phase {
-        case .tooYoung:           phaseDescription = "Baby is under 4 months, no pattern expected."
-        case .baseline:           phaseDescription = "Day 0 — using age baseline only."
-        case .learning(let day):  phaseDescription = "Learning phase, day \(day) of 14."
-        case .personalized:       phaseDescription = "Personalized mode — 14+ days of data."
-        }
-
-        let transitionNote: String
-        switch snapshot.transition.signalStrength {
-        case .none:     transitionNote = "No transition signals."
-        case .weak:     transitionNote = "Weak transition signals — monitor."
-        case .moderate: transitionNote = "Moderate transition signals — \(snapshot.transition.recommendation)"
-        case .strong:   transitionNote = "Strong transition signals — \(snapshot.transition.recommendation)"
+        let activeSleep: String
+        switch snapshot.currentSleepKind {
+        case .nightSleep: activeSleep = "Night sleep is current. Wait for an observed end before planning another sleep."
+        case .dayNap: activeSleep = "A nap is current. Any projected timing is an estimate until an end is recorded."
+        case .break, nil: activeSleep = "No current sleep is confirmed."
         }
 
         return """
@@ -131,25 +128,30 @@ final class DefaultSleepCoachLLMAgent: SleepCoachLLMAgentProtocol {
         BABY PROFILE:
         - Name: \(snapshot.babyName)
         - Age: \(snapshot.ageMonths) months
-        - Phase: \(phaseDescription)
-        - Tracked days: \(snapshot.readiness.daysUntilPersonalized == 0 ? "14+" : String(14 - (snapshot.readiness.daysUntilPersonalized)))
+        - Current sleep state: \(activeSleep)
 
         RULE ENGINE OUTPUT:
-        - Next nap prediction: \(formatter.string(from: snapshot.daytime.nextNapTime))
-        - Prediction window: \(formatter.string(from: snapshot.daytime.windowStart)) – \(formatter.string(from: snapshot.daytime.windowEnd))
-        - Confidence: \(snapshot.daytime.confidence)%
-        - Wake window used: \(snapshot.daytime.wakeWindowUsed) minutes
-        - Bedtime window: \(formatter.string(from: snapshot.night.optimalBedtimeStart)) – \(formatter.string(from: snapshot.night.optimalBedtimeEnd))
-        - Overtired risk after: \(formatter.string(from: snapshot.night.overtiredRiskTime))
-        - Today's total sleep: \(snapshot.todayTotalMinutes) minutes
-        - Daily sleep status: \(snapshot.sleepStatus.label)
-        - Nap transition: \(transitionNote)
+        - Next planned sleep: \(nextSleep)
+        - Next nap guidance: \(showNap ? napTiming : "Unavailable")
+        - Nap window: \(showNap ? napWindow : "Unavailable")
+        - Nap planning source: \(nap.source.rawValue)
+        - Nap planning limitation: \(nap.recommendation.limitation?.rawValue ?? "None reported")
+        - Prediction confidence: Unavailable
+        - Bedtime: \(bedtimeWindow)
+        - Bedtime planning source: \(night.source.rawValue)
+        - Bedtime planning limitation: \(night.recommendation.limitation?.rawValue ?? "None reported")
+        - Overtired risk after: \(time(night.overtiredRiskTime))
+        - Sleep Day completed-recorded subtotal: \(snapshot.recordedSleepDay.display)
+        - Rolling 24h completed-recorded subtotal: \(snapshot.recordedRolling24h.display)
+        - Daily sleep status: \(snapshot.recordedRolling24h.isIncomplete ? "Unavailable" : snapshot.sleepStatus?.label ?? "Unavailable")
+        Use general guidance. Distinguish observations, estimates, and saved routine references. Withhold daily deficit, surplus, bedtime compensation, personalized claims, and confidence when the evidence is incomplete. While current sleep is reported, avoid wake deadlines and bedtime preparation instructions.
+        - Nap transition: \(snapshot.transition.recommendation)
 
         DATA QUALITY REPORT:
         \(buildDataQualitySection(snapshot.dataQualityReport))
 
-        PATTERN ANALYSIS:
-        \(buildPatternSection(snapshot.pattern, babyName: snapshot.babyName))
+        RECORDED SAMPLES:
+        \(buildPatternSection(snapshot.pattern))
 
         LAST 7 DAYS SUMMARY:
         \(last7Summary)
@@ -158,10 +160,10 @@ final class DefaultSleepCoachLLMAgent: SleepCoachLLMAgentProtocol {
 
         Respond ONLY with this JSON, no other text, no markdown:
         {
-          "pattern_insight": "1-2 sentences about the baby's sleep pattern trend",
+          "pattern_insight": "1-2 sentences describing reliable recorded samples or the limits of the available observations",
           "coach_message": "2-3 warm, supportive sentences for the parent with a specific actionable tip",
           "alert": null or "1 sentence if there is something urgent",
-          "confidence_note": "1 sentence about prediction reliability, based on the summarized data quality and without mentioning raw scores"
+          "confidence_note": "1 sentence about the limits of the evidence and the assumptions of the guidance"
         }
         """
     }
@@ -170,66 +172,21 @@ final class DefaultSleepCoachLLMAgent: SleepCoachLLMAgentProtocol {
 
     private func buildDataQualitySection(_ report: DataQualityReport) -> String {
         var lines = [
-            "- Quality level: \(describeQuality(report.level))",
-            "- Prediction reliability: \(predictionReliability(for: report))",
-            "- Personalization readiness: \(personalizationReadiness(for: report))",
-            "- Data continuity: \(dataContinuitySummary(for: report))",
-            "- Logging freshness: \(loggingFreshnessSummary(for: report))",
-            "- Plausibility status: \(plausibilitySummary(for: report))",
-            "- Context richness: \(contextRichnessSummary(for: report))",
-            "- Recommended LLM behavior: \(recommendedLLMBehavior(for: report))"
+            "- Recent days with recorded observations: \(report.trackedDays) of 14",
+            "- Sleep Days with confirmed recording coverage: \(report.completeDays)",
+            "- Planning context: \(report.confidenceNote)",
+            "- Logging freshness: \(loggingFreshnessSummary(for: report))"
         ]
-
-        if !report.missingCriticalFields.isEmpty {
-            lines.append("- Missing critical fields: \(report.missingCriticalFields.joined(separator: ", "))")
-        }
         if !report.contextSignals.isEmpty {
-            lines.append("- Available context signals: \(report.contextSignals.joined(separator: ", "))")
+            lines.append("- Recorded context: \(report.contextSignals.joined(separator: ", "))")
         }
-        if !report.missingContextSignals.isEmpty {
-            lines.append("- Missing context signals: \(report.missingContextSignals.joined(separator: ", "))")
-        }
-        let lowConfidenceReasons = lowConfidenceReasons(for: report)
-        if !lowConfidenceReasons.isEmpty {
-            lines.append("- Low confidence reasons: \(lowConfidenceReasons.joined(separator: " | "))")
+        if !report.missingCriticalFields.isEmpty {
+            lines.append("- Missing or unresolved observations: \(report.missingCriticalFields.joined(separator: ", "))")
         }
         if !report.warnings.isEmpty {
             lines.append("- Warnings: \(report.warnings.joined(separator: " | "))")
         }
-        if !report.plausibilityWarnings.isEmpty {
-            lines.append("- Plausibility warnings: \(report.plausibilityWarnings.joined(separator: " | "))")
-        }
-
         return lines.joined(separator: "\n")
-    }
-
-    private func predictionReliability(for report: DataQualityReport) -> String {
-        switch report.level {
-        case .excellent: return "high"
-        case .good:      return "medium-high"
-        case .fair:      return "medium"
-        case .poor:      return "low"
-        }
-    }
-
-    private func personalizationReadiness(for report: DataQualityReport) -> String {
-        if report.completeDays >= 14 { return "personalized" }
-        if report.completeDays >= 7 { return "learning with usable personal pattern" }
-        if report.trackedDays > 0 { return "early learning, blend personal signals with age baseline" }
-        return "baseline only"
-    }
-
-    private func dataContinuitySummary(for report: DataQualityReport) -> String {
-        if report.consecutiveMissedDays >= 2 {
-            return "interrupted by recent missed days"
-        }
-        if report.completeDays >= 7 {
-            return "enough recent complete days for trend learning"
-        }
-        if report.trackedDays > 0 {
-            return "some records exist, but complete daily coverage is still thin"
-        }
-        return "no recent tracking continuity"
     }
 
     private func loggingFreshnessSummary(for report: DataQualityReport) -> String {
@@ -244,135 +201,43 @@ final class DefaultSleepCoachLLMAgent: SleepCoachLLMAgentProtocol {
         }
     }
 
-    private func plausibilitySummary(for report: DataQualityReport) -> String {
-        if report.plausibilityAnomalyCount == 0 {
-            return "no obvious logical anomalies detected"
+    private func buildPatternSection(_ pattern: BabyPattern?) -> String {
+        guard let pattern, pattern.sampleSize > 0 else { return "There are no reliable duration samples yet." }
+        var lines = ["Reliable session measurements on \(pattern.sampleSize) recorded day(s). Coverage of those days is unconfirmed."]
+        if let gap = pattern.averageWakeWindowMinutes {
+            lines.append("- Median gap between applicable recorded waking and sleep boundaries: \(gap) minutes")
         }
-        if report.plausibilityAnomalyCount <= 2 {
-            return "minor anomalies detected; be slightly cautious"
+        if let minutes = pattern.averageNapDurationMinutes {
+            lines.append("- Average net sleep among measured nap sessions: \(minutes) minutes")
         }
-        return "multiple anomalies detected; avoid strong certainty"
-    }
-
-    private func contextRichnessSummary(for report: DataQualityReport) -> String {
-        if report.missingContextSignals.isEmpty {
-            return "rich context available"
+        if let minutes = pattern.averageNightSleepMinutes {
+            lines.append("- Average net sleep among measured night sessions: \(minutes) minutes")
         }
-        if report.contextSignals.count >= 3 {
-            return "partial context available"
-        }
-        return "thin context; recommendations should remain general"
-    }
-
-    private func recommendedLLMBehavior(for report: DataQualityReport) -> String {
-        switch report.level {
-        case .excellent:
-            return "Give personalized guidance with normal confidence, while still avoiding medical certainty."
-        case .good:
-            return "Give personalized guidance, mention the main caveat if relevant."
-        case .fair:
-            return "Blend personal signals with age baseline and use cautious wording."
-        case .poor:
-            return "Keep guidance general, ask for missing critical logs, and avoid precise predictions."
-        }
-    }
-
-    private func lowConfidenceReasons(for report: DataQualityReport) -> [String] {
-        var reasons: [String] = []
-
-        if report.completeDays < 7 {
-            reasons.append("fewer than 7 complete days are available")
-        }
-        if report.consecutiveMissedDays >= 2 {
-            reasons.append("recent tracking has consecutive missed days")
-        }
-        if report.timelinessScore < 70 {
-            reasons.append("some events appear to be logged late")
-        }
-        if report.rhythmStabilityScore < 70 {
-            reasons.append("sleep timing varies significantly")
-        }
-        if report.plausibilityAnomalyCount > 0 {
-            reasons.append("some records have plausibility warnings")
-        }
-        if report.contextRichnessScore < 60 {
-            reasons.append("context signals are thin")
-        }
-
-        return reasons
-    }
-
-    // MARK: - Pattern Section
-
-    private func buildPatternSection(_ pattern: BabyPattern?, babyName: String) -> String {
-        guard let pattern else {
-            return "No pattern data yet — insufficient records."
-        }
-
-        var lines = [String]()
-
-        if let ww = pattern.averageWakeWindowMinutes {
-            lines.append("- Observed wake window: \(ww) min")
-        }
-        if let napDur = pattern.averageNapDurationMinutes {
-            lines.append("- Average nap duration: \(napDur) min")
-        }
-        if let napCount = pattern.napCountPerDay {
-            lines.append("- Average naps per day: \(String(format: "%.1f", napCount))")
-        }
-        if let bestHour = pattern.bestFirstNapHour {
-            let suffix = bestHour >= 12 ? "PM" : "AM"
-            let h      = bestHour > 12 ? bestHour - 12 : (bestHour == 0 ? 12 : bestHour)
-            lines.append("- Best nap hour: \(h) \(suffix)")
-        }
-        if let extra = pattern.bestNapExtraMinutes, extra > 5 {
-            lines.append("- Naps at best hour are ~\(extra) min longer than average")
-        }
-        if let night = pattern.averageNightSleepMinutes {
-            lines.append("- Average night sleep: \(night) min")
-        }
-        if let wow = pattern.weekOverWeekNapChange {
-            let direction = wow >= 0 ? "+" : ""
-            lines.append("- Week-over-week nap change: \(direction)\(wow) min")
-        }
-
-        lines.append("- Wake window trend: \(describeTrend(pattern.wakingWindowTrend))")
-        lines.append("- Nap duration trend: \(describeTrend(pattern.napDurationTrend))")
-        lines.append("- Data quality: \(describeQuality(pattern.dataQuality)) (\(pattern.sampleSize) days)")
-
         return lines.joined(separator: "\n")
     }
 
     // MARK: - Last 7 Days Summary
 
-    private func buildLast7DaysSummary(
-        dayNaps: [SleepRecord],
-        breaks:  [SleepRecord]
-    ) -> String {
-
-        let cal   = Calendar.current
-        let today = cal.startOfDay(for: Date())
-
-        var lines = [String]()
-        let formatter        = DateFormatter()
-        formatter.locale     = Locale(identifier: "en_US_POSIX")
+    func buildLast7DaysSummary(records: [SleepRecord], now: Date, calendar: Calendar) -> String {
+        let accounting = SleepAccounting(records: records, now: now, calendar: calendar)
+        let today = calendar.startOfDay(for: now)
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = calendar.timeZone
         formatter.dateFormat = "EEE MMM d"
 
-        for offset in 0..<7 {
-            guard let day = cal.date(byAdding: .day, value: -offset, to: today) else { continue }
-            let naps = dayNaps
-                .filter { cal.isDate($0.date, inSameDayAs: day) }
-                .sorted { $0.date < $1.date }
-
-            if naps.isEmpty {
-                lines.append("- \(formatter.string(from: day)): No naps logged")
-            } else {
-                let total = naps.map { $0.totalMinutes(breaks: breaks) }.reduce(0, +)
-                lines.append("- \(formatter.string(from: day)): \(naps.count) nap(s), \(total) min total")
+        return (0..<7).compactMap { offset in
+            guard let day = calendar.date(byAdding: .day, value: -offset, to: today) else { return nil }
+            let naps = records.filter {
+                $0.kind == .dayNap && $0.date <= now && calendar.isDate($0.date, inSameDayAs: day)
             }
-        }
-
-        return lines.joined(separator: "\n")
+            let label = formatter.string(from: day)
+            guard !naps.isEmpty else { return "- \(label): No naps logged. Nap coverage is unknown." }
+            let count = naps.filter { $0.completedEnd(at: now) != nil }.count
+            let subtotal = accounting.completedSubtotal(on: day, kind: .dayNap)
+            let limitation = subtotal.unavailableReason.map { ". \($0.rawValue)." } ?? "."
+            return "- \(label): \(count) completed nap(s). Completed-recorded subtotal: \(subtotal.display)\(limitation)"
+        }.joined(separator: "\n")
     }
 
     // MARK: - Response Parser
@@ -417,21 +282,4 @@ final class DefaultSleepCoachLLMAgent: SleepCoachLLMAgentProtocol {
         }
     }
 
-    private func describeTrend(_ trend: Trend) -> String {
-        switch trend {
-        case .increasing:   return "increasing"
-        case .stable:       return "stable"
-        case .decreasing:   return "decreasing"
-        case .insufficient: return "insufficient data"
-        }
-    }
-
-    private func describeQuality(_ quality: DataQuality) -> String {
-        switch quality {
-        case .poor:      return "poor"
-        case .fair:      return "fair"
-        case .good:      return "good"
-        case .excellent: return "excellent"
-        }
-    }
 }

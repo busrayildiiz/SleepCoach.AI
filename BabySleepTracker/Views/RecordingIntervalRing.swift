@@ -14,21 +14,22 @@ struct RecordingIntervalPresentation {
     let netMinutes: Int
 
     init?(parent: SleepRecord, existing: [SleepRecord], proposed: SleepRecord?,
-          editingID: UUID? = nil, now: Date) {
-        guard parent.kind != .break, !parent.isOngoing,
-              let end = parent.observedEnd, end <= now, end > parent.date else { return nil }
+          editingID: UUID? = nil, records: [SleepRecord]? = nil, now: Date, calendar: Calendar = .current) {
+        guard parent.kind != .break, let end = parent.completedEnd(at: now) else { return nil }
         let window = DateInterval(start: parent.date, end: end)
-        let attached = existing.filter {
-            $0.kind == .break && $0.parentNapID == parent.id && $0.id != editingID
-        }
         let candidate = proposed.flatMap { record -> SleepRecord? in
             guard record.kind == .break, record.parentNapID == parent.id,
-                  !record.isOngoing, record.observedEnd != nil else { return nil }
+                  record.completedEnd(at: now) != nil else { return nil }
             return record
         }
-        let records = [parent] + attached + (candidate.map { [$0] } ?? [])
-        let sleeps = SleepAccounting.netIntervals(records: records, now: now, sleepIDs: [parent.id])
-        netMinutes = SleepAccounting.netMinutes(records: records, now: now, sleepIDs: [parent.id])
+        let stored = records ?? ([parent] + existing)
+        let measured = candidate.map { proposed in
+            stored.filter { $0.id != editingID && $0.id != proposed.id } + [proposed]
+        } ?? stored
+        let accounting = SleepAccounting(records: measured, now: now, calendar: calendar)
+        guard let minutes = accounting.completedMinutes(sleepIDs: [parent.id]) else { return nil }
+        let sleeps = accounting.completedIntervals(sleepIDs: [parent.id])
+        netMinutes = minutes
 
         var selected: DateInterval?
         if let candidate, let candidateEnd = candidate.observedEnd {

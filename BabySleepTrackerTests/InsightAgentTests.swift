@@ -10,6 +10,7 @@ final class InsightAgentTests: XCTestCase {
     private func makePattern(
         bestFirstNapHour: Int? = 10,
         bestNapExtraMinutes: Int? = 10,
+        averageNapDurationMinutes: Int? = 90,
         sampleSize: Int = 7,
         dataQuality: DataQuality = .good,
         wakingWindowTrend: Trend = .stable,
@@ -19,7 +20,7 @@ final class InsightAgentTests: XCTestCase {
             averageWakeWindowMinutes: 180,
             bestFirstNapHour: bestFirstNapHour,
             bestNapExtraMinutes: bestNapExtraMinutes,
-            averageNapDurationMinutes: 90,
+            averageNapDurationMinutes: averageNapDurationMinutes,
             napCountPerDay: 2,
             averageNightSleepMinutes: 600,
             estimatedBedtimeShiftMinutes: 0,
@@ -43,7 +44,7 @@ final class InsightAgentTests: XCTestCase {
 
         XCTAssertEqual(
             result.headline,
-            "4 aylıktan itibaren aktif olur"
+            "General sleep guidance"
         )
     }
 
@@ -57,7 +58,7 @@ final class InsightAgentTests: XCTestCase {
 
         XCTAssertEqual(
             result.headline,
-            "Öğrenme başlasın!"
+            "General sleep guidance"
         )
     }
 
@@ -71,11 +72,11 @@ final class InsightAgentTests: XCTestCase {
 
         XCTAssertEqual(
             result.headline,
-            "6/14 — örüntü oluşuyor"
+            "General sleep guidance"
         )
     }
 
-    func testHeadlineForPersonalizedPhase() {
+    func testLegacyPersonalizedPhaseStillUsesGeneralHeadline() {
         let result = agent.buildInsights(
             phase: .personalized,
             pattern: nil,
@@ -85,8 +86,9 @@ final class InsightAgentTests: XCTestCase {
 
         XCTAssertEqual(
             result.headline,
-            "Kişiselleştirilmiş mod aktif ✓"
+            "General sleep guidance"
         )
+        XCTAssertEqual(result.progressMessage, "Recorded on 14 day(s). Daily coverage is unconfirmed.")
     }
 
     // MARK: - Coach Tip
@@ -101,7 +103,7 @@ final class InsightAgentTests: XCTestCase {
 
         XCTAssertEqual(
             result.coachTip,
-            "Umay henüz 4 aylıktan küçük. Bu dönemde doğal ritmine göre beslen ve uyu."
+            "Follow Umay's sleep cues and record actual sleep and wake times when you can."
         )
     }
 
@@ -115,11 +117,11 @@ final class InsightAgentTests: XCTestCase {
 
         XCTAssertEqual(
             result.coachTip,
-            "İlk uykuyu logla. Uyanma saatini de ekleyerek tahminleri güçlendir."
+            "Use the recorded wake or nap end when available. General age guidance can help plan the next sleep."
         )
     }
 
-    func testCoachTipForLearningPhase() {
+    func testLearningPhaseKeepsGuidanceGeneral() {
         let result = agent.buildInsights(
             phase: .learning(day: 5),
             pattern: nil,
@@ -129,11 +131,12 @@ final class InsightAgentTests: XCTestCase {
 
         XCTAssertEqual(
             result.coachTip,
-            "Harika gidiyorsun! 9 gün daha takip edince kişiselleştirilmiş tahminler başlıyor."
+            "Use the recorded wake or nap end when available. General age guidance can help plan the next sleep."
         )
+        XCTAssertEqual(result.progressMessage, "Recorded on 5 day(s). Daily coverage is unconfirmed.")
     }
 
-    func testPersonalizedCoachTipUsesPatternWhenExtraMinutesAreMeaningful() {
+    func testLegacyLongerNapHintDoesNotChangeCoachTip() {
         let pattern = makePattern(
             bestFirstNapHour: 10,
             bestNapExtraMinutes: 12
@@ -148,11 +151,12 @@ final class InsightAgentTests: XCTestCase {
 
         XCTAssertEqual(
             result.coachTip,
-            "Umay'in en uzun napları saat 10 AM civarında başlıyor — ortalamadan ~12 dk daha uzun."
+            "Use the recorded wake or nap end when available. General age guidance can help plan the next sleep."
         )
+        XCTAssertEqual(result.weeklyPattern, "Recorded naps averaged 1h 30m.")
     }
 
-    func testPersonalizedCoachTipUsesFallbackWhenExtraMinutesAreSmall() {
+    func testSmallLegacyNapHintDoesNotChangeCoachTip() {
         let pattern = makePattern(
             bestFirstNapHour: 10,
             bestNapExtraMinutes: 5
@@ -167,11 +171,12 @@ final class InsightAgentTests: XCTestCase {
 
         XCTAssertEqual(
             result.coachTip,
-            "Tahminler Umay'in kendi ritmine göre üretiliyor. Her kayıt sistemi daha da güçlendiriyor."
+            "Use the recorded wake or nap end when available. General age guidance can help plan the next sleep."
         )
+        XCTAssertEqual(result.weeklyPattern, "Recorded naps averaged 1h 30m.")
     }
 
-    func testPersonalizedCoachTipUsesFallbackWhenPatternIsMissing() {
+    func testLegacyPersonalizedPhaseWithoutPatternUsesGeneralCoachTip() {
         let result = agent.buildInsights(
             phase: .personalized,
             pattern: nil,
@@ -181,11 +186,12 @@ final class InsightAgentTests: XCTestCase {
 
         XCTAssertEqual(
             result.coachTip,
-            "Tahminler Umay'in kendi ritmine göre üretiliyor. Her kayıt sistemi daha da güçlendiriyor."
+            "Use the recorded wake or nap end when available. General age guidance can help plan the next sleep."
         )
+        XCTAssertNil(result.weeklyPattern)
     }
 
-    func testPersonalizedCoachTipFormatsMidnightCorrectly() {
+    func testLegacyMidnightSuggestionDoesNotBecomeAdvice() {
         let pattern = makePattern(
             bestFirstNapHour: 0,
             bestNapExtraMinutes: 10
@@ -200,11 +206,12 @@ final class InsightAgentTests: XCTestCase {
 
         XCTAssertEqual(
             result.coachTip,
-            "Umay'in en uzun napları saat 12 AM civarında başlıyor — ortalamadan ~10 dk daha uzun."
+            "Use the recorded wake or nap end when available. General age guidance can help plan the next sleep."
         )
+        XCTAssertEqual(result.weeklyPattern, "Recorded naps averaged 1h 30m.")
     }
 
-    func testPersonalizedCoachTipFormatsNoonCorrectly() {
+    func testLegacyNoonSuggestionDoesNotBecomeAdvice() {
         let pattern = makePattern(
             bestFirstNapHour: 12,
             bestNapExtraMinutes: 10
@@ -219,13 +226,14 @@ final class InsightAgentTests: XCTestCase {
 
         XCTAssertEqual(
             result.coachTip,
-            "Umay'in en uzun napları saat 12 PM civarında başlıyor — ortalamadan ~10 dk daha uzun."
+            "Use the recorded wake or nap end when available. General age guidance can help plan the next sleep."
         )
+        XCTAssertEqual(result.weeklyPattern, "Recorded naps averaged 1h 30m.")
     }
 
     // MARK: - Alerts
 
-    func testPoorDataQualityAddsInfoAlert() {
+    func testPoorPatternQualityDoesNotCreateLegacyAlert() {
         let pattern = makePattern(
             dataQuality: .poor
         )
@@ -237,20 +245,11 @@ final class InsightAgentTests: XCTestCase {
             babyName: "Umay"
         )
 
-        let infoAlert = result.alerts.first {
-            $0.severity == .info
-        }
-
-        XCTAssertNotNil(infoAlert)
-        XCTAssertEqual(
-            infoAlert?.message,
-            "Daha fazla gün takip et — tahminler güçlenecek."
-        )
-        XCTAssertNil(infoAlert?.actionTitle)
-        XCTAssertNil(infoAlert?.actionType)
+        XCTAssertTrue(result.alerts.isEmpty)
+        XCTAssertEqual(result.weeklyPattern, "Recorded naps averaged 1h 30m.")
     }
 
-    func testBaselinePhaseAddsWakeTimeWarning() {
+    func testBaselineWithoutPatternDoesNotInferMissingWakeAlert() {
         let result = agent.buildInsights(
             phase: .baseline,
             pattern: nil,
@@ -258,22 +257,11 @@ final class InsightAgentTests: XCTestCase {
             babyName: "Umay"
         )
 
-        let wakeAlert = result.alerts.first {
-            $0.actionType == .addWakeTime
-        }
-
-        XCTAssertNotNil(wakeAlert)
-        XCTAssertEqual(
-            wakeAlert?.severity,
-            .warning
-        )
-        XCTAssertEqual(
-            wakeAlert?.actionTitle,
-            "Ekle"
-        )
+        XCTAssertTrue(result.alerts.isEmpty)
+        XCTAssertNil(result.weeklyPattern)
     }
 
-    func testLearningPhaseAddsWakeTimeWarning() {
+    func testLearningPhaseDoesNotInferMissingWakeAlert() {
         let result = agent.buildInsights(
             phase: .learning(day: 4),
             pattern: nil,
@@ -281,14 +269,11 @@ final class InsightAgentTests: XCTestCase {
             babyName: "Umay"
         )
 
-        XCTAssertTrue(
-            result.alerts.contains {
-                $0.actionType == .addWakeTime
-            }
-        )
+        XCTAssertTrue(result.alerts.isEmpty)
+        XCTAssertEqual(result.progressMessage, "Recorded on 4 day(s). Daily coverage is unconfirmed.")
     }
 
-    func testPersonalizedPhaseDoesNotAddWakeTimeWarning() {
+    func testLegacyPersonalizedPhaseDoesNotInferWakeAlert() {
         let result = agent.buildInsights(
             phase: .personalized,
             pattern: nil,
@@ -296,14 +281,11 @@ final class InsightAgentTests: XCTestCase {
             babyName: "Umay"
         )
 
-        XCTAssertFalse(
-            result.alerts.contains {
-                $0.actionType == .addWakeTime
-            }
-        )
+        XCTAssertTrue(result.alerts.isEmpty)
+        XCTAssertEqual(result.headline, "General sleep guidance")
     }
 
-    func testTooYoungPhaseDoesNotAddWakeTimeWarning() {
+    func testTooYoungPhaseDoesNotInferWakeAlert() {
         let result = agent.buildInsights(
             phase: .tooYoung,
             pattern: nil,
@@ -311,14 +293,11 @@ final class InsightAgentTests: XCTestCase {
             babyName: "Umay"
         )
 
-        XCTAssertFalse(
-            result.alerts.contains {
-                $0.actionType == .addWakeTime
-            }
-        )
+        XCTAssertTrue(result.alerts.isEmpty)
+        XCTAssertTrue(result.coachTip.contains("sleep cues"))
     }
 
-    func testPoorDataQualityAndLearningPhaseCanProduceTwoAlerts() {
+    func testPoorPatternQualityAndLearningPhaseKeepOnlyRecordedContext() {
         let pattern = makePattern(
             dataQuality: .poor
         )
@@ -330,33 +309,30 @@ final class InsightAgentTests: XCTestCase {
             babyName: "Umay"
         )
 
-        XCTAssertEqual(result.alerts.count, 2)
-        XCTAssertTrue(
-            result.alerts.contains { $0.severity == .info }
-        )
-        XCTAssertTrue(
-            result.alerts.contains { $0.actionType == .addWakeTime }
-        )
+        XCTAssertTrue(result.alerts.isEmpty)
+        XCTAssertEqual(result.weeklyPattern, "Recorded naps averaged 1h 30m.")
+        XCTAssertEqual(result.progressMessage, "Recorded on 6 day(s). Daily coverage is unconfirmed.")
     }
 
     // MARK: - Weekly Pattern
 
-    func testWeeklyPatternReturnsNilWhenSampleSizeIsTooSmall() {
+    func testOneMeasuredNapCanHaveADescriptiveSummary() {
         let pattern = makePattern(
-            sampleSize: 6
+            averageNapDurationMinutes: 45, sampleSize: 1
         )
 
         let result = agent.buildInsights(
             phase: .personalized,
             pattern: pattern,
-            trackedDays: 6,
+            trackedDays: 1,
             babyName: "Umay"
         )
 
-        XCTAssertNil(result.weeklyPattern)
+        XCTAssertEqual(result.weeklyPattern, "Recorded naps averaged 45m.")
+        XCTAssertEqual(result.progressMessage, "Recorded on 1 day(s). Daily coverage is unconfirmed.")
     }
 
-    func testWeeklyPatternContainsNapTimeAndTrends() {
+    func testWeeklyPatternUsesMeasuredDurationAlongsideLegacyTrends() {
         let pattern = makePattern(
             bestFirstNapHour: 9,
             sampleSize: 7,
@@ -373,11 +349,11 @@ final class InsightAgentTests: XCTestCase {
 
         XCTAssertEqual(
             result.weeklyPattern,
-            "En iyi nap saati: 9 AM • Uyanıklık penceresi uzuyor • Naplar kısalıyor"
+            "Recorded naps averaged 1h 30m."
         )
     }
 
-    func testWeeklyPatternHandlesStableTrends() {
+    func testWeeklyPatternOmitsLegacyStabilityClaims() {
         let pattern = makePattern(
             bestFirstNapHour: 14,
             sampleSize: 7,
@@ -394,11 +370,11 @@ final class InsightAgentTests: XCTestCase {
 
         XCTAssertEqual(
             result.weeklyPattern,
-            "En iyi nap saati: 2 PM • Uyanıklık penceresi tutarlı • Nap süresi tutarlı"
+            "Recorded naps averaged 1h 30m."
         )
     }
 
-    func testWeeklyPatternHandlesInsufficientTrends() {
+    func testWeeklyPatternUsesMeasuredNapWhenTrendEvidenceIsInsufficient() {
         let pattern = makePattern(
             bestFirstNapHour: 10,
             sampleSize: 7,
@@ -415,13 +391,14 @@ final class InsightAgentTests: XCTestCase {
 
         XCTAssertEqual(
             result.weeklyPattern,
-            "En iyi nap saati: 10 AM"
+            "Recorded naps averaged 1h 30m."
         )
     }
 
-    func testWeeklyPatternReturnsNilWhenNoPatternPartsExist() {
+    func testWeeklyPatternIsUnavailableWithoutMeasuredNapDuration() {
         let pattern = makePattern(
-            bestFirstNapHour: nil,
+            bestFirstNapHour: 9,
+            averageNapDurationMinutes: nil,
             sampleSize: 7,
             wakingWindowTrend: .insufficient,
             napDurationTrend: .insufficient
@@ -439,7 +416,7 @@ final class InsightAgentTests: XCTestCase {
 
     // MARK: - Trend Coverage
 
-    func testWeeklyPatternCoversAllWakingWindowTrendBranches() {
+    func testWeeklyPatternOmitsAllLegacyWakeWindowTrends() {
         let trends: [Trend] = [
             .increasing,
             .decreasing,
@@ -462,11 +439,11 @@ final class InsightAgentTests: XCTestCase {
                 babyName: "Umay"
             )
 
-            XCTAssertNotNil(result)
+            XCTAssertEqual(result.weeklyPattern, "Recorded naps averaged 1h 30m.", "\(trend)")
         }
     }
 
-    func testWeeklyPatternCoversAllNapDurationTrendBranches() {
+    func testWeeklyPatternOmitsAllLegacyNapTrends() {
         let trends: [Trend] = [
             .increasing,
             .decreasing,
@@ -489,7 +466,7 @@ final class InsightAgentTests: XCTestCase {
                 babyName: "Umay"
             )
 
-            XCTAssertNotNil(result)
+            XCTAssertEqual(result.weeklyPattern, "Recorded naps averaged 1h 30m.", "\(trend)")
         }
     }
 
@@ -505,7 +482,7 @@ final class InsightAgentTests: XCTestCase {
 
         XCTAssertEqual(
             result.progressMessage,
-            "Umay 4 aylık olduğunda tahminler başlayacak."
+            "Recorded on 0 day(s). Daily coverage is unconfirmed."
         )
     }
 
@@ -519,7 +496,7 @@ final class InsightAgentTests: XCTestCase {
 
         XCTAssertEqual(
             result.progressMessage,
-            "Henüz veri yok. Umay'in ilk uykusunu logla."
+            "Recorded on 0 day(s). Daily coverage is unconfirmed."
         )
     }
 
@@ -533,21 +510,23 @@ final class InsightAgentTests: XCTestCase {
 
         XCTAssertEqual(
             result.progressMessage,
-            "8 gün takip edildi. 6 gün kaldı."
+            "Recorded on 8 day(s). Daily coverage is unconfirmed."
         )
     }
 
-    func testProgressMessageForPersonalizedPhase() {
+    func testFrequentRecordingDoesNotAuthorizePersonalizedGuidance() {
         let result = agent.buildInsights(
             phase: .personalized,
-            pattern: nil,
+            pattern: makePattern(sampleSize: 17, dataQuality: .excellent),
             trackedDays: 17,
             babyName: "Umay"
         )
 
         XCTAssertEqual(
             result.progressMessage,
-            "Kişiselleştirilmiş! 17 gün verisi kullanılıyor."
+            "Recorded on 17 day(s). Daily coverage is unconfirmed."
         )
+        XCTAssertEqual(result.headline, "General sleep guidance")
+        XCTAssertEqual(result.coachTip, "Use the recorded wake or nap end when available. General age guidance can help plan the next sleep.")
     }
 }

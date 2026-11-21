@@ -50,7 +50,7 @@ struct TodayPlanCard: View {
         dynamicType.isAccessibilitySize ? overnightCaptionSpacing : compactOvernightCaptionSpacing
     }
     private var overnightNight: SleepTimelineItem? {
-        presentation.isOvernight ? items.first { $0.kind == .bedtime && $0.isActive } : nil
+        presentation.isOvernight ? items.first { $0.kind == .bedtime && ($0.isActive || $0.isEndUnconfirmed) } : nil
     }
     private var recordedCount: Int {
         items.filter {
@@ -69,7 +69,7 @@ struct TodayPlanCard: View {
                     VStack(alignment: .leading, spacing: 4) { heading; detailsButton }
                 }
             }
-            if items.isEmpty && presentation.morningWake == nil {
+            if items.isEmpty && presentation.morningWake == nil && presentation.currentConfirmation == nil {
                 Text("No sleep recorded yet")
                     .recordingFont(12, weight: .medium).foregroundStyle(RecordingColor.secondary)
             } else if let night = overnightNight {
@@ -79,13 +79,25 @@ struct TodayPlanCard: View {
                         .accessibilityElement(children: .contain)
                         .accessibilityIdentifier("home.plan.scroll")
                 }
-            } else {
+            } else if !items.isEmpty {
                 ViewThatFits(in: .horizontal) {
                     timeline.fixedSize(horizontal: true, vertical: false)
                     ScrollView(.horizontal) { timeline.padding(.vertical, 2) }
                         .accessibilityElement(children: .contain)
                         .accessibilityIdentifier("home.plan.scroll")
                 }
+            }
+            if let confirmation = presentation.currentConfirmation {
+                Text("Still sleeping confirmed at \(confirmation, format: .dateTime.hour().minute())")
+                    .recordingFont(12).foregroundStyle(RecordingColor.secondary)
+            }
+            if let wake = presentation.routineWake {
+                Text("Usual wake (routine) · \(wake, format: .dateTime.hour().minute())")
+                    .recordingFont(12).foregroundStyle(RecordingColor.secondary)
+            }
+            if let bedtime = presentation.routineBedtime {
+                Text("Usual bedtime (routine) · \(bedtime, format: .dateTime.hour().minute())")
+                    .recordingFont(12).foregroundStyle(RecordingColor.secondary)
             }
             if presentation.predictionsUnavailable && items.isEmpty {
                 Text("Predictions unavailable")
@@ -255,7 +267,7 @@ struct TodayPlanCard: View {
                 if overnight && item.kind == .wake { Text("Morning wake") }
                 else { eventTitle(item) }
             }.recordingFont(13, weight: .bold).fixedSize()
-            if overnight && item.isActive {
+            if overnight && (item.isActive || item.isEndUnconfirmed) {
                 overnightPill(presentation.overnightEndUnconfirmed ? "End unconfirmed" : "Ongoing", emphasized: true)
             } else { status(item).recordingFont(11, weight: .semibold).fixedSize() }
         }
@@ -308,27 +320,31 @@ struct TodayPlanCard: View {
     }
     @ViewBuilder private func status(_ item: SleepTimelineItem) -> some View {
         switch item.visualState {
-        case .completed: Text("Done").foregroundStyle(RecordingColor.secondary)
+        case .completed:
+            Text(item.unavailableReason == .netSleepUnconfirmed ? "Net sleep unknown" : "Done")
+                .foregroundStyle(RecordingColor.secondary)
         case .active:
             Group {
-                if presentation.isOvernight || dynamicType.isAccessibilitySize {
-                    Text("\(TimeFormat.minutes(item.elapsedMinutes ?? 0)) elapsed")
-                } else { Text("Sleeping now · \(TimeFormat.minutes(item.elapsedMinutes ?? 0)) elapsed") }
+                if let elapsed = item.elapsedMinutes {
+                    Text("Sleeping now · \(TimeFormat.minutes(elapsed)) elapsed since start")
+                } else {
+                    Text("Still sleeping confirmed")
+                }
             }
-            .accessibilityLabel("Sleeping now · \(TimeFormat.minutes(item.elapsedMinutes ?? 0)) elapsed")
             .foregroundStyle(accent).padding(.horizontal, 7).padding(.vertical, 4)
             .background(CoachColor.purple.opacity(0.13), in: Capsule())
         case .next, .future:
             if !dynamicType.isAccessibilitySize, let minutes = presentation.minutesUntil(item, now: now) {
                 Text("Estimated · in \(TimeFormat.minutes(minutes))").foregroundStyle(accent)
             } else { Text("Estimated").foregroundStyle(accent) }
-        case .unavailable: Text("Not confirmed").foregroundStyle(RecordingColor.secondary)
+        case .unavailable: Text(item.isEndUnconfirmed ? "End unconfirmed" : "Not confirmed").foregroundStyle(RecordingColor.secondary)
         }
     }
     private func metadata(_ item: SleepTimelineItem) -> Text {
         var value = Text("Original Sleep Day: \(item.sleepDay.formatted(date: .abbreviated, time: .omitted)).")
         if let time = item.time { value = value + Text(" Start: \(time.formatted(date: .abbreviated, time: .shortened)).") }
         if let duration = item.durationMinutes { value = value + Text(" \(TimeFormat.minutes(duration)) net sleep.") }
+        if item.unavailableReason == .netSleepUnconfirmed { value = value + Text(" Net sleep unknown.") }
         if item.isCarryover { value = value + Text(" Previous Sleep Day context.") }
         if let gap = item.awakeBeforeMinutes, gap > 0 { value = value + Text(" Awake for \(TimeFormat.minutes(gap)) before this event.") }
         if item.source == .estimate { value = value + Text(" Estimated, not an observation.") }

@@ -5,6 +5,7 @@ struct TodaySleepHeroCard: View {
     let addNap: () -> Void
     let recordNight: () -> Void
     let endSleep: () -> Void
+    let reviewEnd: (SleepRecord) -> Void
     let addBreak: () -> Void
     let viewDetails: () -> Void
     let viewPlan: () -> Void
@@ -45,10 +46,6 @@ struct TodaySleepHeroCard: View {
                     summary.recordingFont(12, weight: .medium)
                         .foregroundStyle(RecordingColor.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-                    if model.isNightOpen && model.mode != .nightActive {
-                        Text("Night sleep end has not been confirmed.")
-                            .recordingFont(11, weight: .semibold).foregroundStyle(RecordingColor.secondary)
-                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.trailing, dynamicType.isAccessibilitySize ? 0 : 30)
@@ -58,6 +55,27 @@ struct TodaySleepHeroCard: View {
 
             information
             actions
+            if let open = model.reviewRecord {
+                if model.assessment.unresolvedRecords.count == 1 {
+                    Text("\(open.kind == .nightSleep ? "Night sleep" : "Nap") end unconfirmed · Started \(time(open.date))")
+                        .recordingFont(12, weight: .medium)
+                        .foregroundStyle(RecordingColor.secondary)
+                    action("Review end", symbol: "clock", id: "hero.reviewEnd", primary: false) { reviewEnd(open) }
+                } else {
+                    Menu {
+                        ForEach(model.assessment.unresolvedRecords) { record in
+                            Button("\(record.kind == .nightSleep ? "Night sleep" : "Nap") · \(time(record.date))") {
+                                reviewEnd(record)
+                            }
+                        }
+                    } label: {
+                        Label("Review unconfirmed ends", systemImage: "clock")
+                            .recordingFont(13, weight: .semibold)
+                            .frame(minHeight: 44)
+                    }
+                    .accessibilityIdentifier("hero.reviewEnd")
+                }
+            }
         }
         .foregroundStyle(RecordingColor.ink)
         .padding(16)
@@ -97,17 +115,30 @@ struct TodaySleepHeroCard: View {
     @ViewBuilder private var summary: some View {
         switch model.mode {
         case .ready:
-            Text("Record \(model.babyName)'s first sleep of the day and follow their rhythm.")
+            if model.assessment.unavailableReason == .conflict {
+                Text("Review conflicting sleep or wake records.")
+            } else {
+                Text("Record \(model.babyName)'s first sleep of the day and follow their rhythm.")
+            }
         case .napActive:
             VStack(alignment: .leading, spacing: 3) {
-                Text("\(napLabel) · \(duration(model.elapsedMinutes)) elapsed")
+                if let elapsed = model.elapsedMinutes { Text("\(napLabel) · \(duration(elapsed)) elapsed since start") }
+                else if let confirmed = model.confirmedAt { Text("Still sleeping confirmed at \(time(confirmed))") }
                 if let start = model.record?.date { Text("Started \(time(start))") }
             }
         case .nightActive:
-            if let start = model.record?.date { Text("Since \(time(start)) · \(duration(model.elapsedMinutes)) elapsed") }
+            if let elapsed = model.elapsedMinutes, let start = model.record?.date {
+                Text("Since \(time(start)) · \(duration(elapsed)) elapsed")
+            } else if let confirmed = model.confirmedAt {
+                Text("Still sleeping confirmed at \(time(confirmed))")
+            }
         case .napCompleted:
             VStack(alignment: .leading, spacing: 3) {
-                Text("\(napLabel) · \(duration(model.netMinutes)) net sleep")
+                if let net = model.netMinutes {
+                    Text("\(napLabel) · \(TimeFormat.minutes(net)) net sleep")
+                } else {
+                    Text("\(napLabel) · Net sleep unknown")
+                }
                 if let start = model.record?.date, let end = model.record?.observedEnd {
                     Text("\(time(start)) – \(time(end))")
                 }

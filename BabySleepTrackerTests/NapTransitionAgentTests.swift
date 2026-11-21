@@ -100,8 +100,36 @@ final class NapTransitionAgentTests: XCTestCase {
         XCTAssertEqual(signal?.weight, 3)
         XCTAssertEqual(
             signal?.description,
-            "Son 7 günde 3 kez nap reddi görüldü."
+            "3 recorded naps were shorter than 30 minutes in the last seven days."
         )
+    }
+
+    func testInsufficientDataAndConflictingObservationsDoNotEstablishSignals() {
+        let empty = agent.assess(records: [], wakeRecords: [], ageMonths: 7, now: now)
+        XCTAssertEqual(empty.signalStrength, .insufficient)
+        XCTAssertTrue(empty.signals.isEmpty)
+        XCTAssertFalse(empty.isReadyToTransit)
+
+        let days = 1...4
+        let naps = days.map { makeNap(daysAgo: $0, hour: 10, duration: 20) }
+        let conflicts = days.map { makeNight(daysAgo: $0, hour: 9, duration: 180) }
+        let wakes = days.flatMap { day in
+            [makeWake(daysAgo: day, hour: 4, minute: 0), makeWake(daysAgo: day, hour: 5, minute: 0)]
+        }
+        let conflicted = agent.assess(records: naps + conflicts, wakeRecords: wakes, ageMonths: 7, now: now)
+        XCTAssertEqual(conflicted.signalStrength, .insufficient)
+        XCTAssertTrue(conflicted.signals.isEmpty, "Conflicting sleep and wake entries cannot establish rejection, early waking, or long awake gaps.")
+        XCTAssertFalse(conflicted.isReadyToTransit)
+        XCTAssertTrue(conflicted.recommendation.contains("insufficient evidence"))
+    }
+
+    func testOngoingNapsWithZeroStoredDurationDoNotCountAsRejection() {
+        let records = (1...3).map { offset in
+            SleepRecord(date: now.addingTimeInterval(-Double(offset) * 86400),
+                        duration: 0, kind: .dayNap, isOngoing: true)
+        }
+        let assessment = agent.assess(records: records, wakeRecords: [], ageMonths: 9, now: now)
+        XCTAssertFalse(assessment.signals.contains { $0.type == .napRejection })
     }
 
     func testFewerThanThreeShortNapsDoNotProduceNapRejectionSignal() {
@@ -166,7 +194,7 @@ final class NapTransitionAgentTests: XCTestCase {
         XCTAssertEqual(signal?.weight, 2)
         XCTAssertEqual(
             signal?.description,
-            "İlk nap saati son 2 haftada ~60 dk gecikti."
+            "First recorded nap starts shifted later by about 60 minutes."
         )
     }
 
@@ -195,7 +223,7 @@ final class NapTransitionAgentTests: XCTestCase {
 
     // MARK: - Shortened Night Sleep
 
-    func testShortenedNightSleepProducesSignal() {
+    func testPartialNightRecordsCannotQuantifyANightDeficit() {
         let records = (1...6).map {
             makeNight(daysAgo: $0, hour: 20, duration: 480)
         }
@@ -211,12 +239,10 @@ final class NapTransitionAgentTests: XCTestCase {
             $0.type == .shortenedNightSleep
         }
 
-        XCTAssertNotNil(signal)
-        XCTAssertEqual(signal?.weight, 2)
-        XCTAssertEqual(
-            signal?.description,
-            "Gece uykusu hedefin 120 dk altında."
-        )
+        XCTAssertNil(signal)
+        XCTAssertEqual(result.signalStrength, .insufficient)
+        XCTAssertFalse(result.isReadyToTransit)
+        XCTAssertTrue(result.recommendation.contains("Recording coverage is incomplete"))
     }
 
     func testAdequateNightSleepDoesNotProduceShortenedNightSignal() {
@@ -240,7 +266,7 @@ final class NapTransitionAgentTests: XCTestCase {
 
     // MARK: - Excessive Daytime Sleep
 
-    func testExcessiveDaytimeSleepProducesSignal() {
+    func testLargeRecordedDaytimeSubtotalCannotQuantifyExcess() {
         let records = [
             makeNap(daysAgo: 1, hour: 9, duration: 130),
             makeNap(daysAgo: 1, hour: 14, duration: 110),
@@ -259,12 +285,10 @@ final class NapTransitionAgentTests: XCTestCase {
             $0.type == .excessiveDaytimeSleep
         }
 
-        XCTAssertNotNil(signal)
-        XCTAssertEqual(signal?.weight, 1)
-        XCTAssertEqual(
-            signal?.description,
-            "Ortalama gündüz uykusu yaş normunun 30 dk üstünde."
-        )
+        XCTAssertNil(signal)
+        XCTAssertEqual(result.signalStrength, .insufficient)
+        XCTAssertFalse(result.isReadyToTransit)
+        XCTAssertTrue(result.recommendation.contains("Recording coverage is incomplete"))
     }
 
     func testNormalDaytimeSleepDoesNotProduceExcessiveSleepSignal() {
@@ -445,7 +469,7 @@ final class NapTransitionAgentTests: XCTestCase {
         )
     }
 
-    func testStrongSignalsMarkBabyReadyInThreeToTwoTransitionZone() {
+    func testStrongObservedSignalsDoNotEstablishThreeToTwoReadiness() {
         let naps = [
             makeNap(daysAgo: 1, hour: 9, duration: 20),
             makeNap(daysAgo: 2, hour: 9, duration: 15),
@@ -469,10 +493,10 @@ final class NapTransitionAgentTests: XCTestCase {
             result.signalStrength,
             .strong
         )
-        XCTAssertTrue(result.isReadyToTransit)
+        XCTAssertFalse(result.isReadyToTransit)
         XCTAssertEqual(
             result.recommendation,
-            "3→2 nap geçiş zamanı. İkinci napı bırak, yatışı erkene al."
+            "Recording coverage is incomplete. There is insufficient evidence to recommend a nap transition."
         )
     }
 
@@ -503,7 +527,7 @@ final class NapTransitionAgentTests: XCTestCase {
 
     // MARK: - Two To One
 
-    func testStrongSignalsCanMakeBabyReadyForTwoToOneTransition() {
+    func testStrongObservedSignalsDoNotEstablishTwoToOneReadiness() {
         let naps = [
             makeNap(daysAgo: 1, hour: 9, duration: 20),
             makeNap(daysAgo: 2, hour: 9, duration: 15),
@@ -533,17 +557,15 @@ final class NapTransitionAgentTests: XCTestCase {
             .strong
         )
 
-        XCTAssertTrue(
-            result.isReadyToTransit
-        )
+        XCTAssertFalse(result.isReadyToTransit)
 
         XCTAssertEqual(
             result.recommendation,
-            "2→1 nap geçiş zamanı. Tek nap düzenine geç, yatışı erkene al."
+            "Recording coverage is incomplete. There is insufficient evidence to recommend a nap transition."
         )
     }
 
-    func testModerateThreeToTwoRecommendation() {
+    func testModerateSignalsCannotRecommendScheduleChangesWithoutCoverage() {
         let records = [
             makeNap(daysAgo: 1, hour: 9, duration: 20),
             makeNap(daysAgo: 2, hour: 9, duration: 15),
@@ -564,7 +586,7 @@ final class NapTransitionAgentTests: XCTestCase {
 
         XCTAssertEqual(
             result.recommendation,
-            "3→2 nap geçişi yaklaşıyor. Wake window'u 15'er dk artırmayı dene."
+            "Recording coverage is incomplete. There is insufficient evidence to recommend a nap transition."
         )
     }
 
