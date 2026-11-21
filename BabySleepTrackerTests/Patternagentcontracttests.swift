@@ -20,8 +20,9 @@ final class PatternAgentContractTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
-        sut = PatternAgent()
         calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        sut = PatternAgent(calendar: calendar)
         base = date(2026, 1, 1, 0, 0)
     }
 
@@ -37,7 +38,7 @@ final class PatternAgentContractTests: XCTestCase {
     private func date(_ y: Int, _ m: Int, _ d: Int, _ h: Int, _ min: Int) -> Date {
         var c = DateComponents()
         c.year = y; c.month = m; c.day = d; c.hour = h; c.minute = min
-        return Calendar(identifier: .gregorian).date(from: c)!
+        return calendar.date(from: c)!
     }
 
     private func day(_ offset: Int, hour: Int, minute: Int = 0) -> Date {
@@ -55,24 +56,30 @@ final class PatternAgentContractTests: XCTestCase {
 
     // MARK: - Data Quality
 
-    func test_dataQuality_scalesWithTrackedDayCount() {
-        func pattern(days: Int) -> BabyPattern {
+    func test_frequentRecordingDoesNotProveCoverageOrSupplyPersonalizedPatterns() {
+        let now = day(30, hour: 12)
+        for days in [2, 5, 10, 15] {
             let records = (0..<days).map { nap($0, hour: 12, duration: 60) }
-            return sut.analyze(records: records, wakeRecords: [], ageMonths: 9, now: day(30, hour: 12))
-        }
+            let pattern = sut.analyze(records: records, wakeRecords: [], ageMonths: 9, now: now)
+            let accounting = SleepAccounting(records: records, now: now, calendar: calendar)
 
-        XCTAssertEqual(pattern(days: 2).dataQuality, .poor)
-        XCTAssertEqual(pattern(days: 5).dataQuality, .fair)
-        XCTAssertEqual(pattern(days: 10).dataQuality, .good)
-        XCTAssertEqual(pattern(days: 15).dataQuality, .excellent)
+            XCTAssertEqual(pattern.sampleSize, days)
+            XCTAssertEqual(pattern.averageNapDurationMinutes, 60)
+            XCTAssertEqual(pattern.dataQuality, .poor)
+            XCTAssertEqual(accounting.completedSubtotal(on: day(days - 1, hour: 12)), .incomplete(60, reason: .incomplete))
+            XCTAssertNil(pattern.bestFirstNapHour)
+            XCTAssertNil(pattern.napCountPerDay)
+            XCTAssertEqual(pattern.wakingWindowTrend, .insufficient)
+            XCTAssertEqual(pattern.napDurationTrend, .insufficient)
+        }
     }
 
-    func test_sampleSize_countsUnionOfSleepAndWakeDays_notDuplicates() {
-        // 2 nap days + 2 additional wake-only days = 4 distinct tracked days,
-        // not 4 nap records + 2 wake records counted separately.
+    func test_sampleSize_countsDaysWithMeasurableSleepSessions() {
         let records = [
+            nap(0, hour: 9, duration: 60),
             nap(0, hour: 12, duration: 60),
             nap(1, hour: 12, duration: 60),
+            SleepRecord(date: day(2, hour: 11), duration: 0, isOngoing: true)
         ]
         let wakeRecords = [
             DailyWakeRecord(day: day(1, hour: 7), wakeTime: day(1, hour: 7)),  // same day as a nap
@@ -82,7 +89,8 @@ final class PatternAgentContractTests: XCTestCase {
 
         let pattern = sut.analyze(records: records, wakeRecords: wakeRecords, ageMonths: 9, now: day(30, hour: 12))
 
-        XCTAssertEqual(pattern.sampleSize, 4)
+        XCTAssertEqual(pattern.sampleSize, 2)
+        XCTAssertEqual(pattern.averageNapDurationMinutes, 60)
     }
 
     // MARK: - Average Nap Duration
@@ -116,7 +124,7 @@ final class PatternAgentContractTests: XCTestCase {
 
     // MARK: - Best Nap Hour
 
-    func test_bestFirstNapHour_picksTheHourWithHighestAverageDuration() {
+    func test_measuredNapAverageDoesNotRecommendABestFirstNapHour() {
         let records = [
             nap(0, hour: 9,  duration: 60),
             nap(1, hour: 13, duration: 90),
@@ -124,14 +132,14 @@ final class PatternAgentContractTests: XCTestCase {
 
         let pattern = sut.analyze(records: records, wakeRecords: [], ageMonths: 9, now: day(30, hour: 12))
 
-        XCTAssertEqual(pattern.bestFirstNapHour, 13)
-        // overall average is (60+90)/2 = 75; best hour's 90 is 15 above that.
-        XCTAssertEqual(pattern.bestNapExtraMinutes, 15)
+        XCTAssertEqual(pattern.averageNapDurationMinutes, 75)
+        XCTAssertNil(pattern.bestFirstNapHour)
+        XCTAssertNil(pattern.bestNapExtraMinutes)
     }
 
     // MARK: - Nap Count Per Day
 
-    func test_napCountPerDay_averagesAcrossDistinctDays() {
+    func test_napCountPerDay_isUnknownWithUnconfirmedDayCoverage() {
         let records = [
             nap(0, hour: 9,  duration: 60),
             nap(0, hour: 13, duration: 60), // day 0: 2 naps
@@ -140,61 +148,59 @@ final class PatternAgentContractTests: XCTestCase {
 
         let pattern = sut.analyze(records: records, wakeRecords: [], ageMonths: 9, now: day(30, hour: 12))
 
-        XCTAssertEqual(pattern.napCountPerDay, 1.5)
+        XCTAssertEqual(pattern.sampleSize, 2)
+        XCTAssertEqual(pattern.averageNapDurationMinutes, 60)
+        XCTAssertNil(pattern.napCountPerDay)
     }
 
     // MARK: - Bedtime Shift
 
-    func test_estimateBedtimeShift_comparesLongSleepDaysAgainstNormalDays() {
-        // All naps are 60 min, so the "long day" threshold (avgNap + 30) is 90 min.
+    func test_moreRecordedNapMinutesDoNotProveLaterBedtimes() {
         let records = [
-            // Day 0 (long day): two 60-min naps = 120 min > 90 → bedtime 20:30
+            // Day 0 has two recorded naps and a 20:30 night start.
             nap(0, hour: 9,  duration: 60),
             nap(0, hour: 13, duration: 60),
             night(0, hour: 20, minute: 30),
 
-            // Day 1 (long day): two 60-min naps = 120 min > 90 → bedtime 20:00
+            // Day 1 has two recorded naps and a 20:00 night start.
             nap(1, hour: 9,  duration: 60),
             nap(1, hour: 13, duration: 60),
             night(1, hour: 20, minute: 0),
 
-            // Day 2 (normal day): one 60-min nap = 60 min ≤ 90 → bedtime 19:00
+            // Days 2 and 3 each have one recorded nap and earlier night starts.
             nap(2, hour: 9, duration: 60),
             night(2, hour: 19, minute: 0),
 
-            // Day 3 (normal day): one 60-min nap = 60 min ≤ 90 → bedtime 19:30
             nap(3, hour: 9, duration: 60),
             night(3, hour: 19, minute: 30),
         ]
 
         let pattern = sut.analyze(records: records, wakeRecords: [], ageMonths: 9, now: day(30, hour: 12))
 
-        // longAvg = (20:30 + 20:00)/2 = 20:15 = 1215 min-of-day
-        // normalAvg = (19:00 + 19:30)/2 = 19:15 = 1155 min-of-day
-        // shift = max(0, 1215 - 1155) = 60
-        XCTAssertEqual(pattern.estimatedBedtimeShiftMinutes, 60)
+        XCTAssertEqual(pattern.averageNightSleepMinutes, 600)
+        XCTAssertEqual(pattern.sampleSize, 4)
+        XCTAssertNil(pattern.estimatedBedtimeShiftMinutes)
     }
 
-    func test_estimateBedtimeShift_neverReturnsNegative() {
-        // Long days end up with an EARLIER average bedtime than normal days —
-        // the result must clamp to 0, not go negative.
+    func test_earlierRecordedNightStartDoesNotProveZeroBedtimeShift() {
         let records = [
             nap(0, hour: 9, duration: 60),
             nap(0, hour: 13, duration: 60),
-            night(0, hour: 19, minute: 0), // long day, but earlier bedtime
+            night(0, hour: 19, minute: 0),
 
             nap(1, hour: 9, duration: 60),
-            night(1, hour: 20, minute: 0), // normal day, but later bedtime
+            night(1, hour: 20, minute: 0),
         ]
 
         let pattern = sut.analyze(records: records, wakeRecords: [], ageMonths: 9, now: day(30, hour: 12))
 
-        XCTAssertEqual(pattern.estimatedBedtimeShiftMinutes, 0)
+        XCTAssertEqual(pattern.averageNightSleepMinutes, 600)
+        XCTAssertNil(pattern.estimatedBedtimeShiftMinutes)
     }
 
     // MARK: - Nap Duration Trend
 
-    func test_napDurationTrend_increasing_whenRecentNapsAreMeaningfullyLonger() {
+    func test_longerRecentRecordedNapsDoNotProveAnIncreasingTrend() {
         let records = [
             nap(0, hour: 12, duration: 60),
             nap(1, hour: 12, duration: 60),
@@ -204,10 +210,11 @@ final class PatternAgentContractTests: XCTestCase {
             nap(5, hour: 12, duration: 90),
         ]
         let pattern = sut.analyze(records: records, wakeRecords: [], ageMonths: 9, now: day(30, hour: 12))
-        XCTAssertEqual(pattern.napDurationTrend, .increasing)
+        XCTAssertEqual(pattern.averageNapDurationMinutes, 75)
+        XCTAssertEqual(pattern.napDurationTrend, .insufficient)
     }
 
-    func test_napDurationTrend_decreasing_whenRecentNapsAreMeaningfullyShorter() {
+    func test_shorterRecentRecordedNapsDoNotProveADecreasingTrend() {
         let records = [
             nap(0, hour: 12, duration: 90),
             nap(1, hour: 12, duration: 90),
@@ -217,10 +224,11 @@ final class PatternAgentContractTests: XCTestCase {
             nap(5, hour: 12, duration: 60),
         ]
         let pattern = sut.analyze(records: records, wakeRecords: [], ageMonths: 9, now: day(30, hour: 12))
-        XCTAssertEqual(pattern.napDurationTrend, .decreasing)
+        XCTAssertEqual(pattern.averageNapDurationMinutes, 75)
+        XCTAssertEqual(pattern.napDurationTrend, .insufficient)
     }
 
-    func test_napDurationTrend_stable_whenChangeIsSmall() {
+    func test_similarRecordedNapsDoNotProveAStableTrend() {
         let records = [
             nap(0, hour: 12, duration: 70),
             nap(1, hour: 12, duration: 70),
@@ -230,7 +238,8 @@ final class PatternAgentContractTests: XCTestCase {
             nap(5, hour: 12, duration: 75),
         ]
         let pattern = sut.analyze(records: records, wakeRecords: [], ageMonths: 9, now: day(30, hour: 12))
-        XCTAssertEqual(pattern.napDurationTrend, .stable)
+        XCTAssertEqual(pattern.averageNapDurationMinutes, 72)
+        XCTAssertEqual(pattern.napDurationTrend, .insufficient)
     }
 
     func test_napDurationTrend_insufficient_whenFewerThanFourDataPoints() {
@@ -245,7 +254,7 @@ final class PatternAgentContractTests: XCTestCase {
 
     // MARK: - Week Over Week
 
-    func test_weekOverWeekNapChange_comparesLastSevenDaysAgainstThePriorSeven() {
+    func test_weekOverWeekChangeIsUnknownWithPartialRecordingInBothWeeks() {
         let now = day(20, hour: 12) // fixed reference point past all sample data
 
         var records: [SleepRecord] = []
@@ -260,6 +269,8 @@ final class PatternAgentContractTests: XCTestCase {
 
         let pattern = sut.analyze(records: records, wakeRecords: [], ageMonths: 9, now: now)
 
-        XCTAssertEqual(pattern.weekOverWeekNapChange, 30) // 90 - 60
+        XCTAssertEqual(pattern.sampleSize, 6)
+        XCTAssertEqual(pattern.averageNapDurationMinutes, 75)
+        XCTAssertNil(pattern.weekOverWeekNapChange)
     }
 }

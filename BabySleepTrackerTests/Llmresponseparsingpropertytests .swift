@@ -154,3 +154,20 @@ final class LLMResponseParsingPropertyTests: XCTestCase {
         )
     }
 }
+
+extension LLMResponseParsingPropertyTests {
+    func testLastSevenDaysSummaryUsesCompletedRecordsAndFullAwakeBreakContext() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let day = Date(timeIntervalSince1970: 0)
+        let now = day.addingTimeInterval(16 * 3600)
+        let night = SleepRecord(date: day.addingTimeInterval(-120 * 3600), duration: 0, kind: .nightSleep, isOngoing: true)
+        let nap = SleepRecord(date: day.addingTimeInterval(12 * 3600), duration: 60)
+        let awake = SleepRecord(date: nap.date.addingTimeInterval(15 * 60), duration: 15, kind: .break, parentNapID: night.id)
+        let missingEnd = SleepRecord(date: day.addingTimeInterval(14 * 3600), duration: 0, isOngoing: true)
+        let text = DefaultSleepCoachLLMAgent().buildLast7DaysSummary(records: [night, nap, awake, missingEnd],
+                                                                    now: now, calendar: calendar)
+        XCTAssertTrue(text.contains("Thu Jan 1: 1 completed nap(s). Completed-recorded subtotal: 45m · Incomplete"), text)
+        XCTAssertFalse(text.contains("2 completed nap(s)"), text)
+    }
+}

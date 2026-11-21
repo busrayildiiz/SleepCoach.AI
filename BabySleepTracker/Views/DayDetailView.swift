@@ -41,12 +41,16 @@ struct DayDetailView: View {
     }
 
     private var wakeEvidence: DayDetailWakeEvidence {
-        DayDetailWakeEvidence(records: DailyWakeRecordPersistence().load() ?? [], day: day, calendar: cal)
+        DayDetailWakeEvidence(records: DailyWakeRecordPersistence().load() ?? [], day: day, calendar: cal, now: now)
     }
 
     private var wakeUpTime: Date? {
         if case .recorded(let time) = wakeEvidence { return time }
         return nil
+    }
+
+    private var accounting: SleepAccounting {
+        SleepAccounting(records: SleepRecordPersistence().load() ?? records, now: now, calendar: cal)
     }
 
     private var isToday: Bool { cal.isDate(day, inSameDayAs: now) }
@@ -57,8 +61,8 @@ struct DayDetailView: View {
         NavigationStack {
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 12) {
-                    let summary = SleepAccounting(records: records, now: now, calendar: cal).sleepDay(on: day)
-                    Text("Sleep Day: " + TimeFormat.minutes(summary.totalMinutes) + (!summary.subtotalsAreReliable ? " · unreliable" : (summary.isProvisional ? " · provisional" : " · finalized")))
+                    let summary = accounting.completedSubtotal(on: day)
+                    Text("Sleep Day: " + summary.display)
                         .font(.subheadline)
                     if cal.startOfDay(for: day) < cal.startOfDay(for: now) {
                         Button("Review Morning Wake") { showHistoricalWake = true }
@@ -127,6 +131,7 @@ struct DayDetailView: View {
                 case .awakeBreak(let parent):
                     AddBreakView(parent: parent,
                                  existingBreaks: breaks.filter { $0.parentNapID == parent.id },
+                                 records: accounting.records,
                                  onSave: onBreakSaved)
                 }
             }
@@ -134,10 +139,13 @@ struct DayDetailView: View {
                 now = Date()
             }
             .onReceive(NotificationCenter.default.publisher(for: .sleepRecordsDidChange)) { _ in
+                now = Date()
                 if let saved = SleepRecordPersistence().load() {
-                    records = SleepAccounting(records: saved, now: Date(), calendar: cal).records(on: day)
+                    records = SleepAccounting(records: saved, now: now, calendar: cal).records(on: day)
                 }
             }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.significantTimeChangeNotification)) { _ in now = Date() }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in now = Date() }
         }
         .tint(Color(red: 0.45, green: 0.35, blue: 0.92))
     }
@@ -171,7 +179,7 @@ struct DayDetailView: View {
             NightSleepCard(
                 night: night,
                 napBreaks: breaks.filter { $0.parentNapID == night.id },
-                allBreaks: breaks,
+                accounting: accounting,
                 onAddBreakTap: { recordingSheet = .awakeBreak(night) },
                 onEditTap: { recordingSheet = .sleep(editing: night, date: night.date) },
                 onLongPress: { contextNap = night; showNapActions = true }
@@ -185,7 +193,7 @@ struct DayDetailView: View {
                 napNumber: index + 1,
                 nap: nap,
                 napBreaks: napBreaks,
-                allBreaks: breaks,
+                accounting: accounting,
                 onAddBreakTap: { recordingSheet = .awakeBreak(nap) },
                 onEditTap: { recordingSheet = .sleep(editing: nap, date: nap.date) },
                 onLongPress: { contextNap = nap; showNapActions = true }
@@ -197,23 +205,10 @@ struct DayDetailView: View {
             }
         }
 
-        // 3. Tahmini naplar — anchor'u doğru hesapla
-        if isToday {
-            let ageMonths = orchestrator.snapshot?.ageMonths ?? 9
-            let profile = DefaultAgeBasedSleepProfileProvider().profile(forAgeMonths: ageMonths)
-            let minExpected = profile.expectedNapCount.lowerBound
-            let remaining = max(0, minExpected - sortedNaps.count)
-
-            if remaining > 0 {
-                let predictedNaps = buildPredictedNaps(count: remaining)
-                ForEach(Array(predictedNaps.enumerated()), id: \.offset) { index, item in
-                    PredictedNapCard(
-                        napNumber: sortedNaps.count + index + 1,
-                        predictedTime: item.time,
-                        expectedDuration: item.duration
-                    )
-                }
-            }
+        if isToday, let snapshot = orchestrator.snapshot, !snapshot.hasCurrentSleep,
+           snapshot.nextSleepKind == .nap, let next = snapshot.daytime.recommendation.value {
+            PredictedNapCard(napNumber: sortedNaps.count + 1, predictedTime: next,
+                             expectedDuration: snapshot.daytime.expectedDurationMinutes, source: snapshot.daytime.source)
         }
 
         // 4. Night sleep (bugün girilmiş, tamamlanmış veya live)
@@ -221,7 +216,7 @@ struct DayDetailView: View {
             NightSleepCard(
                 night: night,
                 napBreaks: breaks.filter { $0.parentNapID == night.id },
-                allBreaks: breaks,
+                accounting: accounting,
                 onAddBreakTap: { recordingSheet = .awakeBreak(night) },
                 onEditTap: { recordingSheet = .sleep(editing: night, date: night.date) },
                 onLongPress: { contextNap = night; showNapActions = true }
@@ -231,39 +226,10 @@ struct DayDetailView: View {
                     Label("Delete", systemImage: "trash")
                 }
             }
-        } else if isToday, nightSleep == nil {
-            // Tahmini bedtime
-            let bedtime = orchestrator.snapshot?.night.optimalBedtimeStart
-                ?? cal.date(bySettingHour: 19, minute: 30, second: 0, of: day)
-                ?? day
-            PredictedBedtimeCard(bedtime: bedtime)
+        } else if isToday, nightSleep == nil, let snapshot = orchestrator.snapshot, !snapshot.hasCurrentSleep,
+                  let bedtime = snapshot.night.recommendation.value {
+            PredictedBedtimeCard(bedtime: bedtime, source: snapshot.night.source)
         }
-    }
-    private struct PredictedNapItem {
-        let time: Date
-        let duration: Int
-    }
-
-    private func buildPredictedNaps(count: Int) -> [PredictedNapItem] {
-        let wakeWindow = orchestrator.snapshot?.daytime.wakeWindowUsed ?? 180
-        let expectedDur = orchestrator.snapshot?.daytime.expectedDurationMinutes ?? 90
-
-        var anchor: Date = {
-            if let last = sortedNaps.last {
-                return last.date.addingTimeInterval(TimeInterval(last.effectiveDuration * 60))
-            }
-            return wakeUpTime ?? cal.date(bySettingHour: 7, minute: 0, second: 0, of: day) ?? day
-        }()
-
-        var result: [PredictedNapItem] = []
-        for slot in 0..<count {
-            let time: Date = slot == 0
-                ? (orchestrator.snapshot?.daytime.nextNapTime ?? anchor.addingMinutes(wakeWindow))
-                : anchor.addingMinutes(wakeWindow)
-            result.append(PredictedNapItem(time: time, duration: expectedDur))
-            anchor = time.addingMinutes(expectedDur)  // ← her slot için anchor ilerliyor
-        }
-        return result
     }
 
     private var dayTitle: String {
@@ -505,6 +471,7 @@ struct PredictedNapCard: View {
     let napNumber: Int
     let predictedTime: Date
     let expectedDuration: Int
+    var source: SleepPlanningSource = .recordedEstimate
 
     private let purple = Color(red: 0.55, green: 0.45, blue: 0.96)
 
@@ -552,7 +519,7 @@ struct PredictedNapCard: View {
     }
 
     private var estimatedBadge: some View {
-        Text("Estimated")
+        Text(source == .routine ? "Routine" : "Estimated")
             .font(.system(size: 9, weight: .semibold))
             .foregroundStyle(Color(.secondaryLabel))
             .padding(.horizontal, 6)
@@ -577,7 +544,7 @@ struct PredictedNapCard: View {
 struct NightSleepCard: View {
     let night: SleepRecord
     let napBreaks: [SleepRecord]
-    let allBreaks: [SleepRecord]
+    let accounting: SleepAccounting
     let onAddBreakTap: () -> Void
     let onEditTap: () -> Void
     let onLongPress: () -> Void
@@ -587,10 +554,8 @@ struct NightSleepCard: View {
     private let deepPurple = Color(red: 0.28, green: 0.18, blue: 0.68)
     private let midPurple  = Color(red: 0.38, green: 0.28, blue: 0.78)
 
-    private var netMinutes: Int { night.totalMinutes(breaks: allBreaks) }
-    private var napEnd: Date {
-        night.date.addingTimeInterval(TimeInterval(night.effectiveDuration * 60))
-    }
+    private var netMinutes: Int? { accounting.completedMinutes(sleepIDs: [night.id]) }
+    private var observedEnd: Date? { night.completedEnd(at: accounting.now) }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -616,32 +581,19 @@ struct NightSleepCard: View {
                     Text("Night Sleep")
                         .font(.system(size: 15, weight: .bold))
                         .foregroundStyle(Color(red: 0.85, green: 0.82, blue: 1.0))
-                    if night.isOngoing {
-                        Text("In progress · started \(ampm(night.date))")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(Color(red: 0.75, green: 0.70, blue: 0.95))
-                    } else {
-                        Text("\(ampm(night.date)) – \(ampm(napEnd))")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(Color(red: 0.75, green: 0.70, blue: 0.95))
-                    }
+                    Text(ampm(night.date) + (observedEnd.map { " – \(ampm($0))" } ?? " · End unconfirmed"))
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Color(red: 0.75, green: 0.70, blue: 0.95))
                 }
 
                 Spacer()
 
                 VStack(alignment: .trailing, spacing: 2) {
-                    if night.isOngoing {
-                        TimelineView(.periodic(from: .now, by: 60)) { _ in
-                            Text(TimeFormat.minutes(night.effectiveDuration))
-                                .font(.system(size: 16, weight: .bold, design: .rounded))
-                                .foregroundStyle(Color(red: 0.85, green: 0.82, blue: 1.0))
-                        }
-                        Text("Live")
-                            .font(.system(size: 10, weight: .bold))
+                    if netMinutes == nil {
+                        Text(observedEnd == nil ? "End unconfirmed" : "Net sleep unknown")
+                            .font(.system(size: 12, weight: .semibold))
                             .foregroundStyle(.white)
-                            .padding(.horizontal, 6).padding(.vertical, 2)
-                            .background(Capsule().fill(midPurple))
-                    } else {
+                    } else if let netMinutes {
                         Text(TimeFormat.minutes(netMinutes))
                             .font(.system(size: 16, weight: .bold, design: .rounded))
                             .foregroundStyle(Color(red: 0.85, green: 0.82, blue: 1.0))
@@ -690,7 +642,8 @@ struct NightSleepCard: View {
                                 .foregroundStyle(Color(red: 0.85, green: 0.82, blue: 1.0))
                                 .monospacedDigit()
                             Spacer()
-                            Text("\(br.duration) min")
+                            Text(br.completedEnd(at: accounting.now)
+                                .map { TimeFormat.minutes(Int($0.timeIntervalSince(br.date) / 60)) } ?? "End unconfirmed")
                                 .font(.subheadline)
                                 .foregroundStyle(Color(red: 0.75, green: 0.70, blue: 0.95))
                         }
@@ -749,6 +702,7 @@ struct NightSleepCard: View {
 
 struct PredictedBedtimeCard: View {
     let bedtime: Date
+    var source: SleepPlanningSource = .recordedEstimate
 
     private let deepPurple = Color(red: 0.28, green: 0.18, blue: 0.68)
     private let midPurple  = Color(red: 0.38, green: 0.28, blue: 0.78)
@@ -777,7 +731,7 @@ struct PredictedBedtimeCard: View {
                         .foregroundStyle(Color(.label).opacity(0.45))
                     estimatedBadge
                 }
-                Text("~\(ampm(bedtime)) estimated")
+                Text(source == .routine ? ampm(bedtime) : "~\(ampm(bedtime)) estimated")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(Color(.secondaryLabel).opacity(0.6))
             }
@@ -806,7 +760,7 @@ struct PredictedBedtimeCard: View {
     }
 
     private var estimatedBadge: some View {
-        Text("Estimated")
+        Text(source == .routine ? "Routine" : "Estimated")
             .font(.system(size: 9, weight: .semibold))
             .foregroundStyle(Color(.secondaryLabel))
             .padding(.horizontal, 6)
@@ -832,7 +786,7 @@ struct NapDetailCard: View {
     let napNumber: Int
     let nap: SleepRecord
     let napBreaks: [SleepRecord]
-    let allBreaks: [SleepRecord]
+    let accounting: SleepAccounting
     let onAddBreakTap: () -> Void
     let onEditTap: () -> Void
     let onLongPress: () -> Void
@@ -844,10 +798,8 @@ struct NapDetailCard: View {
 
     private var isNight: Bool { nap.kind == .nightSleep }
     private var napTint: Color { nap.isOngoing ? purple : (isNight ? deepPurple : purple) }
-    private var netMinutes: Int { nap.totalMinutes(breaks: allBreaks) }
-    private var napEnd: Date {
-        nap.date.addingTimeInterval(TimeInterval(nap.effectiveDuration * 60))
-    }
+    private var netMinutes: Int? { accounting.completedMinutes(sleepIDs: [nap.id]) }
+    private var napEnd: Date? { nap.completedEnd(at: accounting.now) }
     private var title: String { isNight ? "Night Sleep" : "Nap \(napNumber)" }
 
     var body: some View {
@@ -866,7 +818,7 @@ struct NapDetailCard: View {
                     Text(title)
                         .font(.system(size: 15, weight: .bold))
                         .foregroundStyle(napTint)
-                    Text("\(TimeFormat.ampm(nap.date)) – \(TimeFormat.ampm(napEnd))")
+                    Text(TimeFormat.ampm(nap.date) + (napEnd.map { " – \(TimeFormat.ampm($0))" } ?? " · End unconfirmed"))
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
@@ -875,20 +827,15 @@ struct NapDetailCard: View {
                 Spacer()
 
                 VStack(alignment: .trailing, spacing: 2) {
-                    if nap.isOngoing {
-                        TimelineView(.periodic(from: .now, by: 60)) { _ in
-                            Text(TimeFormat.minutes(nap.effectiveDuration))
-                                .font(.subheadline.weight(.bold))
-                                .foregroundStyle(napTint)
-                        }
-                        Text("In progress")
+                    if netMinutes == nil {
+                        Text(napEnd == nil ? "End unconfirmed" : "Net sleep unknown")
                             .font(.caption2.weight(.semibold))
                             .foregroundStyle(napTint)
-                    } else {
-                        Text(TimeFormat.minutes(nap.duration))
+                    } else if let netMinutes {
+                        Text(TimeFormat.minutes(netMinutes))
                             .font(.subheadline.weight(.bold))
                             .foregroundStyle(.primary)
-                        Text("Total")
+                        Text("Net sleep")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
@@ -921,17 +868,15 @@ struct NapDetailCard: View {
                 Divider().frame(height: 36)
 
                 VStack(spacing: 2) {
-                    if nap.isOngoing {
-                        TimelineView(.periodic(from: .now, by: 60)) { _ in
-                            Text(TimeFormat.minutes(netMinutes))
-                                .font(.subheadline.weight(.bold)).foregroundStyle(napTint)
-                        }
-                    } else {
+                    if let netMinutes {
                         Text(TimeFormat.minutes(netMinutes))
                             .font(.subheadline.weight(.bold)).foregroundStyle(.primary)
                             .accessibilityIdentifier("sleep.netSleep.\(nap.id)")
+                        Text("Net Sleep").font(.caption2).foregroundStyle(.secondary)
+                    } else {
+                        Text("Net sleep unknown").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                            .accessibilityIdentifier("sleep.netSleepUnknown.\(nap.id)")
                     }
-                    Text("Net Sleep").font(.caption2).foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity)
             }
@@ -962,7 +907,9 @@ struct NapDetailCard: View {
                         HStack {
                             Text(TimeFormat.ampm(br.date)).font(.subheadline).foregroundStyle(.primary).monospacedDigit()
                             Spacer()
-                            Text("\(br.duration) min").font(.subheadline).foregroundStyle(.secondary)
+                            Text(br.completedEnd(at: accounting.now)
+                                .map { TimeFormat.minutes(Int($0.timeIntervalSince(br.date) / 60)) } ?? "End unconfirmed")
+                                .font(.subheadline).foregroundStyle(.secondary)
                             Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
                         }
                         .padding(.horizontal, 14).padding(.vertical, 8)

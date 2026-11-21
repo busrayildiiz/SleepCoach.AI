@@ -19,10 +19,13 @@ struct HomeSleepCardPresentation {
 
     static func make(records: [SleepRecord], now: Date, calendar: Calendar,
                      estimate: Estimate? = nil, eligibilityVerified: Bool = false) -> Self {
-        let active = records.filter { $0.kind != .break && $0.isOngoing && $0.date <= now }
-            .max { $0.date < $1.date }
-        if let active {
-            return session(record: active, records: records, now: now, calendar: calendar)
+        let state = SleepStateCalculator.assess(records: records, wakes: [],
+            evaluation: .init(now: now, calendar: calendar))
+        if let active = state.active {
+            let record = active.record
+            return Self(status: .confirmed, kind: record.kind,
+                        napNumber: record.kind == .dayNap ? napSequence(records: records, start: record.date, id: record.id, now: now, calendar: calendar) : nil,
+                        start: record.date, elapsedMinutes: active.elapsed, expectedWake: nil, progress: nil)
         }
         if eligibilityVerified, let estimate, estimate.kind != .break,
            estimate.start <= now, estimate.wake > now, estimate.wake > estimate.start {
@@ -38,13 +41,14 @@ struct HomeSleepCardPresentation {
 
     static func session(record: SleepRecord, records: [SleepRecord], now: Date, calendar: Calendar) -> Self {
         guard record.kind != .break, record.date <= now,
-              record.isOngoing || record.observedEnd != nil else {
+              record.isOngoing || record.completedEnd(at: now) != nil else {
             return make(records: [], now: now, calendar: calendar)
         }
-        let end = record.isOngoing ? now : min(record.observedEnd ?? now, now)
+        let minutes = record.isOngoing ? Int(now.timeIntervalSince(record.date) / 60)
+            : SleepAccounting(records: records, now: now, calendar: calendar).completedMinutes(sleepIDs: [record.id])
         return Self(status: record.isOngoing ? .confirmed : .completed, kind: record.kind,
                     napNumber: record.kind == .dayNap ? napSequence(records: records, start: record.date, id: record.id, now: now, calendar: calendar) : nil,
-                    start: record.date, elapsedMinutes: max(0, Int(end.timeIntervalSince(record.date) / 60)),
+                    start: record.date, elapsedMinutes: minutes,
                     expectedWake: nil, progress: nil)
     }
 
@@ -84,13 +88,20 @@ struct HomeSleepCardPresentation {
         }
     }
     var duration: String { elapsedMinutes.map(TimeFormat.minutes) ?? "—" }
-    var durationLabel: String { status == .estimated ? "estimated" : "elapsed" }
+    var durationLabel: String {
+        switch status {
+        case .completed: return "net sleep"
+        case .estimated: return "estimated"
+        default: return "elapsed"
+        }
+    }
     func time(_ date: Date, relativeTo now: Date, calendar: Calendar) -> String {
         date.formatted(date: calendar.isDate(date, inSameDayAs: now) ? .omitted : .abbreviated, time: .shortened)
     }
     func detail(now: Date, calendar: Calendar) -> String {
         guard let start else { return "Record sleep to follow your baby's day." }
-        return "\(status == .estimated ? "Expected start" : "Started") \(time(start, relativeTo: now, calendar: calendar)) · \(duration) \(durationLabel)"
+        let measurement = elapsedMinutes == nil && status == .completed ? "Net sleep unknown" : "\(duration) \(durationLabel)"
+        return "\(status == .estimated ? "Expected start" : "Started") \(time(start, relativeTo: now, calendar: calendar)) · \(measurement)"
     }
     func accessibility(now: Date, calendar: Calendar) -> String {
         "\(section). \(title). \(detail(now: now, calendar: calendar)) Expected wake: \(expectedWake.map { time($0, relativeTo: now, calendar: calendar) } ?? "not estimated")."

@@ -200,7 +200,9 @@ final class RecordingNavigationTests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Add Awake Break"].waitForExistence(timeout: 5))
         let parent = app.buttons["recording.parent"]
         XCTAssertTrue(parent.label.contains("Night Sleep"), parent.label)
-        XCTAssertTrue(parent.label.contains("still sleeping"), parent.label)
+        XCTAssertTrue(parent.label.contains("end unconfirmed"), parent.label)
+        XCTAssertFalse(app.staticTexts["recording.netSleep"].exists)
+        XCTAssertFalse(app.staticTexts["recording.resultingNetSleep"].exists)
         capture("recording-awake-ongoing-accessibility", app: app)
         app.buttons["recording.cancel"].tap()
         waitForDismissal(of: app.navigationBars["Add Awake Break"])

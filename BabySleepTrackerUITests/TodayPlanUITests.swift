@@ -262,7 +262,7 @@ final class TodayPlanUITests: XCTestCase {
                 XCTAssertTrue(hero.label.contains("Good morning"), hero.label)
             }
             capture(scenario, app: app)
-            assertOvernightLayout(app: app, elapsed: scenario == "morning-grace" ? "12h 45m" : "7h 10m")
+            assertOvernightLayout(app: app, elapsed: scenario == "morning-grace" ? nil : "7h 10m")
             assertCompactCard(app: app)
             app.terminate()
         }
@@ -339,13 +339,15 @@ final class TodayPlanUITests: XCTestCase {
         assertUnavailableIsDetailOnly(app: app)
     }
 
-    private func assertOvernightLayout(app: XCUIApplication, elapsed: String) {
+    private func assertOvernightLayout(app: XCUIApplication, elapsed: String?) {
         let night = event("record:\(parentID)", app: app)
         let wake = app.descendants(matching: .any).matching(identifier: "home.plan.wakeReference").firstMatch
         let duration = app.descendants(matching: .any).matching(identifier: "home.plan.overnight.elapsed")
-        XCTAssertEqual(duration.count, 1, "Elapsed time is shown once on the overnight card.")
+        XCTAssertEqual(duration.count, elapsed == nil ? 0 : 1, "Only a current recording shows elapsed time.")
         let badge = duration.firstMatch
-        XCTAssertTrue(badge.label.contains("Night sleep") && badge.label.contains(elapsed + " elapsed since recorded start"), badge.label)
+        if let elapsed {
+            XCTAssertTrue(badge.label.contains("Night sleep") && badge.label.contains(elapsed + " elapsed since recorded start"), badge.label)
+        }
         XCTAssertEqual(app.staticTexts["home.plan.title"].label, "Today's Plan")
         XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "home.plan.overnightBadge").firstMatch.exists)
         XCTAssertFalse(app.scrollViews["home.plan.scroll"].exists, "Both overnight nodes fit the default compact layout.")
@@ -354,8 +356,10 @@ final class TodayPlanUITests: XCTestCase {
         // Accessibility bounds include the active halo above its circle, but not
         // the neutral node's empty top padding. Compare the common caption edge.
         XCTAssertEqual(night.frame.maxY, wake.frame.maxY, accuracy: 2, "Both nodes retain aligned caption rows.")
-        XCTAssertEqual(badge.frame.midX, (night.frame.midX + wake.frame.midX) / 2, accuracy: 3)
-        XCTAssertGreaterThan(badge.frame.minY, night.frame.minY + 28, "Duration sits below the connector.")
+        if elapsed != nil {
+            XCTAssertEqual(badge.frame.midX, (night.frame.midX + wake.frame.midX) / 2, accuracy: 3)
+            XCTAssertGreaterThan(badge.frame.minY, night.frame.minY + 28, "Duration sits below the connector.")
+        }
         XCTAssertFalse(night.label.contains("elapsed") || wake.label.contains("elapsed"))
         assertCompactCard(app: app, maximumHeight: 220)
     }

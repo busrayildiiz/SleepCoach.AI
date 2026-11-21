@@ -118,3 +118,78 @@ final class SleepStateCalculatorTests: XCTestCase {
         SleepRecord(date: calendar.date(bySettingHour: hour, minute: 0, second: 0, of: now)!, duration: duration, kind: kind, isOngoing: ongoing)
     }
 }
+
+extension SleepStateCalculatorTests {
+    func testLegacyUnknownEndRemainsReviewableAndCannotBecomeActive() {
+        let day = calendar.startOfDay(for: now)
+        let wake = DailyWakeRecord(day: day, wakeTime: day.addingTimeInterval(7 * 3600))
+        let legacy = SleepRecord(date: day.addingTimeInterval(8 * 3600), duration: 0)
+        let confirmation = StillSleepingConfirmation(record: legacy, date: now.addingTimeInterval(-60))
+        let state = SleepStateCalculator.assess(records: [legacy], wakes: [wake],
+            evaluation: .init(now: now, calendar: calendar, confirmation: confirmation))
+        XCTAssertEqual(state.unavailableReason, .unresolved)
+        XCTAssertNil(state.active)
+        XCTAssertNil(state.anchor)
+        XCTAssertEqual(state.recordedWake?.id, wake.id)
+        XCTAssertEqual(state.reviewRecord?.id, legacy.id)
+        XCTAssertNil(state.reviewRecord?.observedEnd)
+    }
+
+    func testUnconfirmedNightAndNapExpireAtExactElapsedLimits() {
+        for (kind, hours) in [(SleepKind.nightSleep, 24.0), (.dayNap, 4.0)] {
+            let start = now.addingTimeInterval(-hours * 3600)
+            let record = SleepRecord(date: start, duration: 0, kind: kind, isOngoing: true, createdAt: now)
+            let prior = SleepStateCalculator.assess(records: [record], wakes: [],
+                evaluation: .init(now: now.addingTimeInterval(-1), calendar: calendar))
+            XCTAssertEqual(prior.active?.record.id, record.id)
+            for later in [now, start.addingTimeInterval(48 * 3600), start.addingTimeInterval(121 * 3600)] {
+                let expired = SleepStateCalculator.assess(records: [record], wakes: [],
+                    evaluation: .init(now: later, calendar: calendar))
+                XCTAssertNil(expired.active)
+                XCTAssertNil(expired.anchor)
+                XCTAssertEqual(expired.reviewRecord?.id, record.id)
+                XCTAssertNil(expired.reviewRecord?.observedEnd)
+            }
+        }
+    }
+
+    func testNewerConfirmationAndLaterWakeResolveByObservedTimeAndRevision() {
+        let day = calendar.startOfDay(for: now)
+        func at(_ hour: Double) -> Date { day.addingTimeInterval(hour * 3600) }
+        var night = SleepRecord(date: at(-4), duration: 0, kind: .nightSleep, isOngoing: true, createdAt: at(8.5))
+        night.persistedRevision = UUID()
+        let oldWake = DailyWakeRecord(day: day, wakeTime: at(7))
+        let newWake = DailyWakeRecord(day: day, wakeTime: at(9))
+        let confirmation = StillSleepingConfirmation(record: night, date: at(8))
+        func assess(_ records: [SleepRecord], wakes: [DailyWakeRecord], at time: Date) -> SleepStateAssessment {
+            SleepStateCalculator.assess(records: records, wakes: wakes,
+                evaluation: .init(now: time, calendar: calendar, routine: .init(wakeHour: 7), confirmation: confirmation))
+        }
+
+        XCTAssertEqual(assess([night], wakes: [oldWake], at: at(7.75)).anchor?.date, at(7))
+        let sleeping = assess([night], wakes: [oldWake], at: at(8))
+        XCTAssertEqual(sleeping.active?.confirmation, at(8))
+        XCTAssertNil(sleeping.active?.elapsed)
+        XCTAssertNil(sleeping.anchor)
+        XCTAssertEqual(assess([night], wakes: [newWake], at: at(9)).anchor?.date, at(9))
+        XCTAssertEqual(assess([night], wakes: [oldWake, newWake], at: at(9)).unavailableReason, .conflict)
+        XCTAssertNil(assess([night], wakes: [oldWake], at: at(9.5)).anchor)
+
+        night.persistedRevision = UUID()
+        let changed = assess([night], wakes: [oldWake], at: at(8))
+        XCTAssertNil(changed.active)
+        XCTAssertEqual(changed.anchor?.date, at(7))
+    }
+
+    func testAfterMidnightNightUsesFirstSameMorningWake() {
+        let night = record(hour: 2, kind: .nightSleep, ongoing: true, duration: 0)
+        let wake = calendar.date(bySettingHour: 7, minute: 0, second: 0, of: now)!
+        let grace = wake.addingTimeInterval(30 * 60)
+        let routine = SleepRoutine(wakeHour: 7, bedHour: 19)
+        XCTAssertEqual(routine.wake(after: night.date, calendar: calendar), wake)
+        let boundary = SleepStateCalculator.assess(records: [night], wakes: [],
+            evaluation: .init(now: grace, calendar: calendar, routine: routine))
+        XCTAssertNil(boundary.active)
+        XCTAssertEqual(boundary.reminderNight?.id, night.id)
+    }
+}

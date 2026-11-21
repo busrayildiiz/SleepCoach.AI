@@ -85,9 +85,10 @@ final class OvertiredCalculator {
     /// Akşam WW: 210–240 dk → ideal yatış: 18:45–19:30
     func bedtimeWindow(
         lastNapEndTime: Date,
-        totalDaytimeSleepMinutes: Int,
+        totalDaytimeSleepMinutes: Int?,
         ageMonths: Int,
-        now: Date = Date()
+        now: Date = Date(),
+        using calendar: Calendar? = nil
     ) -> BedtimeWindow {
 
         let profile  = profileProvider.profile(forAgeMonths: ageMonths)
@@ -103,8 +104,8 @@ final class OvertiredCalculator {
 
         // Gündüz uykusu eksikse yatışı erkene al
         // Kural: her 3 dk eksik gündüz uykusu = 1 dk erken yatış
-        let daytimeDeficit = max(0, profile.daytimeSleepRange.lowerBound - totalDaytimeSleepMinutes)
-        let adjustment     = daytimeDeficit / 3
+        let daytimeDeficit = totalDaytimeSleepMinutes.map { max(0, profile.daytimeSleepRange.lowerBound - $0) }
+        let adjustment     = daytimeDeficit.map { $0 / 3 } ?? 0
 
         let adjustedEarliest = earliest.addingMinutes(-adjustment)
         let adjustedIdeal    = ideal.addingMinutes(-adjustment)
@@ -116,10 +117,11 @@ final class OvertiredCalculator {
         // a stale last-nap timestamp, an outsized deficit adjustment, etc).
         // Clamp back into the profile's own bedtime range on the same day
         // as the last nap rather than surfacing a nonsense time like 5 AM.
-        let clampedEarliest = clampToPlausibleBedtime(adjustedEarliest, referenceDay: lastNapEndTime, profile: profile)
-        let clampedIdeal     = clampToPlausibleBedtime(adjustedIdeal, referenceDay: lastNapEndTime, profile: profile)
-        let clampedLatest    = clampToPlausibleBedtime(adjustedLatest, referenceDay: lastNapEndTime, profile: profile)
-        let clampedCritical  = clampToPlausibleBedtime(critical, referenceDay: lastNapEndTime, profile: profile)
+        let calendar = calendar ?? self.calendar
+        let clampedEarliest = clampToPlausibleBedtime(adjustedEarliest, referenceDay: lastNapEndTime, profile: profile, calendar: calendar)
+        let clampedIdeal     = clampToPlausibleBedtime(adjustedIdeal, referenceDay: lastNapEndTime, profile: profile, calendar: calendar)
+        let clampedLatest    = clampToPlausibleBedtime(adjustedLatest, referenceDay: lastNapEndTime, profile: profile, calendar: calendar)
+        let clampedCritical  = clampToPlausibleBedtime(critical, referenceDay: lastNapEndTime, profile: profile, calendar: calendar)
 
         // Şu anki risk
         let risk = overtiredRisk(
@@ -159,7 +161,8 @@ final class OvertiredCalculator {
     private func clampToPlausibleBedtime(
         _ date: Date,
         referenceDay: Date,
-        profile: AgeBasedSleepProfile
+        profile: AgeBasedSleepProfile,
+        calendar: Calendar
     ) -> Date {
         let day = calendar.startOfDay(for: referenceDay)
 
@@ -177,10 +180,10 @@ final class OvertiredCalculator {
     // MARK: - Last Nap Cutoff
 
     /// Bu saatten sonra nap başlarsa gece uykusunu bozar
-    func lastNapCutoffTime(ageMonths: Int, on date: Date = Date()) -> Date {
+    func lastNapCutoffTime(ageMonths: Int, on date: Date = Date(), using calendar: Calendar? = nil) -> Date {
         let profile    = profileProvider.profile(forAgeMonths: ageMonths)
         let cutoffHour = profile.lastNapCutoffHour
-        return calendar.date(
+        return (calendar ?? self.calendar).date(
             bySettingHour:   cutoffHour,
             minute:          0,
             second:          0,
@@ -223,7 +226,7 @@ final class OvertiredCalculator {
         lastNapEnd:     Date,
         idealBedtime:   Date,
         ewwMinutes:     Int,
-        daytimeDeficit: Int,
+        daytimeDeficit: Int?,
         adjustment:     Int,
         ageMonths:      Int
     ) -> String {
@@ -236,7 +239,7 @@ final class OvertiredCalculator {
         parts.append("Son nap \(formatter.string(from: lastNapEnd))'de bitti.")
         parts.append("\(ageMonths) aylık için akşam uyanıklık penceresi ~\(ewwMinutes) dk.")
 
-        if adjustment > 0 {
+        if let daytimeDeficit, adjustment > 0 {
             parts.append("Gündüz uykusu \(daytimeDeficit) dk eksik — yatış \(adjustment) dk öne alındı.")
         }
 
