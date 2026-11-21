@@ -31,7 +31,9 @@ struct RootView: View {
     @State private var storageFailure = SecureDataStore.shared.failureMessage
 
     var body: some View {
-        Group {
+        // Keep lifecycle and privacy modifiers on one stable hosting container,
+        // rather than forwarding them through the conditional route's children.
+        ZStack {
             if storageAvailable {
                 routedContent
             } else {
@@ -189,9 +191,16 @@ private struct AppPrivacyShield: UIViewRepresentable {
         }
 
         func attach(to scene: UIWindowScene?) {
+            guard self.scene !== scene else { return }
             hide()
             self.scene = scene
-            if let scene, scene.activationState != .foregroundActive { show() }
+            // didMoveToWindow runs while SwiftUI is attaching its navigation
+            // controllers. Presenting another window inside that traversal can
+            // reenter UIKit's navigation-bar layout before containment is ready.
+            DispatchQueue.main.async { [weak self, weak scene] in
+                guard let self, let scene, self.scene === scene else { return }
+                if scene.activationState != .foregroundActive { self.show() }
+            }
         }
 
         @objc private func show() {
@@ -214,8 +223,9 @@ private struct AppPrivacyShield: UIViewRepresentable {
             window.rootViewController = controller
             window.isUserInteractionEnabled = false
             window.accessibilityViewIsModal = true
-            window.isHidden = false
+            // Install the guard before UIKit emits any visibility callbacks.
             cover = window
+            window.isHidden = false
         }
 
         @objc private func hide() {
@@ -225,6 +235,7 @@ private struct AppPrivacyShield: UIViewRepresentable {
 
         func stop() {
             hide()
+            scene = nil // Invalidate any deferred initial presentation.
             NotificationCenter.default.removeObserver(self)
         }
 

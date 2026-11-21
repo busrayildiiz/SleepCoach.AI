@@ -41,8 +41,14 @@ final class SecureDataStoreNativeTests: XCTestCase {
             let fileAttributes = try FileManager.default.attributesOfItem(
                 atPath: directory.appendingPathComponent("private-data-v1.bin").path)
             let directoryAttributes = try FileManager.default.attributesOfItem(atPath: directory.path)
-            XCTAssertEqual(fileAttributes[.protectionKey] as? FileProtectionType, .complete)
-            XCTAssertEqual(directoryAttributes[.protectionKey] as? FileProtectionType, .complete)
+            let fileProtection = try XCTUnwrap(
+                (fileAttributes[.protectionKey] as? FileProtectionType)?.rawValue
+                    ?? fileAttributes[.protectionKey] as? String)
+            let directoryProtection = try XCTUnwrap(
+                (directoryAttributes[.protectionKey] as? FileProtectionType)?.rawValue
+                    ?? directoryAttributes[.protectionKey] as? String)
+            XCTAssertEqual(fileProtection, FileProtectionType.complete.rawValue)
+            XCTAssertEqual(directoryProtection, FileProtectionType.complete.rawValue)
         }
     }
 }

@@ -165,9 +165,24 @@ extension LLMResponseParsingPropertyTests {
         let nap = SleepRecord(date: day.addingTimeInterval(12 * 3600), duration: 60)
         let awake = SleepRecord(date: nap.date.addingTimeInterval(15 * 60), duration: 15, kind: .break, parentNapID: night.id)
         let missingEnd = SleepRecord(date: day.addingTimeInterval(14 * 3600), duration: 0, isOngoing: true)
-        let text = DefaultSleepCoachLLMAgent().buildLast7DaysSummary(records: [night, nap, awake, missingEnd],
-                                                                    now: now, calendar: calendar)
-        XCTAssertTrue(text.contains("Thu Jan 1: 1 completed nap(s). Completed-recorded subtotal: 45m · Incomplete"), text)
+        let records = [night, nap, awake, missingEnd]
+        let text = sut.buildLast7DaysSummary(records: records, now: now, calendar: calendar)
+        XCTAssertTrue(text.contains("Today: 1 completed nap(s). Completed-recorded subtotal: 45m · Incomplete"), text)
         XCTAssertFalse(text.contains("2 completed nap(s)"), text)
+
+        let labels = text.split(separator: "\n").map { String($0.prefix { $0 != ":" }) }
+        XCTAssertEqual(labels, ["- Today"] + (1...6).map { "- \($0) day(s) ago" })
+        XCTAssertFalse(text.contains("Thu Jan 1"), "The provider summary must omit absolute calendar dates.")
+
+        // Moving the same observations to different calendar dates must not reveal those dates.
+        let shift = TimeInterval(400 * 24 * 3600)
+        let shiftedRecords = records.map {
+            SleepRecord(id: $0.id, date: $0.date.addingTimeInterval(shift), duration: $0.duration,
+                        kind: $0.kind, parentNapID: $0.parentNapID, isOngoing: $0.isOngoing,
+                        createdAt: $0.createdAt.addingTimeInterval(shift),
+                        endDate: $0.endDate?.addingTimeInterval(shift))
+        }
+        XCTAssertEqual(sut.buildLast7DaysSummary(records: shiftedRecords,
+                                               now: now.addingTimeInterval(shift), calendar: calendar), text)
     }
 }
