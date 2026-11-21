@@ -99,6 +99,8 @@ struct LearningEvidenceSnapshot {
     var sleeps: [LearningSleepEvidence]
     var wakes: [LearningWakeEvidence]
     var daytime: [LearningDaytimeEvidence] = []
+    /// False means protected storage could not be read, never an empty observed history.
+    var storageIsReadable: Bool = true
 
     /// Compatibility bridge only. Legacy storage does not prove provenance or complete nap coverage.
     init(records: [SleepRecord], wakeRecords: [DailyWakeRecord]) {
@@ -107,10 +109,11 @@ struct LearningEvidenceSnapshot {
     }
 
     init(sleeps: [LearningSleepEvidence], wakes: [LearningWakeEvidence],
-         daytime: [LearningDaytimeEvidence] = []) {
+         daytime: [LearningDaytimeEvidence] = [], storageIsReadable: Bool = true) {
         self.sleeps = sleeps
         self.wakes = wakes
         self.daytime = daytime
+        self.storageIsReadable = storageIsReadable
     }
 }
 
@@ -179,6 +182,7 @@ struct LearningEligibilityEvaluation: Equatable {
         case unavailable, eligibleUnderPolicy, unconfiguredPolicy, invalidPolicy, unsupportedAge, invalidEvidence
     }
     enum Reason: String, Equatable {
+        case storageUnavailable
         case policyUnavailable, policyInvalid, invalidTimestamp, unsupportedAge, insufficientQualifyingDays
         case insufficientRecentDays, latestQualifyingDayTooOld, noQualifyingDays
     }

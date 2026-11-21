@@ -9,14 +9,11 @@ struct ProfileEditSheet: View {
 
     @Environment(\.dismiss) private var dismiss
 
-    // MARK: - Stored values (AppStorage)
-    @AppStorage("parentName")        private var parentName:        String = ""
-    @AppStorage("babyName")          private var babyName:          String = ""
-    @AppStorage("babyGender")        private var babyGender:        String = "Prefer not to say"
-    @AppStorage("typicalWakeHour")   private var typicalWakeHour:   Double = 07.0
-    @AppStorage("typicalWakeMinute") private var typicalWakeMinute: Double = 0.0
-    @AppStorage("typicalBedHour")    private var typicalBedHour:    Double = 19.0  // 19:00
-    @AppStorage("typicalBedMinute")  private var typicalBedMinute:  Double = 30.0
+    // MARK: - Protected profile values
+    @SecureStorage("typicalWakeHour")   private var typicalWakeHour:   Double = 07.0
+    @SecureStorage("typicalWakeMinute") private var typicalWakeMinute: Double = 0.0
+    @SecureStorage("typicalBedHour")    private var typicalBedHour:    Double = 19.0  // 19:00
+    @SecureStorage("typicalBedMinute")  private var typicalBedMinute:  Double = 30.0
 
     // MARK: - Local edit state
     @State private var editParentName:  String = ""
@@ -30,8 +27,10 @@ struct ProfileEditSheet: View {
     @State private var parentNameError: String? = nil
     @State private var babyNameError:   String? = nil
     @State private var showSavedBanner  = false
+    @State private var storageError: String? = nil
+    @State private var profileLoaded = false
 
-    // Doğum tarihi UserDefaults'ta Date olarak saklanıyor
+    // Birth date is stored in the encrypted profile payload.
     private let birthDateKey = "babyBirthDate"
 
     // MARK: - Computed
@@ -82,11 +81,22 @@ struct ProfileEditSheet: View {
                     Button("Save") { saveIfValid() }
                         .font(.headline)
                         .foregroundStyle(Color(hex: "6B63D8"))
+                        .disabled(!profileLoaded)
                 }
             }
             .overlay(savedBanner, alignment: .top)
         }
         .onAppear { loadCurrentValues() }
+        .privacySensitive()
+        .alert("Profile unavailable", isPresented: Binding(
+            get: { storageError != nil },
+            set: { if !$0 { storageError = nil } }
+        )) {
+            Button("Try Again") { loadCurrentValues() }
+            Button("Cancel", role: .cancel) { dismiss() }
+        } message: {
+            Text(storageError ?? "Please unlock your device and try again.")
+        }
     }
 
     // MARK: - Avatar Header
@@ -372,17 +382,24 @@ struct ProfileEditSheet: View {
     // MARK: - Load / Save
 
     private func loadCurrentValues() {
-        editParentName = UserDefaults.standard.string(forKey: "parentName") ?? ""
-        editBabyName   = UserDefaults.standard.string(forKey: "babyName") ?? ""
-        editBabyGender = UserDefaults.standard.string(forKey: "babyGender") ?? "Prefer not to say"
+        profileLoaded = false
+        guard SecureDataStore.shared.isAvailable else {
+            storageError = SecureDataStore.shared.failureMessage
+                ?? "Please unlock your device and try again."
+            return
+        }
+        editParentName = SecureDataStore.shared.string(forKey: "parentName") ?? ""
+        editBabyName   = SecureDataStore.shared.string(forKey: "babyName") ?? ""
+        editBabyGender = SecureDataStore.shared.string(forKey: "babyGender") ?? "Prefer not to say"
 
         // Doğum tarihi
-        if let saved = UserDefaults.standard.object(forKey: birthDateKey) as? Date {
+        if let saved = SecureDataStore.shared.object(forKey: birthDateKey) as? Date {
             editBirthDate = saved
-        } else if let ts = UserDefaults.standard.object(forKey: birthDateKey) as? Double {
+        } else if let ts = SecureDataStore.shared.object(forKey: birthDateKey) as? Double {
             editBirthDate = Date(timeIntervalSince1970: ts)
         } else {
-            editBirthDate = Calendar.current.date(byAdding: .month, value: -9, to: Date()) ?? Date()
+            storageError = "Your saved birth date is unavailable. Please reopen profile setup."
+            return
         }
 
         // Wake time
@@ -396,6 +413,8 @@ struct ProfileEditSheet: View {
             hour:   Int(typicalBedHour),
             minute: Int(typicalBedMinute)
         )
+        storageError = nil
+        profileLoaded = true
     }
 
     private func saveIfValid() {
@@ -413,25 +432,26 @@ struct ProfileEditSheet: View {
             valid = false
         }
 
-        guard valid else { return }
+        guard valid, profileLoaded else { return }
 
-        // AppStorage'a yaz
-        parentName = pName
-        babyName   = bName
-        babyGender = editBabyGender
-
-        // Doğum tarihi
-        UserDefaults.standard.set(editBirthDate, forKey: birthDateKey)
-
-        // Wake time bileşenleri
         let wakeComps = Calendar.current.dateComponents([.hour, .minute], from: editWakeTime)
-        typicalWakeHour   = Double(wakeComps.hour   ?? 7)
-        typicalWakeMinute = Double(wakeComps.minute  ?? 0)
-
-        // Bedtime bileşenleri
         let bedComps = Calendar.current.dateComponents([.hour, .minute], from: editBedtime)
-        typicalBedHour   = Double(bedComps.hour   ?? 19)
-        typicalBedMinute = Double(bedComps.minute  ?? 30)
+        do {
+            try SecureDataStore.shared.write([
+                "parentName": pName,
+                "babyName": bName,
+                "babyGender": editBabyGender,
+                birthDateKey: editBirthDate,
+                "typicalWakeHour": Double(wakeComps.hour ?? 7),
+                "typicalWakeMinute": Double(wakeComps.minute ?? 0),
+                "typicalBedHour": Double(bedComps.hour ?? 19),
+                "typicalBedMinute": Double(bedComps.minute ?? 30)
+            ])
+        } catch {
+            storageError = SecureDataStore.shared.failureMessage
+                ?? "Your profile could not be saved. Please try again."
+            return
+        }
 
         // Orchestrator'ı tetikle — yeni profil verisi ile snapshot yenile
         // SleepListView .onReceive ile bu notification'ı dinleyip generate() çağırıyor.

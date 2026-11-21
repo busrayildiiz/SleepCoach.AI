@@ -434,11 +434,14 @@ enum TodayPlanUITestFixture {
     }
     static func prepare() {
         let defaults = UserDefaults.standard
+        do { try SecureDataStore.shared.eraseAll() }
+        catch { return }
         if let domain = Bundle.main.bundleIdentifier { defaults.removePersistentDomain(forName: domain) }
         defaults.set(true, forKey: "authComplete")
         defaults.set(true, forKey: "onboardingComplete")
-        defaults.set("Alex", forKey: "parentName")
-        defaults.set("Baby", forKey: "babyName")
+        SecureDataStore.shared.set(true, forKey: "profileSetupComplete_v1")
+        SecureDataStore.shared.set("Alex", forKey: "parentName")
+        SecureDataStore.shared.set("Baby", forKey: "babyName")
         defaults.set(ProcessInfo.processInfo.environment["TODAY_PLAN_DARK"] == "1" ? "dark" : "light", forKey: "appAppearance")
         var records: [SleepRecord] = []
         var wakes: [DailyWakeRecord] = []
@@ -472,9 +475,9 @@ enum TodayPlanUITestFixture {
         default: break
         }
         if ["overnight-routine", "overnight-estimate", "morning-grace", "night-before-midnight", "night-after-midnight"].contains(scenario) {
-            defaults.set(7.0, forKey: "typicalWakeHour")
-            defaults.set(0.0, forKey: "typicalWakeMinute")
-            defaults.set(19.0, forKey: "typicalBedHour")
+            SecureDataStore.shared.set(7.0, forKey: "typicalWakeHour")
+            SecureDataStore.shared.set(0.0, forKey: "typicalWakeMinute")
+            SecureDataStore.shared.set(19.0, forKey: "typicalBedHour")
         }
         SleepRecordPersistence().save(records)
         DailyWakeRecordPersistence().save(wakes)

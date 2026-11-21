@@ -33,6 +33,7 @@ let package = Package(name: "TrustedObservationsPortable",
     swiftLanguageModes: [.v5])
 ''')
 files = [
+    'Services/SecureDataStore.swift', 'Services/CloudAIPrivacy.swift', 'Config/APIConfig.swift',
     'Utils/Date+Extensions.swift', 'Utils/TimeFormat.swift',
     'Models/SleepRecord.swift', 'Models/DailyWakeRecord.swift', 'Models/LearningEligibility.swift',
     'Services/ObservationProvenance.swift', 'Services/SleepRecordPersistence.swift',
@@ -85,7 +86,10 @@ def methods(content):
 excluded = {'BabySleepTrackerTests.SleepRecordingFlowTests/testOnlyRecordingRoutesUseFullScreenPresentation'}
 source_methods = set()
 selected_methods = set()
+shutil.copyfile(root / 'BabySleepTrackerTests/PrivateDataStoreTestSupport.swift',
+                tests / 'PrivateDataStoreTestSupport.swift')
 for name in [
+    'SecureDataStoreTests', 'CloudAIPrivacyTests',
     'TrustedObservationCorrectionTests', 'TrustedObservationTests', 'LearningEligibilityEvaluatorTests', 'SleepRecordPersistenceTests',
     'DailyWakeRecordPersistenceTests', 'SleepWakeTimeWorkflowTests', 'SleepRecordTests',
     'DailyWakeRecordTests', 'SleepOverviewCalculatorTests',

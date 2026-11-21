@@ -53,12 +53,15 @@ extension DaytimePredictionAgentProtocol {
 final class DefaultDaytimePredictionAgent: DaytimePredictionAgentProtocol {
 
     private let calendar:        Calendar
+    private let defaults: any PrivateDataStore
     private let profileProvider: AgeBasedSleepProfileProviding
 
     init(
         profileProvider: AgeBasedSleepProfileProviding = DefaultAgeBasedSleepProfileProvider(),
-        calendar:        Calendar = .current
+        calendar:        Calendar = .current,
+        defaults: any PrivateDataStore = SecureDataStore.shared
     ) {
+        self.defaults = defaults
         self.profileProvider = profileProvider
         self.calendar        = calendar
     }
@@ -75,7 +78,7 @@ final class DefaultDaytimePredictionAgent: DaytimePredictionAgentProtocol {
         planning:     SleepPredictionContext?
     ) -> DaytimePredictionAgent {
         let context = planning ?? SleepPredictionContext(records: todayRecords, wakes: wakeRecords,
-            evaluation: .init(now: now, calendar: calendar, routine: .load(defaults: .standard)))
+            evaluation: .init(now: now, calendar: calendar, routine: .load(defaults: defaults)))
         let evaluation = context.evaluation
         let profile = profileProvider.profile(forAgeMonths: ageMonths)
         let assessment = context.assessment

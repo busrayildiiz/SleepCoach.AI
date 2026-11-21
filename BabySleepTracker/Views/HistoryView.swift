@@ -22,7 +22,7 @@ struct HistoryView: View {
     
     @State private var selectedTimelineRecord: SleepRecord? = nil
 
-    @AppStorage("babyName") private var babyName: String = "Baby"
+    @SecureStorage("babyName") private var babyName: String = "Baby"
 
     private let calendar = Calendar.current
     private let nowTimer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
@@ -494,7 +494,8 @@ struct HistoryView: View {
             .onReceive(nowTimer) { calculationDate = $0 }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.significantTimeChangeNotification)) { _ in calculationDate = Date() }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in calculationDate = Date() }
-            .onReceive(NotificationCenter.default.publisher(for: .sleepRecordsDidChange)) { _ in
+            .onReceive(NotificationCenter.default.publisher(for: .sleepRecordsDidChange)
+                .receive(on: RunLoop.main)) { _ in
                 loadRecords()
             }
             .sheet(item: $selectedTimelineRecord) { record in

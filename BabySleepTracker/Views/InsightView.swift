@@ -26,7 +26,7 @@ struct InsightsView: View {
     @State private var manualActionOverrides: [String: Bool] = [:]
     @StateObject private var orchestrator = SleepCoachOrchestrator.shared
     
-    @AppStorage("babyName") private var babyName: String = "Baby"
+    @SecureStorage("babyName") private var babyName: String = "Baby"
 
     var body: some View {
         NavigationStack {
@@ -59,8 +59,10 @@ struct InsightsView: View {
                 orchestrator.loadCachedLLMResponse()
                 refresh()
             }
-            .onReceive(NotificationCenter.default.publisher(for: .sleepRecordsDidChange)) { _ in refresh() }
-            .onReceive(NotificationCenter.default.publisher(for: .dailyWakeRecordsDidChange)) { _ in refresh() }
+            .onReceive(NotificationCenter.default.publisher(for: .sleepRecordsDidChange)
+                .receive(on: RunLoop.main)) { _ in refresh() }
+            .onReceive(NotificationCenter.default.publisher(for: .dailyWakeRecordsDidChange)
+                .receive(on: RunLoop.main)) { _ in refresh() }
             .environment(\.locale, Locale(identifier: "en_US"))
         }
     }

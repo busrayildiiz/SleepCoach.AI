@@ -8,11 +8,15 @@
 import Foundation
 import UIKit
 
-/// Merkezi depolama yöneticisi - tüm UserDefaults çağrıları buradan geçer
+/// Sensitive app data uses the shared protected store.
 final class SleepMemoryStore {
     static let shared = SleepMemoryStore()
 
-    private let defaults = UserDefaults.standard
+    private let defaults: any PrivateDataStore
+
+    init(defaults: any PrivateDataStore = SecureDataStore.shared) {
+        self.defaults = defaults
+    }
 
     // MARK: - Storage Keys
 
@@ -31,7 +35,8 @@ final class SleepMemoryStore {
         SleepRecordPersistence(defaults: defaults).load() ?? []
     }
 
-    func saveSleepRecords(_ records: [SleepRecord]) {
+    @discardableResult
+    func saveSleepRecords(_ records: [SleepRecord]) -> Bool {
         SleepRecordPersistence(defaults: defaults).save(records)
     }
 
@@ -41,7 +46,8 @@ final class SleepMemoryStore {
         DailyWakeRecordPersistence(defaults: defaults).load() ?? []
     }
 
-    func saveDailyWakeRecords(_ records: [DailyWakeRecord]) {
+    @discardableResult
+    func saveDailyWakeRecords(_ records: [DailyWakeRecord]) -> Bool {
         DailyWakeRecordPersistence(defaults: defaults).save(records)
     }
 
@@ -53,8 +59,11 @@ final class SleepMemoryStore {
         return value.isEmpty ? "Baby" : value
     }
 
-    func setBabyName(_ name: String) {
+    @discardableResult
+    func setBabyName(_ name: String) -> Bool {
+        guard defaults.isAvailable else { return false }
         defaults.set(name, forKey: Keys.babyName.rawValue)
+        return defaults.isAvailable && defaults.string(forKey: Keys.babyName.rawValue) == name
     }
 
     func getBabyBirthDate() -> Date? {
@@ -66,8 +75,11 @@ final class SleepMemoryStore {
         return nil
     }
 
-    func setBabyBirthDate(_ date: Date) {
+    @discardableResult
+    func setBabyBirthDate(_ date: Date) -> Bool {
+        guard defaults.isAvailable else { return false }
         defaults.set(date, forKey: Keys.babyBirthDate.rawValue)
+        return defaults.isAvailable && defaults.object(forKey: Keys.babyBirthDate.rawValue) as? Date == date
     }
 
     // MARK: - Avatar Image
@@ -77,8 +89,11 @@ final class SleepMemoryStore {
         return UIImage(data: data)
     }
 
-    func saveAvatarImage(_ imageData: Data) {
+    @discardableResult
+    func saveAvatarImage(_ imageData: Data) -> Bool {
+        guard defaults.isAvailable else { return false }
         defaults.set(imageData, forKey: Keys.avatarImageData.rawValue)
+        return defaults.isAvailable && defaults.data(forKey: Keys.avatarImageData.rawValue) == imageData
     }
 
     // MARK: - Overtired Level
@@ -87,7 +102,10 @@ final class SleepMemoryStore {
         defaults.double(forKey: Keys.overtiredLevel.rawValue)
     }
 
-    func setOvertiredLevel(_ level: Double) {
+    @discardableResult
+    func setOvertiredLevel(_ level: Double) -> Bool {
+        guard defaults.isAvailable else { return false }
         defaults.set(level, forKey: Keys.overtiredLevel.rawValue)
+        return defaults.isAvailable && defaults.object(forKey: Keys.overtiredLevel.rawValue) as? Double == level
     }
 }

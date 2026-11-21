@@ -45,7 +45,7 @@ protocol AgeBasedSleepProfileProviding {
 final class DefaultAgeBasedSleepProfileProvider: AgeBasedSleepProfileProviding {
 
     // Keep the initializer label source-compatible; lookup itself has no storage/clock dependency.
-    init(defaults _: UserDefaults = .standard) {}
+    init(defaults _: (any PrivateDataStore)? = nil) {}
 
     // MARK: - Profile Lookup
         

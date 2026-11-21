@@ -20,50 +20,229 @@ enum AuthState {
 
 // MARK: - Root Router
 
+@MainActor
 struct RootView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @AppStorage("authComplete") private var authComplete: Bool = false
     @AppStorage("onboardingComplete") private var onboardingComplete: Bool = false
+    @SecureStorage("profileSetupComplete_v1") private var hasLocalProfile = false
     @State private var authState: AuthState = .landing
+    @State private var storageAvailable = SecureDataStore.shared.isAvailable
+    @State private var storageFailure = SecureDataStore.shared.failureMessage
 
     var body: some View {
         Group {
-            if authComplete {
-                ContentView()
+            if storageAvailable {
+                routedContent
             } else {
-                switch authState {
-                case .landing:
-                    LandingView(authState: $authState)
-                case .creatingAccount:
-                    CreateAccountView(authState: $authState)
-                case .loggingIn:
-                    LogInView(authState: $authState)
-                case .onboarding:
-                    WelcomeView {
-                        onboardingComplete = true
-                        authComplete = true
-                        authState = .loggedIn
-                    }
-                case .loggedIn:
-                    ContentView()
-                }
+                protectedDataUnavailable
             }
         }
-        .animation(.easeInOut(duration: 0.3), value: authState)
+        .privacySensitive()
+        .background(AppPrivacyShield())
+        .overlay {
+            if scenePhase != .active {
+                Color(.systemBackground)
+                    .ignoresSafeArea()
+                    .overlay {
+                        Image(systemName: "moon.stars.fill")
+                            .font(.largeTitle)
+                            .foregroundStyle(.indigo)
+                    }
+                    .accessibilityLabel("SleepCoach")
+            }
+        }
+        .onAppear { reopenPrivateData() }
+        .onReceive(NotificationCenter.default.publisher(for: .secureDataStoreDidChange)
+            .receive(on: RunLoop.main)) { _ in
+            refreshStorageStatus()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.protectedDataWillBecomeUnavailableNotification)) { _ in
+            closePrivateData()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.protectedDataDidBecomeAvailableNotification)) { _ in
+            if scenePhase == .active { reopenPrivateData() }
+        }
+        .onChange(of: scenePhase) { phase in
+            if phase == .background { closePrivateData() }
+            else if phase == .active { reopenPrivateData() }
+        }
+        .onChange(of: authComplete) { complete in
+            if !complete { authState = .landing }
+        }
+    }
+
+    @ViewBuilder
+    private var routedContent: some View {
+        if hasLocalProfile {
+            ContentView()
+        } else {
+            switch authState {
+            case .landing:
+                LandingView(authState: $authState)
+            case .creatingAccount:
+                CreateAccountView(authState: $authState)
+            case .loggingIn:
+                LogInView(authState: $authState)
+            case .onboarding:
+                WelcomeView {
+                    guard SecureDataStore.shared.bool(forKey: "profileSetupComplete_v1") else {
+                        authState = .creatingAccount
+                        return
+                    }
+                    onboardingComplete = true
+                    authComplete = true
+                    authState = .loggedIn
+                }
+            case .loggedIn:
+                // Routing preferences are not proof that a local profile exists.
+                CreateAccountView(authState: $authState)
+            }
+        }
+    }
+
+    private var protectedDataUnavailable: some View {
+        VStack(spacing: 18) {
+            Image(systemName: "lock.shield")
+                .font(.largeTitle)
+                .foregroundStyle(.indigo)
+            Text("Your data is protected")
+                .font(.title2.weight(.semibold))
+            Text(storageFailure ?? "Unlock your device to open your saved profile and sleep records.")
+                .font(.body)
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.secondary)
+            Button("Try Again") { reopenPrivateData() }
+                .buttonStyle(.borderedProminent)
+                .tint(.indigo)
+        }
+        .padding(28)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(.systemBackground))
+        .accessibilityIdentifier("protectedDataUnavailable")
+    }
+
+    private func refreshStorageStatus() {
+        storageAvailable = SecureDataStore.shared.isAvailable
+        storageFailure = SecureDataStore.shared.failureMessage
+    }
+
+    private func closePrivateData() {
+        SleepCoachOrchestrator.shared.clearPrivateState()
+        SecureDataStore.shared.lock()
+        refreshStorageStatus()
+    }
+
+    private func reopenPrivateData() {
+        guard UIApplication.shared.isProtectedDataAvailable else {
+            closePrivateData()
+            return
+        }
+        // A temporary inactive phase (for example the photo picker) does not
+        // rotate the vault generation while an allowed import is still running.
+        if !SecureDataStore.shared.isAvailable { SecureDataStore.shared.reload() }
+        refreshStorageStatus()
+    }
+}
+
+/// A scene-level cover also hides presented sheets and full-screen editors from
+/// app-switcher snapshots. A root SwiftUI overlay alone sits below those views.
+private struct AppPrivacyShield: UIViewRepresentable {
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeUIView(context: Context) -> AnchorView {
+        let view = AnchorView()
+        view.isUserInteractionEnabled = false
+        view.accessibilityElementsHidden = true
+        view.onSceneChange = { [weak coordinator = context.coordinator] scene in
+            coordinator?.attach(to: scene)
+        }
+        return view
+    }
+
+    func updateUIView(_ uiView: AnchorView, context: Context) { }
+
+    static func dismantleUIView(_ uiView: AnchorView, coordinator: Coordinator) {
+        coordinator.stop()
+    }
+
+    final class AnchorView: UIView {
+        var onSceneChange: ((UIWindowScene?) -> Void)?
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            onSceneChange?(window?.windowScene)
+        }
+    }
+
+    @MainActor
+    final class Coordinator: NSObject {
+        private weak var scene: UIWindowScene?
+        private var cover: UIWindow?
+
+        override init() {
+            super.init()
+            NotificationCenter.default.addObserver(self, selector: #selector(show),
+                name: UIApplication.willResignActiveNotification, object: nil)
+            NotificationCenter.default.addObserver(self, selector: #selector(hide),
+                name: UIApplication.didBecomeActiveNotification, object: nil)
+        }
+
+        func attach(to scene: UIWindowScene?) {
+            hide()
+            self.scene = scene
+            if let scene, scene.activationState != .foregroundActive { show() }
+        }
+
+        @objc private func show() {
+            guard cover == nil, let scene else { return }
+            let controller = UIViewController()
+            controller.view.backgroundColor = .systemBackground
+            let symbol = UIImageView(image: UIImage(systemName: "moon.stars.fill"))
+            symbol.tintColor = .systemIndigo
+            symbol.contentMode = .scaleAspectFit
+            symbol.translatesAutoresizingMaskIntoConstraints = false
+            controller.view.addSubview(symbol)
+            NSLayoutConstraint.activate([
+                symbol.centerXAnchor.constraint(equalTo: controller.view.centerXAnchor),
+                symbol.centerYAnchor.constraint(equalTo: controller.view.centerYAnchor),
+                symbol.widthAnchor.constraint(equalToConstant: 44),
+                symbol.heightAnchor.constraint(equalToConstant: 44)
+            ])
+            let window = UIWindow(windowScene: scene)
+            window.windowLevel = UIWindow.Level(rawValue: UIWindow.Level.alert.rawValue + 1)
+            window.rootViewController = controller
+            window.isUserInteractionEnabled = false
+            window.accessibilityViewIsModal = true
+            window.isHidden = false
+            cover = window
+        }
+
+        @objc private func hide() {
+            cover?.isHidden = true
+            cover = nil
+        }
+
+        func stop() {
+            hide()
+            NotificationCenter.default.removeObserver(self)
+        }
+
+        deinit { NotificationCenter.default.removeObserver(self) }
     }
 }
 
 // MARK: - Welcome View (after signup)
 
 struct WelcomeView: View {
-    @AppStorage("babyName") private var babyName: String = "Baby"
-    @AppStorage("babyBirthDate") private var babyBirthDate: Double = Date().timeIntervalSince1970
+    @SecureStorage("babyName") private var babyName: String = "Baby"
     let onContinue: () -> Void
 
     private var babyAge: String {
-        BabyAgeFormatter.string(
-            from: Date(timeIntervalSince1970: babyBirthDate),
-            to: Date()
-        )
+        guard let birthDate = SecureDataStore.shared.object(forKey: "babyBirthDate") as? Date else {
+            return "—"
+        }
+        return BabyAgeFormatter.string(from: birthDate, to: Date())
     }
 
     var body: some View {

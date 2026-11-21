@@ -9,6 +9,7 @@ import Foundation
 import SwiftUI
 import PhotosUI
 
+@MainActor
 struct SettingsView: View {
 
     @State private var records: [SleepRecord] = []
@@ -18,17 +19,24 @@ struct SettingsView: View {
     @State private var avatarImage: UIImage? = nil
     @State private var showAppearanceSheet = false
     @State private var showProfileEdit = false
-    @AppStorage("babyName") private var babyName: String = "Baby"
+    @State private var showDataHandling = false
+    @State private var showDeleteConfirmation = false
+    @State private var showCloudAIConsent = false
+    @State private var cloudAIEnabled = CloudAIPrivacy.shared.hasConsent
+    @State private var storageError: String? = nil
+    @State private var avatarImportTask: Task<Void, Never>? = nil
+    @SecureStorage("babyName") private var babyName: String = "Baby"
     @AppStorage("appAppearance") private var appAppearance: String = "system"
 
     private func loadRecords() {
-        if let data = UserDefaults.standard.data(forKey: "sleepRecords"),
-           let decoded = try? JSONDecoder().decode([SleepRecord].self, from: data) {
-            records = decoded
+        guard SecureDataStore.shared.isAvailable else {
+            records = []
+            avatarImage = nil
+            return
         }
-        if let data = UserDefaults.standard.data(forKey: "avatarImageData") {
-            avatarImage = UIImage(data: data)
-        }
+        records = SleepRecordPersistence().load() ?? []
+        avatarImage = SecureDataStore.shared.data(forKey: "avatarImageData").flatMap { UIImage(data: $0) }
+        cloudAIEnabled = CloudAIPrivacy.shared.hasConsent
     }
 
     // MARK: - Computed
@@ -79,7 +87,7 @@ struct SettingsView: View {
     }
 
     private var babyGenderEmoji: String {
-        let gender = UserDefaults.standard.string(forKey: "babyGender") ?? "Prefer not to say"
+        let gender = SecureDataStore.shared.string(forKey: "babyGender") ?? "Prefer not to say"
         switch gender {
         case "Girl": return "👧"
         case "Boy":  return "👦"
@@ -101,18 +109,26 @@ struct SettingsView: View {
                     napRemindersSection
                     babyProfileSection
                     preferencesAndQuickActions
+                    privacySection
                     supportSection
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 16)
                 .padding(.bottom, 32)
             }
+            .accessibilityIdentifier("settings.scroll")
             .background(Color(.systemGroupedBackground))
             .navigationBarHidden(true)
             .onAppear { loadRecords() }
-            .onReceive(NotificationCenter.default.publisher(for: .sleepRecordsDidChange)) { _ in
+            .onReceive(NotificationCenter.default.publisher(for: .sleepRecordsDidChange)
+                .receive(on: RunLoop.main)) { _ in
                 loadRecords()
             }
+            .onReceive(NotificationCenter.default.publisher(for: .secureDataStoreDidChange)
+                .receive(on: RunLoop.main)) { _ in
+                loadRecords()
+            }
+            .onDisappear { avatarImportTask?.cancel() }
         }
         .confirmationDialog("Appearance", isPresented: $showAppearanceSheet, titleVisibility: .visible) {
             Button("System") { appAppearance = "system" }
@@ -123,6 +139,33 @@ struct SettingsView: View {
         .sheet(isPresented: $showProfileEdit) {
             ProfileEditSheet()
         }
+        .sheet(isPresented: $showDataHandling) {
+            DataHandlingSheet()
+        }
+        .confirmationDialog("Delete all data on this device?", isPresented: $showDeleteConfirmation,
+                            titleVisibility: .visible) {
+            Button("Delete All Local Data", role: .destructive) { deleteLocalData() }
+                .accessibilityIdentifier("privacy.delete.confirm")
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("This permanently deletes this app's profile, photo, sleep records, and saved coaching on this device. This action cannot be undone.")
+        }
+        .confirmationDialog(CloudAIPrivacy.disclosureTitle, isPresented: $showCloudAIConsent,
+                            titleVisibility: .visible) {
+            Button("Allow Google Gemini") { updateCloudAIConsent(allowed: true) }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text(CloudAIPrivacy.disclosureMessage)
+        }
+        .alert("Couldn't complete this change", isPresented: Binding(
+            get: { storageError != nil },
+            set: { if !$0 { storageError = nil } }
+        )) {
+            Button("OK", role: .cancel) { storageError = nil }
+        } message: {
+            Text(storageError ?? "Please unlock your device and try again.")
+        }
+        .privacySensitive()
     }
 
     // MARK: - Header
@@ -171,13 +214,7 @@ struct SettingsView: View {
                 }
             }
             .onChange(of: selectedPhoto) { newItem in
-                Task {
-                    if let data = try? await newItem?.loadTransferable(type: Data.self),
-                       let image = UIImage(data: data) {
-                        avatarImage = image
-                        UserDefaults.standard.set(data, forKey: "avatarImageData")
-                    }
-                }
+                importAvatar(newItem)
             }
 
             Button {
@@ -434,9 +471,6 @@ struct SettingsView: View {
                 Divider().padding(.leading, 14)
                 compactRow(icon: "square.grid.2x2", iconColor: .indigo,
                            title: "Widget Settings", subtitle: "Lock & Home Screen")
-                Divider().padding(.leading, 14)
-                compactRow(icon: "person.2", iconColor: .indigo,
-                           title: "Caregivers", subtitle: "3 members")
                     .padding(.bottom, 4)
             }
             .background(
@@ -447,6 +481,110 @@ struct SettingsView: View {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .stroke(Color.primary.opacity(0.05), lineWidth: 1)
             )
+        }
+    }
+
+    // MARK: - Privacy
+
+    private var privacySection: some View {
+        settingsSection(title: "PRIVACY & DATA") {
+            VStack(alignment: .leading, spacing: 8) {
+                if CloudAIPrivacy.isCloudAIAvailable {
+                    Toggle("Cloud AI coaching", isOn: Binding(
+                        get: { cloudAIEnabled },
+                        set: { allowed in
+                            if allowed { showCloudAIConsent = true }
+                            else { updateCloudAIConsent(allowed: false) }
+                        }
+                    ))
+                    .tint(.indigo)
+                    Text("Optional sleep summaries are shared with Google Gemini only after you allow it. You can turn this off at any time.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("On-device guidance")
+                        .font(.subheadline.weight(.medium))
+                    Text("Cloud AI coaching is not enabled in this version. Sleep tracking and on-device guidance remain available.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(14)
+
+            Divider().padding(.leading, 14)
+            Button(role: .destructive) {
+                showDeleteConfirmation = true
+            } label: {
+                Label("Delete All Local Data", systemImage: "trash")
+                    .font(.subheadline.weight(.medium))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(14)
+            }
+            .accessibilityIdentifier("deleteAllLocalData")
+        }
+    }
+
+    private func updateCloudAIConsent(allowed: Bool) {
+        do {
+            if allowed {
+                try CloudAIPrivacy.shared.grantConsent()
+            } else {
+                try CloudAIPrivacy.shared.revokeConsent()
+                SleepCoachOrchestrator.shared.clearCloudAIState()
+            }
+            cloudAIEnabled = CloudAIPrivacy.shared.hasConsent
+        } catch {
+            cloudAIEnabled = CloudAIPrivacy.shared.hasConsent
+            storageError = SecureDataStore.shared.failureMessage
+                ?? "Your privacy preference could not be saved. Please try again."
+        }
+    }
+
+    private func importAvatar(_ item: PhotosPickerItem?) {
+        avatarImportTask?.cancel()
+        guard let item else { return }
+        let generation = SecureDataStore.shared.generation
+        avatarImportTask = Task { @MainActor in
+            do {
+                guard let data = try await item.loadTransferable(type: Data.self),
+                      !Task.isCancelled,
+                      let image = UIImage(data: data), image.size.width > 0, image.size.height > 0 else { return }
+                // Render a bounded copy: imported location/camera metadata never
+                // enters the private store or an outbound AI request.
+                let scale = min(1, 512 / max(image.size.width, image.size.height))
+                let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+                let format = UIGraphicsImageRendererFormat()
+                format.scale = 1
+                let rendered = UIGraphicsImageRenderer(size: size, format: format).image { _ in
+                    image.draw(in: CGRect(origin: .zero, size: size))
+                }
+                guard let sanitized = rendered.pngData(), !Task.isCancelled else { return }
+                try SecureDataStore.shared.write(["avatarImageData": sanitized], ifGeneration: generation)
+                avatarImage = rendered
+            } catch {
+                guard !Task.isCancelled else { return }
+                storageError = SecureDataStore.shared.failureMessage
+                    ?? "Your photo could not be saved. Please try again."
+            }
+        }
+    }
+
+    private func deleteLocalData() {
+        avatarImportTask?.cancel()
+        // Permission is withdrawn immediately, even if secure deletion needs retry.
+        UserDefaults.standard.set(false, forKey: "cloudAISharingEnabled")
+        SleepCoachOrchestrator.shared.clearPrivateState()
+        do {
+            try SecureDataStore.shared.eraseAll()
+            records = []
+            avatarImage = nil
+            selectedPhoto = nil
+            cloudAIEnabled = false
+            UserDefaults.standard.set(false, forKey: "onboardingComplete")
+            UserDefaults.standard.set(false, forKey: "authComplete")
+        } catch {
+            storageError = SecureDataStore.shared.failureMessage
+                ?? "Your data could not be deleted. Please try again."
         }
     }
 
@@ -466,11 +604,17 @@ struct SettingsView: View {
                 subtitle: "We're here to help"
             )
             Divider().padding(.leading, 52)
-            settingsRowChevron(
-                icon: "checkmark.shield", iconColor: .indigo,
-                title: "Privacy & Policy",
-                subtitle: "Your data is safe with us"
-            )
+            Button {
+                showDataHandling = true
+            } label: {
+                settingsRowChevron(
+                    icon: "checkmark.shield", iconColor: .indigo,
+                    title: "How Your Data Is Used",
+                    subtitle: "Storage, sharing, and deletion"
+                )
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("privacy.dataHandling")
             Divider().padding(.leading, 52)
             settingsRowChevron(
                 icon: "info.circle", iconColor: .indigo,
@@ -564,9 +708,9 @@ struct SettingsView: View {
     
     private var babyAgeText: String {
            let birthDate: Date?
-           if let saved = UserDefaults.standard.object(forKey: "babyBirthDate") as? Date {
+           if let saved = SecureDataStore.shared.object(forKey: "babyBirthDate") as? Date {
                birthDate = saved
-           } else if let seconds = UserDefaults.standard.object(forKey: "babyBirthDate") as? Double {
+           } else if let seconds = SecureDataStore.shared.object(forKey: "babyBirthDate") as? Double {
                birthDate = Date(timeIntervalSince1970: seconds)
            } else {
                birthDate = nil
@@ -601,5 +745,57 @@ struct SettingsView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .contentShape(Rectangle())
+    }
+}
+
+
+private struct DataHandlingSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    section("On this device", text: "Your profile, photo, sleep and wake records, and saved coaching are stored in encrypted files. The encryption key is kept in the device's Keychain. Photo location and camera metadata are removed before the photo is saved.")
+
+                    section("App preferences", text: "Appearance and general feature preferences are saved as ordinary app settings. These settings do not contain your profile, photo, or sleep history.")
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Cloud AI")
+                            .font(.headline)
+                        if CloudAIPrivacy.isCloudAIAvailable {
+                            Text("This development build can use cloud AI only after you allow sharing in Settings.")
+                            Text(CloudAIPrivacy.disclosureMessage)
+                        } else {
+                            Text("Cloud AI coaching is disabled in this version. Sleep tracking and on-device guidance remain available without sending summaries to an AI provider.")
+                        }
+                    }
+                    .font(.subheadline)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                    section("Deleting local data", text: "Delete All Local Data removes this app's profile, photo, sleep records, private caches, and saved coaching from this device. It also stops future cloud AI requests. It cannot recall information previously sent to Google.")
+
+                    section("Device backups", text: "Your device's backup settings may include the app's encrypted files and Keychain items. Earlier backups can retain copies after local deletion. Cloud sync and shared caregiver accounts are not available in this version.")
+                }
+                .padding(20)
+            }
+            .navigationTitle("How Your Data Is Used")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                        .accessibilityIdentifier("privacy.dataHandling.done")
+                }
+            }
+        }
+        .accessibilityIdentifier("privacy.dataHandling.sheet")
+    }
+
+    private func section(_ title: String, text: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title).font(.headline)
+            Text(text).font(.subheadline)
+        }
+        .fixedSize(horizontal: false, vertical: true)
     }
 }

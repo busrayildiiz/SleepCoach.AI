@@ -2,6 +2,32 @@ import XCTest
 @testable import BabySleepTracker
 
 final class DailyWakeRecordPersistenceTests: XCTestCase {
+    func testUnavailableProtectedStorageCannotReplaceWakeHistory() throws {
+        let store = TestPrivateDataStore()
+        let original = try JSONEncoder().encode([makeRecord(day: 100, wakeTime: 200)])
+        store.set(original, forKey: "dailyWakeRecords_v1")
+        let attempts = store.writeAttempts
+        store.isAvailable = false
+        let persistence = DailyWakeRecordPersistence(defaults: store)
+
+        XCTAssertNil(persistence.load())
+        XCTAssertFalse(persistence.save([]))
+        XCTAssertEqual(store.writeAttempts, attempts)
+        XCTAssertEqual(store.values["dailyWakeRecords_v1"] as? Data, original)
+    }
+
+    func testProtectedWakeWriteFailureDoesNotPublishSuccessfulReplacement() throws {
+        let store = TestPrivateDataStore()
+        let persistence = DailyWakeRecordPersistence(defaults: store)
+        XCTAssertTrue(persistence.save([makeRecord(day: 100, wakeTime: 200)]))
+        let original = try XCTUnwrap(store.data(forKey: "dailyWakeRecords_v1"))
+        store.failWrites = true
+
+        XCTAssertFalse(persistence.save([makeRecord(day: 300, wakeTime: 400)]))
+        XCTAssertEqual(store.values["dailyWakeRecords_v1"] as? Data, original)
+        XCTAssertFalse(store.isAvailable)
+    }
+
     private var defaults: UserDefaults!
     private var persistence: DailyWakeRecordPersistence!
 

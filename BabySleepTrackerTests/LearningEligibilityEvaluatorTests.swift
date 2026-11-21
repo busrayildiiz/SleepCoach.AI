@@ -3,6 +3,20 @@ import XCTest
 @testable import BabySleepTracker
 
 final class LearningEligibilityEvaluatorTests: XCTestCase {
+    func testUnreadableStorageBlocksOtherwiseQualifyingEvidence() {
+        var evidence = fixture(Array(1...7))
+        let readable = evaluate(evidence)
+        XCTAssertEqual(readable.status, .eligibleUnderPolicy)
+        evidence.storageIsReadable = false
+
+        let unavailable = evaluate(evidence)
+        XCTAssertEqual(unavailable.status, .invalidEvidence)
+        XCTAssertEqual(unavailable.reasons, [.storageUnavailable])
+        XCTAssertEqual(unavailable.qualifyingDayCount, 0)
+        XCTAssertTrue(unavailable.dailyResults.isEmpty)
+        XCTAssertNotEqual(unavailable.evidenceIdentity, readable.evidenceIdentity)
+    }
+
     private let policy = LearningEligibilityPolicy.engineeringV01
 
     private func calendar(_ zone: String = "UTC") -> Calendar {

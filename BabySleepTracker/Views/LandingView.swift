@@ -67,103 +67,30 @@ struct LandingView: View {
 
                 Spacer()
 
-                // Bottom sheet
-                VStack(spacing: 12) {
-                    // Continue with Email
+                // This version uses a protected local profile, not an online account.
+                VStack(spacing: 16) {
+                    Text("Create a local profile to start tracking sleep.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+
                     Button { authState = .creatingAccount } label: {
-                        HStack(spacing: 12) {
-                            Image(systemName: "envelope.fill")
-                                .font(.system(size: 16))
-                            Text("Continue with Email")
-                                .font(.headline)
-                        }
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 16)
-                        .background(
-                            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .fill(Color(hex: "6B63D8"))
-                        )
-                    }
-                    .buttonStyle(.plain)
-
-                    // Continue with Apple
-                    Button { authState = .loggedIn } label: {
-                        HStack(spacing: 12) {
-                            Image(systemName: "apple.logo")
-                                .font(.system(size: 18, weight: .medium))
-                            Text("Continue with Apple")
-                                .font(.headline)
-                        }
-                        .foregroundStyle(.primary)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 16)
-                        .background(
-                            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .fill(Color(.systemBackground))
-                                .shadow(color: .black.opacity(0.06), radius: 8, x: 0, y: 2)
-                        )
-                    }
-                    .buttonStyle(.plain)
-
-                    // Continue with Google
-                    Button { authState = .loggedIn } label: {
-                        HStack(spacing: 12) {
-                            Text("G")
-                                .font(.system(size: 20, weight: .bold))
-                                .foregroundStyle(
-                                    LinearGradient(
-                                        colors: [.red, .orange, .yellow, .green, .blue],
-                                        startPoint: .leading, endPoint: .trailing
-                                    )
-                                )
-                            Text("Continue with Google")
-                                .font(.headline)
-                                .foregroundStyle(.primary)
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 16)
-                        .background(
-                            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .fill(Color(.systemBackground))
-                                .shadow(color: .black.opacity(0.06), radius: 8, x: 0, y: 2)
-                        )
-                    }
-                    .buttonStyle(.plain)
-
-                    // Divider
-                    HStack {
-                        Rectangle().fill(Color.primary.opacity(0.1)).frame(height: 1)
-                        Text("or").font(.caption).foregroundStyle(.secondary).padding(.horizontal, 8)
-                        Rectangle().fill(Color.primary.opacity(0.1)).frame(height: 1)
-                    }
-
-                    // Create Account
-                    Button { authState = .creatingAccount } label: {
-                        Text("Create an Account")
+                        Label("Create a Profile", systemImage: "person.crop.circle.badge.plus")
                             .font(.headline)
-                            .foregroundStyle(Color(hex: "6B63D8"))
+                            .foregroundStyle(.white)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 16)
                             .background(
                                 RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                    .fill(Color(hex: "6B63D8").opacity(0.08))
+                                    .fill(Color(hex: "6B63D8"))
                             )
                     }
                     .buttonStyle(.plain)
+                    .accessibilityIdentifier("profile.create")
 
-                    // Log in
-                    HStack(spacing: 4) {
-                        Text("Already have an account?")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                        Button { authState = .loggingIn } label: {
-                            Text("Log In")
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(Color(hex: "6B63D8"))
-                        }
-                    }
-                    .padding(.top, 4)
+                    Text("No email or password required.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
                 .padding(.horizontal, 24)
                 .padding(.top, 28)

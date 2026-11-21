@@ -6,6 +6,7 @@ final class DaytimePredictionAgentTests: XCTestCase {
 
     private var profileProvider: MockDaytimeProfileProvider!
     private var agent: DefaultDaytimePredictionAgent!
+    private var defaults: TestPrivateDataStore!
 
     private let now: Date = {
         var calendar = Calendar(identifier: .gregorian)
@@ -21,22 +22,24 @@ final class DaytimePredictionAgentTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
+        defaults = TestPrivateDataStore()
 
-        UserDefaults.standard.removeObject(forKey: "typicalWakeHour")
-        UserDefaults.standard.removeObject(forKey: "typicalWakeMinute")
-        UserDefaults.standard.removeObject(forKey: "babyName")
+        defaults.removeObject(forKey: "typicalWakeHour")
+        defaults.removeObject(forKey: "typicalWakeMinute")
+        defaults.removeObject(forKey: "babyName")
 
         profileProvider = MockDaytimeProfileProvider()
 
         agent = DefaultDaytimePredictionAgent(
-            profileProvider: profileProvider
+            profileProvider: profileProvider,
+            defaults: defaults
         )
     }
 
     override func tearDown() {
-        UserDefaults.standard.removeObject(forKey: "typicalWakeHour")
-        UserDefaults.standard.removeObject(forKey: "typicalWakeMinute")
-        UserDefaults.standard.removeObject(forKey: "babyName")
+        defaults.removeObject(forKey: "typicalWakeHour")
+        defaults.removeObject(forKey: "typicalWakeMinute")
+        defaults.removeObject(forKey: "babyName")
 
         agent = nil
         profileProvider = nil
@@ -47,8 +50,8 @@ final class DaytimePredictionAgentTests: XCTestCase {
     // MARK: - No Wake Record / Typical Wake Fallback
 
     func testUsesSavedTypicalWakeTimeWhenNoNapOrWakeRecordExists() {
-        UserDefaults.standard.set(7.0, forKey: "typicalWakeHour")
-        UserDefaults.standard.set(30.0, forKey: "typicalWakeMinute")
+        defaults.set(7.0, forKey: "typicalWakeHour")
+        defaults.set(30.0, forKey: "typicalWakeMinute")
 
         let result = agent.predictNextNap(
             pattern: nil,
@@ -581,7 +584,7 @@ final class DaytimePredictionAgentTests: XCTestCase {
     }
 
     func testObservedWakeReasoningKeepsSourceAndMissingCoverageExplicit() {
-        UserDefaults.standard.set(
+        defaults.set(
             "Umay",
             forKey: "babyName"
         )
@@ -602,7 +605,7 @@ final class DaytimePredictionAgentTests: XCTestCase {
     }
 
     func testMissingNameAndPatternDoNotCreatePersonalizedReasoning() {
-        UserDefaults.standard.set(
+        defaults.set(
             "   ",
             forKey: "babyName"
         )

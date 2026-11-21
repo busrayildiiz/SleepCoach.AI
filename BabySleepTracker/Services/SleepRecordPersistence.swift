@@ -1,17 +1,18 @@
 import Foundation
 
 struct SleepRecordPersistence {
-    let defaults: UserDefaults
+    let defaults: any PrivateDataStore
     let storage: ObservationStorage
     private let key = "sleepRecords"
 
-    init(defaults: UserDefaults = .standard, writer: ((Data, String) -> Bool)? = nil) {
+    init(defaults: any PrivateDataStore = SecureDataStore.shared, writer: ((Data, String) -> Bool)? = nil) {
         self.defaults = defaults
         storage = ObservationStorage(defaults: defaults, writer: writer)
     }
 
     func load() -> [SleepRecord]? {
-        guard let data = defaults.data(forKey: key) else { return nil }
+        let generation = defaults.generationToken
+        guard defaults.isAvailable, let data = defaults.data(forKey: key) else { return nil }
         guard var records = try? JSONDecoder().decode([SleepRecord].self, from: data) else { return nil }
         let metadata = ObservationProvenance.load(defaults)
         for index in records.indices {
@@ -20,7 +21,7 @@ struct SleepRecordPersistence {
                 records[index].persistedRevision = entry.revision
             }
         }
-        return records
+        return defaults.isAvailable && defaults.generationToken == generation ? records : nil
     }
 
     /// Re-read before saving so a presented form cannot overwrite newer records.
@@ -29,7 +30,8 @@ struct SleepRecordPersistence {
     func saveRecording(_ record: SleepRecord, now: Date = Date()) -> Bool {
         ObservationStorage.lock.lock()
         defer { ObservationStorage.lock.unlock() }
-        guard record.creationIntent?.isRetired != true else { return false }
+        let generation = defaults.generationToken
+        guard defaults.isAvailable, record.creationIntent?.isRetired != true else { return false }
         if let intent = record.creationIntent, !storage.bind(intent) { return false }
         if defaults.data(forKey: key) != nil && load() == nil { return false }
         var records = load() ?? []
@@ -89,7 +91,7 @@ struct SleepRecordPersistence {
         guard save(records, beforeWrite: { prepared in
             expectedEntry = prepared.sleeps[record.id.uuidString]
             return true
-        }, creationIntent: record.creationIntent) else { return false }
+        }, creationIntent: record.creationIntent), defaults.generationToken == generation else { return false }
         if let creation {
             // The record write succeeded even if an observer subsequently corrected
             // its revision. Consume the creation, but let the exact receipt below
@@ -119,7 +121,7 @@ struct SleepRecordPersistence {
             // A failed positive attestation leaves the successfully saved record unverified.
             _ = storage.metadata(metadata)
         }
-        return true
+        return defaults.isAvailable && defaults.generationToken == generation
     }
 
     /// Scoped deletion never replaces a newer collection with a stale dashboard array.
@@ -127,7 +129,7 @@ struct SleepRecordPersistence {
     func delete(ids: Set<UUID>) -> Bool {
         ObservationStorage.lock.lock()
         defer { ObservationStorage.lock.unlock() }
-        guard defaults.data(forKey: key) == nil || load() != nil else { return false }
+        guard defaults.isAvailable, defaults.data(forKey: key) == nil || load() != nil else { return false }
         guard storage.cancelCreations(collection: key, deletedIDs: ids) else { return false }
         return save((load() ?? []).filter { !ids.contains($0.id) })
     }
@@ -138,7 +140,8 @@ struct SleepRecordPersistence {
         ObservationStorage.lock.lock()
         defer { ObservationStorage.lock.unlock() }
         // Never replace unreadable user observations with an empty recovery snapshot.
-        guard defaults.data(forKey: key) == nil || load() != nil,
+        let generation = defaults.generationToken
+        guard defaults.isAvailable, defaults.data(forKey: key) == nil || load() != nil,
               Set(records.map(\.id)).count == records.count else { return false }
         let expectedData = defaults.data(forKey: key)
         let expectedMetadata = defaults.data(forKey: ObservationProvenance.key)
@@ -160,7 +163,7 @@ struct SleepRecordPersistence {
         provenance.reconcile(sleeps: records)
         var prepared = true
         if let beforeWrite { ObservationStorage.lock.withoutLock { prepared = beforeWrite(provenance) } }
-        guard prepared, defaults.data(forKey: key) == expectedData,
+        guard defaults.isAvailable, defaults.generationToken == generation, prepared, defaults.data(forKey: key) == expectedData,
               defaults.data(forKey: ObservationProvenance.key) == expectedMetadata,
               creationIntent?.isRetired != true,
               completionOperationID.map({ ObservationStorage.completionIsActive($0, defaults: defaults) }) ?? true else { return false }
@@ -173,11 +176,13 @@ struct SleepRecordPersistence {
         guard storage.save(records, key: key, provenance: provenance, expectedData: expectedData) else { return false }
         if let cancellation, ObservationCompletionPending.load(defaults)?.operationID == cancellation.operationID {
             defaults.removeObject(forKey: ObservationCompletionPending.key)
+            guard defaults.isAvailable, defaults.data(forKey: ObservationCompletionPending.key) == nil else { return false }
             guard storage.finishRetirementIfRequested(cancellation.operationID, reservation: cancellation.creation) else { return false }
         }
         if records.count < old.count { _ = storage.pruneRecoveryArchives(removingRaw: true) }
 
+        guard defaults.isAvailable else { return false }
         ObservationStorage.post(.sleepRecordsDidChange)
-        return true
+        return defaults.isAvailable && defaults.generationToken == generation
     }
 }

@@ -15,9 +15,6 @@ struct CreateAccountView: View {
 
     // Step 1
     @State private var fullName = ""
-    @State private var email = ""
-    @State private var password = ""
-    @State private var showPassword = false
 
     // Step 2
     @State private var babyName = ""
@@ -31,9 +28,8 @@ struct CreateAccountView: View {
 
     // Errors
     @State private var nameError: String? = nil
-    @State private var emailError: String? = nil
-    @State private var passwordError: String? = nil
     @State private var babyNameError: String? = nil
+    @State private var storageError: String? = nil
 
     enum BabyGender: String, CaseIterable {
         case girl = "Girl"
@@ -69,6 +65,15 @@ struct CreateAccountView: View {
             }
             .navigationBarHidden(true)
         }
+        .privacySensitive()
+        .alert("Couldn't save your profile", isPresented: Binding(
+            get: { storageError != nil },
+            set: { if !$0 { storageError = nil } }
+        )) {
+            Button("OK", role: .cancel) { storageError = nil }
+        } message: {
+            Text(storageError ?? "Please unlock your device and try again.")
+        }
     }
 
     // MARK: - Nav Bar
@@ -95,7 +100,7 @@ struct CreateAccountView: View {
         .padding(.vertical, 12)
     }
 
-    // MARK: - Step 1: Account Info
+    // MARK: - Step 1: Local Profile
 
     private var step1View: some View {
         ScrollView {
@@ -104,9 +109,9 @@ struct CreateAccountView: View {
                 Text("🌙").font(.system(size: 60)).padding(.top, 8)
 
                 VStack(spacing: 8) {
-                    Text("Create Your Account")
+                    Text("Create Your Profile")
                         .font(.title2.weight(.bold))
-                    Text("Let's get started with your\naccount information.")
+                    Text("Let's get started with your\nprofile information.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
@@ -118,44 +123,17 @@ struct CreateAccountView: View {
 
                     inputField(
                         icon: "person",
-                        placeholder: "Full Name",
+                        placeholder: "Your Name",
                         text: $fullName,
                         error: $nameError,
                         isSecure: false
                     )
 
-                    inputField(
-                        icon: "envelope",
-                        placeholder: "Email",
-                        text: $email,
-                        error: $emailError,
-                        isSecure: false
-                    )
-                    .keyboardType(.emailAddress)
-                    .textInputAutocapitalization(.never)
-
-                    ZStack(alignment: .trailing) {
-                        inputField(
-                            icon: "lock",
-                            placeholder: "Password",
-                            text: $password,
-                            error: $passwordError,
-                            isSecure: !showPassword
-                        )
-                        Button {
-                            showPassword.toggle()
-                        } label: {
-                            Image(systemName: showPassword ? "eye.slash" : "eye")
-                                .foregroundStyle(.secondary)
-                                .padding(.trailing, 14)
-                        }
-                    }
-
                     HStack(spacing: 6) {
                         Image(systemName: "lock.shield")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        Text("Your data is secure and will never be shared.")
+                        Text("No email or password is needed for your local profile.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -328,7 +306,7 @@ struct CreateAccountView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                primaryButton("Create Account") { completeSignup() }
+                primaryButton("Create Profile") { completeSignup() }
                     .padding(.bottom, 32)
             }
             .padding(.horizontal, 24)
@@ -439,23 +417,11 @@ struct CreateAccountView: View {
 
         let name = fullName.trimmingCharacters(in: .whitespaces)
         if name.count < 2 {
-            nameError = "Please enter your full name (min 2 chars)."
-            valid = false
-        }
-
-        let emailVal = email.trimmingCharacters(in: .whitespaces)
-        if !emailVal.contains("@") || !emailVal.contains(".") {
-            emailError = "Please enter a valid email address."
-            valid = false
-        }
-
-        if password.count < 6 {
-            passwordError = "Password must be at least 6 characters."
+            nameError = "Please enter your name (min 2 chars)."
             valid = false
         }
 
         if valid {
-            UserDefaults.standard.set(name, forKey: "parentName")
             withAnimation { step = 2 }
         }
     }
@@ -470,17 +436,29 @@ struct CreateAccountView: View {
             babyNameError = "Name is too long (max 30 characters)."
             return
         }
-        UserDefaults.standard.set(name, forKey: "babyName")
-        UserDefaults.standard.set(babyBirthDate, forKey: "babyBirthDate")
-        UserDefaults.standard.set(babyGender.rawValue, forKey: "babyGender")
         withAnimation { step = 3 }
     }
 
     private func completeSignup() {
+        do {
+            // Commit the complete profile together. No partial profile is saved
+            // while the user is moving between setup steps.
+            try SecureDataStore.shared.write([
+                "parentName": fullName.trimmingCharacters(in: .whitespacesAndNewlines),
+                "babyName": babyName.trimmingCharacters(in: .whitespacesAndNewlines),
+                "babyBirthDate": babyBirthDate,
+                "babyGender": babyGender.rawValue,
+                "profileSetupComplete_v1": true
+            ])
+        } catch {
+            storageError = SecureDataStore.shared.failureMessage
+                ?? "Your profile could not be saved. Please try again."
+            return
+        }
         UserDefaults.standard.set(napReminders, forKey: "napReminders")
         UserDefaults.standard.set(smartSuggestions, forKey: "smartSuggestions")
         UserDefaults.standard.set(napWindowTracking, forKey: "napWindowTracking")
-        UserDefaults.standard.set(true, forKey: "onboardingComplete") // ← bunu ekle
+        UserDefaults.standard.set(true, forKey: "onboardingComplete")
         UserDefaults.standard.set(true, forKey: "authComplete")
         authState = .loggedIn
     }

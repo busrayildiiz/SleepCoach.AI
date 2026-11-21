@@ -103,7 +103,8 @@ final class HistoricalWakeDraft {
     let calendar: Calendar
     let candidates: [DailyWakeRecord]
     fileprivate let intent: ObservationCreationIntent
-    fileprivate let defaults: UserDefaults
+    fileprivate let defaults: any PrivateDataStore
+    fileprivate let generation: UUID?
     fileprivate private(set) var invalidated = false
     fileprivate var confirmation: HistoricalWakeConfirmation?
 
@@ -115,23 +116,26 @@ final class HistoricalWakeDraft {
         let validDay = day.timeIntervalSinceReferenceDate.isFinite
         self.day = validDay ? scope.startOfDay(for: day) : day
         defaults = persistence.defaults
+        generation = defaults.generationToken
         candidates = validDay ? (persistence.load() ?? []).filter { scope.isDate($0.day, inSameDayAs: day) } : []
         intent = ObservationCreationIntent(recordID: candidates.first?.id ?? UUID())
         Self.openDrafts.removeAll { $0.value == nil }
-        if validDay { Self.openDrafts.append(OpenDraft(value: self)) }
+        invalidated = !defaults.isAvailable || defaults.generationToken != generation
+        if validDay, !invalidated { Self.openDrafts.append(OpenDraft(value: self)) }
     }
 
     /// Called only by the parent's explicit confirmation action.
     func confirmObservedWake(at time: Date) -> HistoricalWakeConfirmation? {
         ObservationStorage.lock.lock()
         defer { ObservationStorage.lock.unlock() }
-        guard confirmation == nil, !intent.isRetired, time.timeIntervalSinceReferenceDate.isFinite else { return nil }
+        guard defaults.isAvailable, defaults.generationToken == generation, confirmation == nil, !intent.isRetired,
+              time.timeIntervalSinceReferenceDate.isFinite else { return nil }
         let capture = HistoricalWakeConfirmation(time: time)
         confirmation = capture
         return capture
     }
 
-    static func invalidateChangedDays(defaults: UserDefaults, old: [DailyWakeRecord], new: [DailyWakeRecord]) {
+    static func invalidateChangedDays(defaults: any PrivateDataStore, old: [DailyWakeRecord], new: [DailyWakeRecord]) {
         // Called under the persistence lock before any record-write notification.
         openDrafts.removeAll { $0.value == nil }
         for entry in openDrafts {
@@ -207,6 +211,7 @@ struct SleepWakeTimeWorkflow {
                               sleepPersistence: SleepRecordPersistence) -> SleepWakeTimeWorkflowResult? {
         ObservationStorage.lock.lock()
         defer { ObservationStorage.lock.unlock() }
+        guard wakePersistence.defaults.isAvailable, sleepPersistence.defaults.isAvailable else { return nil }
         guard wakePersistence.storage.retireInvalidForwardCompletion(now: now) else { return nil }
         guard let pending = ObservationCompletionPending.load(wakePersistence.defaults),
               pending.wakeAttested || pending.nightCompletionInput != nil || pending.creation?.operationID == pending.operationID,
@@ -228,10 +233,12 @@ struct SleepWakeTimeWorkflow {
 
     private func result(time: Date?, closed: SleepRecord? = nil, wakeOK: Bool = false,
                         sleepOK: Bool = false, evidenceOK: Bool = false) -> SleepWakeTimeWorkflowResult {
-        SleepWakeTimeWorkflowResult(updatedWakeRecords: wakePersistence.load() ?? [],
+        let available = wakePersistence.defaults.isAvailable && sleepPersistence.defaults.isAvailable
+        return SleepWakeTimeWorkflowResult(updatedWakeRecords: wakePersistence.load() ?? [],
             updatedSleepRecords: sleepPersistence.load() ?? [], normalizedWakeTime: time,
-            closedNightRecord: closed, wakePersistenceSucceeded: wakeOK,
-            sleepPersistenceSucceeded: sleepOK, evidencePublicationSucceeded: evidenceOK)
+            closedNightRecord: closed, wakePersistenceSucceeded: available && wakeOK,
+            sleepPersistenceSucceeded: available && sleepOK, evidencePublicationSucceeded: available && evidenceOK,
+            historicalRecovery: available ? nil : .failed)
     }
     private func wakeMatches(_ record: DailyWakeRecord, _ expected: ObservationProvenance.Entry?) -> Bool {
         guard let expected, let metadata = ObservationProvenance.load(wakePersistence.defaults),
@@ -270,6 +277,8 @@ struct SleepWakeTimeWorkflow {
         let defaults = wakePersistence.defaults
         let time = selectedWakeTime
         let scope = draft.calendar
+        guard defaults.isAvailable, sleepPersistence.defaults.isAvailable else { return .recoveryFailed }
+        guard defaults.generationToken == draft.generation else { return .stale }
         guard let confirmation, draft.confirmation === confirmation, confirmation.time == time, !confirmation.spent
         else { return .confirmationRequired }
         guard defaults === draft.defaults, defaults === sleepPersistence.defaults,
@@ -286,6 +295,7 @@ struct SleepWakeTimeWorkflow {
             return pending
         }
         func outcomeAfterAttempt(_ result: SleepWakeTimeWorkflowResult? = nil) -> HistoricalWakeOutcome {
+            guard defaults.isAvailable else { return .recoveryFailed }
             if result?.evidencePublicationSucceeded == true {
                 confirmation.spent = true
                 return .saved
@@ -352,6 +362,7 @@ struct SleepWakeTimeWorkflow {
 
     fileprivate func resolveHistoricalRecovery() -> HistoricalWakeRecoveryState? {
         let defaults = wakePersistence.defaults
+        guard defaults.isAvailable, sleepPersistence.defaults.isAvailable else { return .failed }
         guard let pending = StandaloneWakePending.load(defaults), pending.historical == true else {
             if defaults.data(forKey: StandaloneWakePending.key) != nil,
                StandaloneWakePending.load(defaults) == nil,
@@ -378,6 +389,7 @@ struct SleepWakeTimeWorkflow {
         ObservationStorage.lock.lock()
         defer { ObservationStorage.lock.unlock() }
         let defaults = wakePersistence.defaults
+        guard defaults.isAvailable, sleepPersistence.defaults.isAvailable else { return result(time: nil) }
         if let intent = capture?.creationIntent, !wakePersistence.storage.bind(intent) { return result(time: nil) }
         guard defaults === sleepPersistence.defaults,
               now.timeIntervalSinceReferenceDate.isFinite, selectedWakeTime.timeIntervalSinceReferenceDate.isFinite,
@@ -611,7 +623,7 @@ struct SleepWakeTimeWorkflow {
                   ObservationProvenance.load(defaults)?.wakes[wake.id.uuidString] == publishedEntry
             else { return result(time: time, wakeOK: true) }
             defaults.removeObject(forKey: StandaloneWakePending.key)
-            guard defaults.data(forKey: StandaloneWakePending.key) == nil else { return result(time: time, wakeOK: true) }
+            guard defaults.isAvailable, defaults.data(forKey: StandaloneWakePending.key) == nil else { return result(time: time, wakeOK: true) }
             ObservationStorage.post(.observationProvenanceDidChange)
             let stillCurrent = transaction.canResume(defaults: defaults, now: now) &&
                 wakeMatches(wake, receipt) &&
@@ -625,6 +637,9 @@ struct SleepWakeTimeWorkflow {
             ObservationProvenance.load(defaults)?.wakes[wake.id.uuidString] == publishedEntry
         if published, StandaloneWakePending.load(defaults)?.operationID == transaction.operationID {
             defaults.removeObject(forKey: StandaloneWakePending.key)
+            guard defaults.isAvailable, defaults.data(forKey: StandaloneWakePending.key) == nil else {
+                return result(time: time, wakeOK: true)
+            }
         }
         return result(time: time, wakeOK: true, evidenceOK: published)
     }
@@ -715,6 +730,9 @@ struct SleepWakeTimeWorkflow {
             wakeMatches(wake, wakeEntry) && nightMatches(closed, nightEntry) && linkMatches
         if published, ObservationCompletionPending.load(defaults)?.operationID == transaction.operationID {
             defaults.removeObject(forKey: pendingKey)
+            guard defaults.isAvailable, defaults.data(forKey: pendingKey) == nil else {
+                return result(time: time, closed: closed, wakeOK: true, sleepOK: true)
+            }
         }
         return result(time: time, closed: closed, wakeOK: true, sleepOK: true, evidenceOK: published)
     }
@@ -759,6 +777,9 @@ struct NightSleepCompletion {
         let defaults = sleepPersistence.defaults
         var expectedWake: DailyWakeRecord?
         func result(_ state: NightSleepCompletionResult.State, publication: Bool = false) -> NightSleepCompletionResult {
+            guard defaults.isAvailable, wakePersistence.defaults.isAvailable else {
+                return .init(state: .recoveryFailure, sleepPersisted: false, wakePersisted: false, evidencePublished: false)
+            }
             let nightOK = sleepPersistence.load()?.contains {
                 ObservationProvenance.sleepIdentity($0) == ObservationProvenance.sleepIdentity(submitted)
             } == true
@@ -769,7 +790,7 @@ struct NightSleepCompletion {
             } ?? false
             return .init(state: state, sleepPersisted: nightOK, wakePersisted: wakeOK, evidencePublished: publication)
         }
-        guard defaults === wakePersistence.defaults else { return result(.invalidSubmission) }
+        guard defaults.isAvailable, defaults === wakePersistence.defaults else { return result(.invalidSubmission) }
         guard wakePersistence.storage.retireInvalidForwardCompletion(now: now) else { return result(.recoveryFailure) }
         if submitted.nightCompletionIntent?.isRetired == true { return result(.staleNight) }
         guard submitted.recordingDraft,

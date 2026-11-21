@@ -2,6 +2,25 @@ import XCTest
 @testable import BabySleepTracker
 
 final class SleepWakeTimeWorkflowTests: XCTestCase {
+    func testUnavailableStorageBlocksWakeSavingAndHistoricalConfirmation() {
+        let store = TestPrivateDataStore()
+        store.isAvailable = false
+        let wakes = DailyWakeRecordPersistence(defaults: store)
+        let sleeps = SleepRecordPersistence(defaults: store)
+        let workflow = SleepWakeTimeWorkflow(selectedWakeTime: now, now: now, calendar: calendar,
+            wakeRecords: [], sleepRecords: [], wakePersistence: wakes, sleepPersistence: sleeps)
+        let outcome = workflow.execute()
+
+        XCTAssertFalse(outcome.wakePersistenceSucceeded)
+        XCTAssertFalse(outcome.sleepPersistenceSucceeded)
+        XCTAssertFalse(outcome.evidencePublicationSucceeded)
+        XCTAssertEqual(outcome.historicalRecovery, .failed)
+        XCTAssertNil(SleepWakeTimeWorkflow.resumePending(now: now, wakePersistence: wakes, sleepPersistence: sleeps))
+        let draft = HistoricalWakeDraft(day: now.addingTimeInterval(-86400), calendar: calendar, persistence: wakes)
+        XCTAssertNil(draft.confirmObservedWake(at: now.addingTimeInterval(-86400)))
+        XCTAssertEqual(store.writeAttempts, 0)
+    }
+
     private var defaults: UserDefaults!
     private var calendar: Calendar!
     private var now: Date!

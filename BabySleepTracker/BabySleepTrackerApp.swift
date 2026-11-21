@@ -15,12 +15,15 @@ struct BabySleepTrackerApp: App {
             HomeCardTestFixture.prepare()
         } else if ProcessInfo.processInfo.environment["RECORDING_UI_TESTS"] == "1" {
             let defaults = UserDefaults.standard
+            do { try SecureDataStore.shared.eraseAll() }
+            catch { return }
             if let domain = Bundle.main.bundleIdentifier {
                 defaults.removePersistentDomain(forName: domain)
             }
             defaults.set("light", forKey: "appAppearance")
             defaults.set(true, forKey: "authComplete")
             defaults.set(true, forKey: "onboardingComplete")
+            SecureDataStore.shared.set(true, forKey: "profileSetupComplete_v1")
             let referenceCapture = ProcessInfo.processInfo.environment["RECORDING_REFERENCE_SCREENSHOTS"] == "1"
             let yesterday = Calendar.current.date(byAdding: .day, value: -1, to: Date()) ?? Date().addingTimeInterval(-86400)
             let referenceEnd = Calendar.current.date(bySettingHour: 6, minute: 30, second: 0, of: yesterday) ?? yesterday
@@ -37,7 +40,7 @@ struct BabySleepTrackerApp: App {
                                            kind: .break, parentNapID: parent.id))
             }
             SleepRecordPersistence().save(fixture)
-            defaults.removeObject(forKey: "dailyWakeRecords_v1")
+            SecureDataStore.shared.removeObject(forKey: "dailyWakeRecords_v1")
         }
         #endif
     }
