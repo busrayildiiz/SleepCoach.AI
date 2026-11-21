@@ -320,7 +320,9 @@ struct TodayPlanCard: View {
     }
     @ViewBuilder private func status(_ item: SleepTimelineItem) -> some View {
         switch item.visualState {
-        case .completed: Text("Done").foregroundStyle(RecordingColor.secondary)
+        case .completed:
+            Text(item.unavailableReason == .netSleepUnconfirmed ? "Net sleep unknown" : "Done")
+                .foregroundStyle(RecordingColor.secondary)
         case .active:
             Group {
                 if let elapsed = item.elapsedMinutes {
@@ -342,6 +344,7 @@ struct TodayPlanCard: View {
         var value = Text("Original Sleep Day: \(item.sleepDay.formatted(date: .abbreviated, time: .omitted)).")
         if let time = item.time { value = value + Text(" Start: \(time.formatted(date: .abbreviated, time: .shortened)).") }
         if let duration = item.durationMinutes { value = value + Text(" \(TimeFormat.minutes(duration)) net sleep.") }
+        if item.unavailableReason == .netSleepUnconfirmed { value = value + Text(" Net sleep unknown.") }
         if item.isCarryover { value = value + Text(" Previous Sleep Day context.") }
         if let gap = item.awakeBeforeMinutes, gap > 0 { value = value + Text(" Awake for \(TimeFormat.minutes(gap)) before this event.") }
         if item.source == .estimate { value = value + Text(" Estimated, not an observation.") }

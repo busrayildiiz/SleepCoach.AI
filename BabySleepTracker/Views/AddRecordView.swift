@@ -15,7 +15,10 @@ struct AddRecordView: View {
     @State private var completionMessage: String?
     @State private var cancellationFailed = false
     @State private var breakParent: SleepRecord?
-    @State private var existingBreaks: [SleepRecord] = []
+    @State private var records: [SleepRecord] = []
+    private var existingBreaks: [SleepRecord] {
+        records.filter { $0.kind == .break && $0.parentNapID == editingRecord?.id }
+    }
 
     init(defaultDate: Date, editingRecord: SleepRecord? = nil, vm: AddRecordViewModel,
          initialKind: SleepKind? = nil, endingOngoing: Bool = false, reviewUnconfirmed: Bool = false,
@@ -58,7 +61,8 @@ struct AddRecordView: View {
                     RecordingIntervalCard(start: $draft.start, end: $draft.end,
                                           ongoing: vm.kind == .nightSleep || editingRecord?.isOngoing == true || draft.isOngoing ? $draft.isOngoing : nil,
                                           lockedStartCalendar: draft.completionCalendar,
-                                          feedback: feedback, validation: validation)
+                                          feedback: feedback, validation: validation,
+                                          onEndSelection: { draft.applyEndSelection($0) })
                     if draft.requiresEndConfirmation && !draft.isOngoing {
                         Button(draft.hasConfirmedEnd ? "Observed end confirmed" : "Confirm observed end") {
                             draft.confirmObservedEnd(now: Date())
@@ -69,7 +73,7 @@ struct AddRecordView: View {
                     if let message = draft.validationMessage(now: Date()) {
                         RecordingValidation(message: message)
                     }
-                    SleepRecordingFeedback(draft: draft, kind: vm.kind, editingRecord: editingRecord, breaks: existingBreaks)
+                    SleepRecordingFeedback(draft: draft, kind: vm.kind, editingRecord: editingRecord, records: records)
                 }
                 .padding(.horizontal, -4)
                 if let parent = editingRecord {
@@ -94,7 +98,7 @@ struct AddRecordView: View {
             .interactiveDismissDisabled(draft.requiresExplicitCancellation)
             .onReceive(NotificationCenter.default.publisher(for: .sleepRecordsDidChange)) { _ in loadBreaks() }
             .fullScreenCover(item: $breakParent) { parent in
-                AddBreakView(parent: parent, existingBreaks: existingBreaks, onSave: onSave)
+                AddBreakView(parent: parent, existingBreaks: existingBreaks, records: records, onSave: onSave)
             }
         }
         .tint(RecordingColor.accent)
@@ -124,6 +128,20 @@ struct AddRecordView: View {
         cancellationFailed = false
         let now = Date()
         let kind = draft.completionCalendar == nil ? vm.kind : (editingRecord?.kind ?? vm.kind)
+        if let original = editingRecord, original.isOngoing, draft.isOngoing,
+           original.kind == kind, original.date == draft.start {
+            if draft.requiresExplicitCancellation {
+                completionMessage = "Retry or cancel the pending end submission before confirming Still Sleeping."
+                saveFailed = true
+            } else if RecordingSubmission.confirmStillSleeping(SleepRecordVersion(original), now: now,
+                                                               persistence: SleepRecordPersistence()) {
+                dismiss()
+            } else {
+                completionMessage = "This sleep record changed. Reopen it to review its current status."
+                saveFailed = true
+            }
+            return
+        }
         submission.submit(draft: draft, kind: kind, editing: editingRecord, now: now, save: { record in
             let persistence = SleepRecordPersistence()
             let prior = record.isOngoing ? persistence.load()?.first { $0.id == record.id } : nil
@@ -146,9 +164,7 @@ struct AddRecordView: View {
     }
 
     private func loadBreaks() {
-        existingBreaks = (SleepRecordPersistence().load() ?? []).filter {
-            $0.kind == .break && $0.parentNapID == editingRecord?.id
-        }
+        records = SleepRecordPersistence().load() ?? []
     }
 }
 
@@ -156,7 +172,7 @@ private struct SleepRecordingFeedback: View {
     let draft: SleepRecordingDraft
     let kind: SleepKind
     let editingRecord: SleepRecord?
-    let breaks: [SleepRecord]
+    let records: [SleepRecord]
     @Environment(\.dynamicTypeSize) private var dynamicType
 
     var body: some View {
@@ -178,7 +194,9 @@ private struct SleepRecordingFeedback: View {
                 .frame(maxWidth: .infinity, minHeight: 56, alignment: .leading)
                 .background(RoundedRectangle(cornerRadius: 16).fill(RecordingColor.inset))
                 if let editingRecord, editingRecord.completedEnd(at: context.date) != nil {
-                    Text("Saved net sleep: \(RecordingFormat.duration(editingRecord.totalMinutes(breaks: breaks, at: context.date)))")
+                    let accounting = SleepAccounting(records: records, now: context.date, calendar: draft.completionCalendar ?? .current)
+                    let net = accounting.completedMinutes(sleepIDs: [editingRecord.id])
+                    Text(net.map { "Saved net sleep: \(RecordingFormat.duration($0))" } ?? "Saved net sleep unknown")
                         .recordingFont(12).foregroundStyle(RecordingColor.secondary)
                         .accessibilityIdentifier("recording.netSleep")
                 }

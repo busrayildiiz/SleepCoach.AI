@@ -157,9 +157,10 @@ final class TodaySleepHeroUITests: XCTestCase {
         reveal(confirm, app: app)
         capture("morning-large-type", app: app)
         confirm.tap()
-        XCTAssertTrue(app.navigationBars["Today's Wake-up"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars["Morning Wake"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["home.wake.date"].exists)
         app.buttons["home.wake.cancel"].tap()
-        dismissed(app.navigationBars["Today's Wake-up"])
+        dismissed(app.navigationBars["Morning Wake"])
         XCTAssertTrue(app.buttons["hero.confirmWake"].exists)
         let nap = app.buttons["hero.addNap"]
         reveal(nap, app: app)
@@ -306,6 +307,57 @@ extension TodaySleepHeroUITests {
 }
 
 extension TodaySleepHeroUITests {
+    func testDayDetailShowsUnknownNetForAnOngoingNapAtLargeTextSize() {
+        let app = launch("napNetUnknown", live: true, large: true)
+        let today = app.buttons["sleep.todayRecords"]
+        reveal(today, app: app)
+        today.tap()
+        let suffix = "22222222-2222-2222-2222-222222222222"
+        let unknown = app.staticTexts["sleep.netSleepUnknown." + suffix]
+        XCTAssertTrue(unknown.waitForExistence(timeout: 5))
+        XCTAssertEqual(unknown.label, "Net sleep unknown")
+        XCTAssertFalse(app.staticTexts["sleep.netSleep." + suffix].exists)
+        capture("ongoing-nap-unknown-net-xxxl", app: app)
+    }
+
+    func testHistoricalPickerCancelPreservesConfirmationAndAcceptedRevertClearsIt() throws {
+        let app = launch("staleNight", live: true)
+        let review = app.buttons["hero.reviewEnd"]
+        reveal(review, app: app)
+        review.tap()
+        let confirmation = app.buttons["recording.end.confirm"]
+        let end = app.buttons["recording.end.edit"]
+        let save = app.buttons["recording.save"]
+        XCTAssertTrue(confirmation.waitForExistence(timeout: 5))
+        XCTAssertFalse(save.isEnabled)
+        reveal(confirmation, app: app)
+        confirmation.tap()
+        XCTAssertTrue(save.isEnabled, "The unchanged endpoint can be explicitly confirmed.")
+
+        reveal(end, app: app)
+        end.tap()
+        let picker = app.datePickers["recording.end.time"]
+        XCTAssertTrue(picker.waitForExistence(timeout: 5))
+        let minute = picker.pickerWheels.element(boundBy: 1)
+        let original = try XCTUnwrap(minute.value as? String)
+        let other = original.contains("15") ? "45" : "15"
+        minute.adjust(toPickerWheelValue: other)
+        app.buttons["recording.time.cancel"].tap()
+        dismissed(app.navigationBars["End time"])
+        XCTAssertTrue(save.isEnabled)
+
+        reveal(end, app: app)
+        end.tap()
+        XCTAssertTrue(picker.waitForExistence(timeout: 5))
+        XCTAssertEqual(minute.value as? String, original)
+        minute.adjust(toPickerWheelValue: other)
+        minute.adjust(toPickerWheelValue: original)
+        app.buttons["recording.time.done"].tap()
+        dismissed(app.navigationBars["End time"])
+        XCTAssertFalse(save.isEnabled)
+        XCTAssertTrue(confirmation.isEnabled)
+    }
+
     func testStaleNightCanBeReviewedLaterOrConfirmedWithoutAnElapsedTimer() {
         let app = launch("staleNight", live: true, xxl: true)
         let review = app.buttons["hero.reviewEnd"]
@@ -347,5 +399,11 @@ extension TodaySleepHeroUITests {
         XCTAssertTrue(app.buttons["hero.endSleep"].exists)
         XCTAssertTrue(app.buttons["home.wake.add"].exists)
         capture("stale-night-still-sleeping-xxl", app: app)
+        app.buttons["AI Coach"].tap()
+        let current = app.staticTexts["coach.currentSleep"]
+        XCTAssertTrue(current.waitForExistence(timeout: 5))
+        XCTAssertEqual(current.label, "Sleeping tonight")
+        XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "coach.sleepPreparation").firstMatch.exists)
+        XCTAssertFalse(app.staticTexts["Time's up"].exists)
     }
 }

@@ -38,7 +38,7 @@ struct SleepListSheetRouter: View {
             if let parent = records.first(where: { $0.id == parentID && $0.kind != .break }) {
                 AddBreakView(parent: parent,
                              existingBreaks: records.filter { $0.parentNapID == parent.id && $0.kind == .break },
-                             onSave: onBreakSaved)
+                             records: records, onSave: onBreakSaved)
             } else {
                 NavigationStack {
                     Text("This sleep session is no longer available.")
@@ -68,11 +68,18 @@ struct SleepListSheetRouter: View {
                 onBreakSaved: onBreakSaved
             )
 
-        case .wakeTime(let night):
+        case .wakeTime(let association):
+            let calendar = association?.calendar ?? .current
+            let morning = association?.morning ?? calendar.startOfDay(for: defaultWakeTime)
+            let wakes = DailyWakeRecordPersistence().load() ?? []
+            let existing = DailyWakeRecord.uniqueObservation(in: wakes, on: morning,
+                at: max(Date(), todayWakeTime ?? .distantPast), calendar: calendar)
+            let routineWake = association.flatMap { SleepRoutine.load(defaults: .standard)?.wake(on: $0.morning, calendar: $0.calendar) }
+            let suggestion = existing?.wakeTime ?? routineWake ?? todayWakeTime ?? defaultWakeTime
+            let time = RecordingEndpointSelection.combine(day: morning, time: suggestion,
+                preserving: suggestion, calendar: calendar) ?? morning
             WakeTimeEditorView(
-                initialTime: todayWakeTime ?? defaultWakeTime,
-                night: night,
-                existing: DailyWakeRecordPersistence().load()?.first { $0.wakeTime == todayWakeTime },
+                initialTime: time, association: association, calendar: calendar, existing: existing,
                 onSave: onWakeTimeSave
             )
         }
@@ -83,54 +90,64 @@ struct SleepListSheetRouter: View {
 
 private struct WakeTimeEditorView: View {
     let onSave: (Date, WakeObservationCapture?, HomeWakeOperation, Calendar) -> String?
-    let night: SleepRecord?
-    @State private var calendar = Calendar.current
+    let association: AssociatedHomeWake?
+    @State private var calendar: Calendar
+    @Environment(\.dynamicTypeSize) private var dynamicType
     @Environment(\.dismiss) private var dismiss
     @State private var draft: WakeObservationDraft
     @State private var saveFailed = false
     @State private var saveFailureMessage: String?
     @State private var cancellationFailed = false
+    @State private var confirmSuggestedTime = false
 
-    init(initialTime: Date, night: SleepRecord?, existing: DailyWakeRecord?,
+    init(initialTime: Date, association: AssociatedHomeWake?, calendar: Calendar, existing: DailyWakeRecord?,
          onSave: @escaping (Date, WakeObservationCapture?, HomeWakeOperation, Calendar) -> String?) {
         self.onSave = onSave
-        self.night = night
+        self.association = association
+        _calendar = State(initialValue: calendar)
         _draft = State(initialValue: WakeObservationDraft(initial: initialTime, existing: existing))
     }
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 20) {
-                ZStack {
-                    Circle().fill(Color.orange.opacity(0.12)).frame(width: 58, height: 58)
-                    Image(systemName: "sunrise.fill")
-                        .font(.system(size: 27, weight: .semibold))
-                        .foregroundStyle(Color.orange)
+            ScrollView {
+                VStack(spacing: 20) {
+                    ZStack {
+                        Circle().fill(Color.orange.opacity(0.12)).frame(width: 58, height: 58)
+                        Image(systemName: "sunrise.fill")
+                            .font(.system(size: 27, weight: .semibold))
+                            .foregroundStyle(Color.orange)
+                    }
+                    VStack(spacing: 6) {
+                        Text("When did your baby wake up?")
+                            .font(.title3.weight(.bold))
+                            .foregroundStyle(Color.sleepInk)
+                            .multilineTextAlignment(.center)
+                        Text(association.map { "This also ends the night started \(RecordingFormat.timestamp($0.nightStart, calendar: calendar))." }
+                             ?? "Record an observed wake time to help plan today.")
+                            .font(.footnote.weight(.medium))
+                            .foregroundStyle(Color.sleepMuted)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 24)
+                        if let association {
+                            Text("Wake date \(RecordingFormat.date(association.morning, calendar: calendar))")
+                                .font(.subheadline.weight(.semibold))
+                                .accessibilityIdentifier("home.wake.date")
+                        }
+                    }
+                    DatePicker(
+                        "Wake-up time",
+                        selection: $draft.selected,
+                        displayedComponents: .hourAndMinute
+                    )
+                    .datePickerStyle(.wheel).labelsHidden()
+                    .frame(maxHeight: 150).clipped()
                 }
-                VStack(spacing: 6) {
-                    Text("When did your baby wake up?")
-                        .font(.system(size: 20, weight: .bold, design: .rounded))
-                        .foregroundStyle(Color.sleepInk)
-                        .multilineTextAlignment(.center)
-                    Text(night.map { "This also ends the night started \(RecordingFormat.timestamp($0.date, calendar: calendar))." }
-                         ?? "Record an observed wake time to help plan today.")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(Color.sleepMuted)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 24)
-                }
-                DatePicker(
-                    "Wake-up time",
-                    selection: $draft.selected,
-                    displayedComponents: .hourAndMinute
-                )
-                .datePickerStyle(.wheel).labelsHidden()
-                .frame(maxHeight: 150).clipped()
-                Spacer()
+                .frame(maxWidth: .infinity)
+                .padding(.top, 24)
             }
-            .padding(.top, 24)
             .background(Color.sleepBackground)
-            .navigationTitle("Today's Wake-up")
+            .navigationTitle(association == nil ? "Today's Wake-up" : "Morning Wake")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
@@ -139,17 +156,22 @@ private struct WakeTimeEditorView: View {
                     }.accessibilityIdentifier("home.wake.cancel")
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button(night == nil ? "Save" : "Save and End Sleep") {
-                        cancellationFailed = false
-                        if draft.submit(save: { date, capture in
-                            let operation = night.map { HomeWakeOperation.associated(SleepRecordVersion($0)) } ?? .independent
-                            saveFailureMessage = onSave(date, capture, operation, calendar)
-                            return saveFailureMessage == nil
-                        }) { dismiss() } else { saveFailed = true }
+                    Button(association == nil ? "Save" : "Save and End Sleep") {
+                        if draft.needsTimeConfirmation && !draft.requiresExplicitCancellation {
+                            confirmSuggestedTime = true
+                        } else {
+                            save()
+                        }
                     }.accessibilityIdentifier("home.wake.save")
                         .fontWeight(.semibold)
                 }
             }
+        }
+        .confirmationDialog("Confirm observed wake time", isPresented: $confirmSuggestedTime, titleVisibility: .visible) {
+            Button("Confirm and Save") { save() }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("Save this time only if you observed your baby wake at \(RecordingFormat.timestamp(draft.selected, calendar: calendar)).")
         }
         .alert(cancellationFailed ? "Could not cancel wake time" : "Could not save wake time", isPresented: $saveFailed) {
             Button("OK", role: .cancel) { }
@@ -161,9 +183,18 @@ private struct WakeTimeEditorView: View {
         .environment(\.calendar, calendar)
         .environment(\.timeZone, calendar.timeZone)
         .tint(Color.sleepPurpleDeep)
-        .presentationDetents([.height(390)])
+        .presentationDetents(dynamicType.isAccessibilitySize ? [.large] : [.height(390), .large])
         .presentationDragIndicator(.visible)
         .interactiveDismissDisabled(draft.requiresExplicitCancellation)
         .onDisappear { _ = draft.abandon() }
+    }
+
+    private func save() {
+        cancellationFailed = false
+        let operation = association.map(HomeWakeOperation.associated) ?? .independent
+        if draft.submit(save: { date, capture in
+            saveFailureMessage = onSave(date, capture, operation, calendar)
+            return saveFailureMessage == nil
+        }) { dismiss() } else { saveFailed = true }
     }
 }

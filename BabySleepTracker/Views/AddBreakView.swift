@@ -2,6 +2,7 @@ import SwiftUI
 
 struct AddBreakView: View {
     let existingBreaks: [SleepRecord]
+    let records: [SleepRecord]
     let onSave: (SleepRecord) -> Bool
     @Environment(\.dismiss) private var dismiss
     @State private var draft: AwakeBreakDraft
@@ -10,8 +11,10 @@ struct AddBreakView: View {
     @State private var cancellationFailed = false
     @State private var showsParent = false
 
-    init(parent: SleepRecord, editingBreak: SleepRecord? = nil, existingBreaks: [SleepRecord] = [], onSave: @escaping (SleepRecord) -> Bool) {
+    init(parent: SleepRecord, editingBreak: SleepRecord? = nil, existingBreaks: [SleepRecord] = [],
+         records: [SleepRecord]? = nil, onSave: @escaping (SleepRecord) -> Bool) {
         self.existingBreaks = existingBreaks
+        self.records = records ?? ([parent] + existingBreaks)
         self.onSave = onSave
         _draft = State(initialValue: AwakeBreakDraft(parent: parent, editing: editingBreak))
     }
@@ -33,7 +36,7 @@ struct AddBreakView: View {
                         RecordingValidation(message: message)
                     }
                 }
-                AwakeBreakFeedback(draft: draft, existing: existingBreaks)
+                AwakeBreakFeedback(draft: draft, existing: existingBreaks, records: records)
             }
             .sheet(isPresented: $showsParent) {
                 NavigationStack {
@@ -41,7 +44,9 @@ struct AddBreakView: View {
                         RecordingCard {
                             Text(parentDates).recordingFont(14).foregroundStyle(RecordingColor.secondary)
                             if draft.parent.completedEnd(at: Date()) != nil {
-                                Text("Saved net sleep: \(RecordingFormat.duration(draft.parent.totalMinutes(breaks: existingBreaks, at: Date())))")
+                                let net = SleepAccounting(records: records, now: Date(), calendar: .current)
+                                    .completedMinutes(sleepIDs: [draft.parent.id])
+                                Text(net.map { "Saved net sleep: \(RecordingFormat.duration($0))" } ?? "Saved net sleep unknown")
                                     .recordingFont(15, weight: .semibold)
                             }
                         }
@@ -131,7 +136,8 @@ struct AddBreakView: View {
         guard preview.validationMessage(existing: existingBreaks, now: now) == nil else {
             return "Awake \(TimeFormat.minutes(minutes)) · Choose valid times to preview net sleep"
         }
-        return "Awake \(TimeFormat.minutes(minutes)) · Net sleep \(TimeFormat.minutes(preview.netMinutes(existing: existingBreaks, now: now)))"
+        let net = preview.netMinutes(existing: existingBreaks, records: records, now: now)
+        return "Awake \(TimeFormat.minutes(minutes)) · \(net.map { "Net sleep \(TimeFormat.minutes($0))" } ?? "Net sleep unknown")"
     }
 
     private func validation(start: Date, end: Date) -> String? {
@@ -151,6 +157,7 @@ struct AddBreakView: View {
 private struct AwakeBreakFeedback: View {
     let draft: AwakeBreakDraft
     let existing: [SleepRecord]
+    let records: [SleepRecord]
     @Environment(\.dynamicTypeSize) private var dynamicType
 
     var body: some View {
@@ -161,14 +168,11 @@ private struct AwakeBreakFeedback: View {
 
     @ViewBuilder private func summary(now: Date) -> some View {
         let proposed = draft.record(existing: existing, now: now)
-        let net = draft.parent.completedEnd(at: now).map { _ in
-            proposed == nil ? draft.parent.totalMinutes(breaks: existing, at: now)
-                : draft.netMinutes(existing: existing, now: now)
-        }
         let presentation = proposed.flatMap { candidate in
             RecordingIntervalPresentation(parent: draft.parent, existing: existing,
-                                          proposed: candidate, editingID: draft.editing?.id, now: now)
+                                          proposed: candidate, editingID: draft.editing?.id, records: records, now: now)
         }
+        let net = presentation?.netMinutes ?? draft.netMinutes(existing: existing, records: records, now: now)
         VStack(alignment: .leading, spacing: 10) {
             RecordingSectionLabel(title: "Sleep Summary")
             RecordingCard(padding: 20) {
@@ -184,7 +188,7 @@ private struct AwakeBreakFeedback: View {
                     }
                 } else {
                     awakeDuration
-                    Text("Sleep end unconfirmed")
+                    Text(draft.parent.completedEnd(at: now) == nil ? "Sleep end unconfirmed" : "Net sleep unknown")
                         .recordingFont(13).foregroundStyle(RecordingColor.secondary)
                 }
             }

@@ -65,9 +65,11 @@ enum RecordingFormat {
         return "\(formatter.string(from: value)) \(zone)"
     }
 
-    static func date(_ value: Date, year: Bool = true) -> String {
+    static func date(_ value: Date, year: Bool = true, calendar: Calendar = .current) -> String {
         let formatter = DateFormatter()
         formatter.locale = .current
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
         formatter.dateFormat = year ? "d MMM yyyy" : "d MMM"
         return formatter.string(from: value)
     }
@@ -179,6 +181,7 @@ struct RecordingIntervalCard: View {
     var lockedStartCalendar: Calendar? = nil
     let feedback: (Date, Date) -> String
     let validation: (Date, Date) -> String?
+    var onEndSelection: ((RecordingEndpointSelection) -> Void)? = nil
     @Environment(\.dynamicTypeSize) private var dynamicType
     @Environment(\.recordingCompactHeight) private var compactHeight
     @State private var endpoint: RecordingEndpoint?
@@ -249,8 +252,14 @@ struct RecordingIntervalCard: View {
                 fixedCalendar: lockedStartCalendar,
                 feedback: { value in feedback(endpoint == .start ? value : start, endpoint == .end ? value : end) },
                 validation: { value in validation(endpoint == .start ? value : start, endpoint == .end ? value : end) },
-                onDone: { value in
-                    if endpoint == .start { start = value } else { end = value }
+                onDone: { selection in
+                    if endpoint == .start {
+                        start = selection.value
+                    } else if let onEndSelection {
+                        onEndSelection(selection)
+                    } else {
+                        end = selection.value
+                    }
                 }
             )
             .presentationDetents(dynamicType.isAccessibilitySize || compactHeight ? [.large] : [.medium, .large])
@@ -347,32 +356,32 @@ private struct RecordingTimeEditor: View {
     let identifier: String
     let feedback: (Date) -> String
     let validation: (Date) -> String?
-    let onDone: (Date) -> Void
+    let onDone: (RecordingEndpointSelection) -> Void
     let fixedCalendar: Calendar?
     @State private var invalidSelection = false
     @Environment(\.dismiss) private var dismiss
-    @State private var selection: Date
+    @State private var selection: RecordingEndpointSelection
 
     init(title: String, identifier: String, initialValue: Date, fixedCalendar: Calendar? = nil,
          feedback: @escaping (Date) -> String, validation: @escaping (Date) -> String?,
-         onDone: @escaping (Date) -> Void) {
+         onDone: @escaping (RecordingEndpointSelection) -> Void) {
         self.title = title
         self.identifier = identifier
         self.feedback = feedback
         self.validation = validation
         self.onDone = onDone
         self.fixedCalendar = fixedCalendar
-        _selection = State(initialValue: initialValue)
+        _selection = State(initialValue: RecordingEndpointSelection(initialValue))
     }
 
     private func pickerBinding(changesDay: Bool) -> Binding<Date> {
-        guard let calendar = fixedCalendar else { return $selection }
-        return Binding(get: { selection }, set: { selected in
-            let day = changesDay ? selected : selection
-            let time = changesDay ? selection : selected
+        Binding(get: { selection.value }, set: { selected in
+            guard let calendar = fixedCalendar else { selection.select(selected); return }
+            let day = changesDay ? selected : selection.value
+            let time = changesDay ? selection.value : selected
             if let combined = RecordingEndpointSelection.combine(day: day, time: time,
-                    preserving: selection, calendar: calendar) {
-                selection = combined
+                    preserving: selection.value, calendar: calendar) {
+                selection.select(combined)
                 invalidSelection = false
             } else {
                 invalidSelection = true
@@ -393,16 +402,16 @@ private struct RecordingTimeEditor: View {
                         .accessibilityLabel(title)
                         .accessibilityIdentifier("\(identifier).time")
                         .frame(maxWidth: .infinity)
-                    Text(feedback(selection)).font(.subheadline.weight(.semibold))
+                    Text(feedback(selection.value)).font(.subheadline.weight(.semibold))
                         .foregroundStyle(RecordingColor.accent)
                         .accessibilityIdentifier("recording.editor.feedback")
                     if let calendar = fixedCalendar {
-                        Text(RecordingFormat.timestamp(selection, calendar: calendar))
+                        Text(RecordingFormat.timestamp(selection.value, calendar: calendar))
                             .recordingFont(13).accessibilityIdentifier("recording.end.selection")
                     }
                     if invalidSelection {
                         RecordingValidation(message: "Choose a valid local time for this date.")
-                    } else if let message = validation(selection) {
+                    } else if let message = validation(selection.value) {
                         RecordingValidation(message: message)
                     }
                 }

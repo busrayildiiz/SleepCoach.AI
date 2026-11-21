@@ -246,6 +246,35 @@ extension SleepRecordingFlowTests {
         XCTAssertEqual(timeAfterDate, dateAfterTime)
         XCTAssertEqual(RecordingEndpointSelection.combine(day: initial, time: initial, preserving: initial, calendar: calendar), initial)
     }
+
+    func testHistoricalConfirmationSurvivesCanceledPickerButAcceptedEditAndRevertClearsIt() throws {
+        let now = Date(timeIntervalSinceReferenceDate: 500_000)
+        let night = SleepRecord(date: now.addingTimeInterval(-48 * 3600), duration: 0,
+                                kind: .nightSleep, isOngoing: true)
+        var draft = SleepRecordingDraft(defaultDate: night.date, editing: night, now: now)
+        draft.prepareForEnding(at: now, calendar: .current, requireConfirmation: true)
+        draft.confirmObservedEnd(now: now)
+
+        var canceled = RecordingEndpointSelection(draft.end)
+        canceled.select(now.addingTimeInterval(-60))
+        XCTAssertTrue(canceled.hasChanged)
+        XCTAssertEqual(draft.end, now)
+        XCTAssertTrue(draft.hasConfirmedEnd)
+
+        draft.applyEndSelection(RecordingEndpointSelection(draft.end))
+        XCTAssertTrue(draft.hasConfirmedEnd, "Done on an unchanged picker keeps the earlier explicit confirmation.")
+        canceled.select(now)
+        draft.applyEndSelection(canceled)
+        XCTAssertEqual(draft.end, now)
+        XCTAssertFalse(draft.hasConfirmedEnd)
+        XCTAssertFalse(draft.isReadyToSubmit)
+        XCTAssertNil(draft.record(kind: .nightSleep, editing: night, now: now))
+        draft.confirmObservedEnd(now: now)
+        let record = try XCTUnwrap(draft.record(kind: .nightSleep, editing: night, now: now))
+        XCTAssertEqual(record.date, night.date)
+        XCTAssertEqual(record.kind, .nightSleep)
+        XCTAssertEqual(record.observedEnd, now)
+    }
 }
 
 extension SleepRecordingFlowTests {

@@ -2,7 +2,6 @@ import SwiftUI
 
 struct InsightsView: View {
     @Binding var sleepConfirmation: StillSleepingConfirmation?
-    let isVisible: Bool
 
     private enum CoachTab: String, CaseIterable {
         case overview = "Coach"
@@ -39,8 +38,10 @@ struct InsightsView: View {
 
                     if selectedTab == .overview {
                         coachHeroCard
-                        takeActionCard
-                        watchForSignsCard
+                        if orchestrator.snapshot?.hasCurrentSleep != true {
+                            if actionTargetTime != nil { takeActionCard }
+                            watchForSignsCard
+                        }
                         aiCoachNoteCard
                         learningProgressOverviewCard
                     } else {
@@ -60,17 +61,6 @@ struct InsightsView: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: .sleepRecordsDidChange)) { _ in refresh() }
             .onReceive(NotificationCenter.default.publisher(for: .dailyWakeRecordsDidChange)) { _ in refresh() }
-            .task(id: isVisible) { @MainActor in
-                guard isVisible else { return }
-                while !Task.isCancelled {
-                    do { try await Task.sleep(for: .seconds(60)) } catch { return }
-                    guard let snapshot = orchestrator.snapshot else { continue }
-                    let now = Date()
-                    if snapshot.hasCurrentSleep || !snapshot.evaluationCalendar.isDate(now, inSameDayAs: snapshot.generatedAt) {
-                        orchestrator.generate(now: now, confirmation: sleepConfirmation, requestCoaching: false)
-                    }
-                }
-            }
             .environment(\.locale, Locale(identifier: "en_US"))
         }
     }
@@ -83,7 +73,9 @@ struct InsightsView: View {
             Text(summary)
                 .font(.caption)
             if !snapshot.subtotalsAreReliable {
-                Text("Overlapping records make daytime, night, or Sleep Day subtotals unreliable. Review the original records.")
+                let reason = [snapshot.recordedSleepDay, snapshot.recordedDaytime, snapshot.recordedRolling24h]
+                    .compactMap(\.unavailableReason).first { $0 == .conflict || $0 == .unresolvedBreak }
+                Text("\(reason?.rawValue ?? "Sleep records need review").")
                     .font(.caption).foregroundStyle(.orange)
             }
         }
@@ -120,8 +112,8 @@ struct InsightsView: View {
 
     private var headerSubtitle: String {
         orchestrator.snapshot?.nextSleepKind == .bedtime
-            ? "Personalized guidance for tonight"
-            : "Personalized guidance for today"
+            ? "Sleep guidance for tonight"
+            : "Sleep guidance for today"
     }
 
     private var tabPicker: some View {
@@ -164,11 +156,14 @@ struct InsightsView: View {
     // MARK: - Overview
 
     private var coachHeroCard: some View {
-        let isBedtime = orchestrator.snapshot?.nextSleepKind == .bedtime
+        let snapshot = orchestrator.snapshot
+        let isBedtime = snapshot?.nextSleepKind == .bedtime
+        let current = snapshot?.currentSleepKind
         let targetTime = actionTargetTime
         let confidence = overallConfidence
-        let windowText = isBedtime ? bedtimeWindowText : napWindowText
-        let source = (isBedtime ? orchestrator.snapshot?.night.source : orchestrator.snapshot?.daytime.source)
+        let windowText = current != nil ? "Record the observed end when your baby wakes." : (isBedtime ? bedtimeWindowText : napWindowText)
+        let source = current != nil ? .currentActivity : (isBedtime ? snapshot?.night.source : snapshot?.daytime.source)
+        let limitation = isBedtime ? snapshot?.night.recommendation.limitation : snapshot?.daytime.recommendation.limitation
 
         return VStack(alignment: .leading, spacing: 0) {
             Text(isBedtime ? "TONIGHT'S PLAN" : "TODAY'S PLAN")
@@ -190,13 +185,15 @@ struct InsightsView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(isBedtime ? "Bedtime" : "Next nap")
+                    Text(current != nil ? "Current sleep" : (isBedtime ? "Bedtime" : "Next nap"))
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(CoachColor.muted)
-                    Text(time(targetTime))
-                        .font(.system(size: 24, weight: .bold, design: .rounded))
+                    Text(current.map { $0 == .nightSleep ? "Sleeping tonight" : "Sleeping now" } ?? time(targetTime))
+                        .font(.title2.bold())
                         .foregroundStyle(CoachColor.ink)
                         .monospacedDigit()
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier(current == nil ? "coach.nextSleep" : "coach.currentSleep")
                 }
 
                 Spacer(minLength: 8)
@@ -226,26 +223,31 @@ struct InsightsView: View {
 
             Divider().overlay(CoachColor.stroke)
 
-            HStack(spacing: 5) {
-                Text(source?.rawValue ?? "Planning")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(CoachColor.muted)
-                Text(windowText)
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(CoachColor.ink)
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 5) {
+                    Text(source?.rawValue ?? "Planning")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(CoachColor.muted)
+                    Text(windowText)
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(CoachColor.ink)
 
-                Spacer()
+                    Spacer()
 
-                Image(systemName: "clock")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(CoachColor.purpleDeep.opacity(0.7))
-                Text(lastUpdatedText)
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(CoachColor.muted)
+                    Image(systemName: "clock")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(CoachColor.purpleDeep.opacity(0.7))
+                    Text(lastUpdatedText)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(CoachColor.muted)
 
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(CoachColor.muted)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(CoachColor.muted)
+                }
+                if current == nil, let limitation {
+                    Text(limitation.rawValue).font(.caption).foregroundStyle(CoachColor.muted)
+                }
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
@@ -314,6 +316,7 @@ struct InsightsView: View {
             RoundedRectangle(cornerRadius: 17, style: .continuous)
                 .stroke(Color(red: 1.0, green: 0.78, blue: 0.45).opacity(0.30), lineWidth: 1)
         )
+        .accessibilityIdentifier("coach.sleepPreparation")
     }
 
     private var watchForSignsCard: some View {
@@ -489,11 +492,10 @@ struct InsightsView: View {
 
     private var learningProgressOverviewCard: some View {
         let tracked = min(trackedDays, 14)
-        let remaining = max(0, 14 - tracked)
 
         return HStack(alignment: .center, spacing: 16) {
             VStack(alignment: .leading, spacing: 14) {
-                Text("LEARNING PROGRESS")
+                Text("RECORDING ACTIVITY")
                     .font(.system(size: 11, weight: .bold, design: .rounded))
                     .tracking(0.35)
                     .foregroundStyle(CoachColor.green)
@@ -502,12 +504,12 @@ struct InsightsView: View {
                     learningProgressRing(tracked: tracked)
 
                     VStack(alignment: .leading, spacing: 7) {
-                        Text(learningProgressTitle)
+                        Text("Days with records")
                             .font(.system(size: 12.5, weight: .bold))
                             .foregroundStyle(CoachColor.ink)
                             .fixedSize(horizontal: false, vertical: true)
 
-                        Text(learningProgressDetail(remaining: remaining))
+                        Text("Recording coverage is unconfirmed.")
                             .font(.system(size: 11.5, weight: .semibold))
                             .lineSpacing(2)
                             .foregroundStyle(CoachColor.muted)
@@ -629,7 +631,7 @@ struct InsightsView: View {
     private var minutesToGoText: String {
         guard let target = actionTargetTime else { return "Time unavailable" }
         let minutes = Int(target.timeIntervalSince(Date()) / 60)
-        guard minutes > 0 else { return "Time's up" }
+        guard minutes > 0 else { return "Estimated time passed" }
         return "~\(minutes) min to go"
     }
     
@@ -653,45 +655,6 @@ struct InsightsView: View {
         let offsetMinutesBeforeTarget: Int
     }
 
-    // MARK: - Personalization Model
-
-    private struct PersonalizationFactorResult: Identifiable {
-        let id: String
-        let title: String
-        let valueText: String
-        let deltaMinutes: Int
-    }
-
-    private struct PersonalizationBreakdown {
-        let baselineDate: Date
-        let finalDate: Date
-        let factors: [PersonalizationFactorResult]
-        let narrative: String
-    }
-
-    private struct AgentContribution: Identifiable {
-        let id: String
-        let name: String
-        let icon: String
-        let score: Int?
-    }
-
-    private struct ConfidenceSignal: Identifiable {
-        let id: String
-        let title: String
-        let detail: String
-        let isPositive: Bool
-    }
-
-    private struct ComparisonMetric: Identifiable {
-        let id: String
-        let title: String
-        let value: String
-        let detail: String
-        let icon: String
-        let color: Color
-    }
-
     private struct DecisionStep: Identifiable {
         let id: String
         let time: String
@@ -706,10 +669,9 @@ struct InsightsView: View {
     }
 
     private var actionTargetTime: Date? {
-        let isBedtime = orchestrator.snapshot?.nextSleepKind == .bedtime
-        return isBedtime
-            ? orchestrator.snapshot?.night.recommendation.value
-            : orchestrator.snapshot?.daytime.recommendation.value
+        guard let snapshot = orchestrator.snapshot, !snapshot.hasCurrentSleep else { return nil }
+        return snapshot.nextSleepKind == .bedtime
+            ? snapshot.night.recommendation.value : snapshot.daytime.recommendation.value
     }
 
     private var isBedtimeAction: Bool {
@@ -804,349 +766,44 @@ struct InsightsView: View {
         ]
     }
     
-    private func loadTodayRecordsForBreakdown() -> [SleepRecord] {
-        guard let snapshot = orchestrator.snapshot, let records = SleepRecordPersistence().load() else { return [] }
-        return SleepAccounting(records: records, now: snapshot.generatedAt, calendar: snapshot.evaluationCalendar)
-            .records(on: snapshot.generatedAt)
-    }
-
-    private func expectedLastNapEndTime(profile: AgeBasedSleepProfile, napCount: Int, anchor: Date) -> Date {
-        guard napCount > 0 else { return anchor }
-        let wwCenter = (profile.wakeWindowRange.lowerBound + profile.wakeWindowRange.upperBound) / 2
-        let napDurationCenter = Int(Double(profile.maxSingleNapMinutes) * 0.75)
-        var cursor = anchor
-        for _ in 0..<napCount {
-            cursor = cursor.addingMinutes(wwCenter).addingMinutes(napDurationCenter)
-        }
-        return cursor
-    }
-
-    private func buildPersonalizationNarrative(
-        factors: [PersonalizationFactorResult],
-        babyName: String
-    ) -> String {
-        let totalDelta = factors.reduce(0) { $0 + $1.deltaMinutes }
-        let direction = totalDelta < 0 ? "earlier" : "later"
-
-        var clauses: [String] = []
-
-        if let wakeFactor = factors.first(where: { $0.id == "wake_up" }) {
-            clauses.append(wakeFactor.deltaMinutes >= 0
-                ? "\(babyName) woke up later than usual"
-                : "\(babyName) woke up earlier than usual")
-        }
-        if let napFactor = factors.first(where: { $0.id == "last_nap" }) {
-            clauses.append(napFactor.deltaMinutes >= 0
-                ? "the last nap still ended later than expected for that wake-up"
-                : "the last nap ended earlier than expected for that wake-up")
-        }
-        if let deficitFactor = factors.first(where: { $0.id == "daytime_deficit" }), deficitFactor.deltaMinutes < 0 {
-            clauses.append("today's total daytime sleep was a bit short, raising overtired risk")
-        }
-
-        let intro = clauses.isEmpty
-            ? "Today's sleep signals were close to the baseline"
-            : "Today, " + clauses.joined(separator: ", and ")
-
-        guard totalDelta != 0 else {
-            return "\(intro), so bedtime stays right on the age-based baseline tonight."
-        }
-        return "\(intro), so bedtime is adjusted \(abs(totalDelta)) min \(direction) tonight to protect healthy sleep pressure."
-    }
-    
-    private enum PersonalizationCardState {
-        case notApplicable
-        case insufficientData(missingNaps: Int)
-        case ready(PersonalizationBreakdown)
-    }
-
-    private func personalizationCardState() -> PersonalizationCardState {
-        guard let snapshot = orchestrator.snapshot,
-              snapshot.nextSleepKind == .bedtime,
-              snapshot.ageMonths >= 4
-        else { return .notApplicable }
-
-        let profile = DefaultAgeBasedSleepProfileProvider().profile(forAgeMonths: snapshot.ageMonths)
-        let records = loadTodayRecordsForBreakdown()
-        let dayNaps = records.filter { $0.kind == .dayNap && !$0.isOngoing }
-
-        guard dayNaps.count >= profile.expectedNapCount.lowerBound else {
-            let missing = profile.expectedNapCount.lowerBound - dayNaps.count
-            return .insufficientData(missingNaps: missing)
-        }
-
-        guard let breakdown = personalizationBreakdown() else {
-            return .insufficientData(missingNaps: 0)
-        }
-
-        return .ready(breakdown)
-    }
-    private func personalizationEmptyContent(missingNaps: Int) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 7) {
-                ZStack {
-                    Circle()
-                        .fill(CoachColor.purpleDeep.opacity(0.12))
-                        .frame(width: 19, height: 19)
-                    Text("2")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(CoachColor.purpleDeep)
-                }
-                sectionHeader("PERSONALIZATION (HOW WE ADJUSTED)", icon: nil)
-            }
-
-            HStack(alignment: .top, spacing: 0) {
-                personalizationColumn(title: "AAP baseline", subtitle: "(bedtime range)", value: "–", delta: nil, isEndpoint: true)
-                personalizationColumn(title: "Today's wake-up", subtitle: nil, value: "–", delta: nil, isEndpoint: false)
-                personalizationColumn(title: "Last nap ended at", subtitle: nil, value: "–", delta: nil, isEndpoint: false)
-                personalizationColumn(title: "Today's daytime sleep", subtitle: nil, value: "–", delta: nil, isEndpoint: false)
-                personalizationColumn(title: "Final recommendation", subtitle: nil, value: "–", delta: nil, isEndpoint: true)
-            }
-            .opacity(0.45)
-
-            personalizationDotTrack(stepCount: 5)
-                .opacity(0.35)
-
-            HStack(alignment: .top, spacing: 8) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.system(size: 10.5, weight: .semibold))
-                    .foregroundStyle(Color(red: 0.85, green: 0.45, blue: 0.10))
-                    .padding(.top, 1)
-
-                Text(missingDataMessage(missingNaps: missingNaps))
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(CoachColor.ink.opacity(0.72))
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(11)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 11, style: .continuous)
-                    .fill(Color(red: 1.0, green: 0.6, blue: 0.2).opacity(0.12))
-            )
-        }
-        .padding(15)
-        .background(premiumCardBackground())
-        .overlay(cardStroke(18))
-    }
-    private func missingDataMessage(missingNaps: Int) -> String {
-        if missingNaps > 0 {
-            return "Not enough naps logged today to personalize tonight's bedtime — \(missingNaps) more nap\(missingNaps == 1 ? "" : "s") needed. Showing this once today's sleep is fully logged."
-        }
-        return "Today's sleep data isn't complete enough yet to explain tonight's adjustment. Log the day's naps and wake time for a personalized breakdown."
-    }
-
-    private func personalizationBreakdown() -> PersonalizationBreakdown? {
-        guard let snapshot = orchestrator.snapshot,
-              snapshot.nextSleepKind == .bedtime,
-              snapshot.ageMonths >= 4
-        else { return nil }
-
-        let profile = DefaultAgeBasedSleepProfileProvider().profile(forAgeMonths: snapshot.ageMonths)
-        let now = snapshot.generatedAt
-        let calendar = snapshot.evaluationCalendar
-        let dayNaps = loadTodayRecordsForBreakdown().filter { $0.kind == .dayNap }
-            .compactMap { $0.completedEnd(at: now) }.sorted()
-        guard dayNaps.count >= profile.expectedNapCount.lowerBound,
-              let actualLastNapEnd = dayNaps.last,
-              let typicalWake = snapshot.evaluationRoutine?.wake(on: now, calendar: calendar),
-              let wakeAnchor = snapshot.evaluationWake,
-              snapshot.night.source == .recordedEstimate,
-              let finalDate = snapshot.night.recommendation.value,
-              let totalDaytime = snapshot.recordedDaytime.comparableMinutes else { return nil }
-
-        // Baseline: bebek typical saatte uyansaydı beklenen son nap bitişi (yaşa dayalı, bugünden bağımsız)
-        let baselineLastNapEnd = expectedLastNapEndTime(
-            profile: profile, napCount: profile.expectedNapCount.lowerBound, anchor: typicalWake
-        )
-        let ewwMin = profile.eveningWakeWindow.lowerBound
-        let baselineDate = baselineLastNapEnd.addingMinutes(ewwMin)
-
-        // Faktör 1: Bugünün gerçek uyanma saati, typical'a göre ne kadar kaydı — günün geri kalanını öteler
-        let wakeOffsetDelta = Int(wakeAnchor.timeIntervalSince(typicalWake) / 60)
-
-        // Faktör 2: Wake-up ötelemesi hesaba katıldıktan SONRA, son nap ne kadar erken/geç bitti (residual — çifte sayım yok)
-        let expectedLastNapEndAdjusted = baselineLastNapEnd.addingMinutes(wakeOffsetDelta)
-        let napTimingDelta = Int(actualLastNapEnd.timeIntervalSince(expectedLastNapEndAdjusted) / 60)
-
-        // Faktör 3: Gündüz uyku açığı telafisi — OvertiredCalculator.bedtimeWindow ile birebir aynı formül
-        let daytimeDeficit = max(0, profile.daytimeSleepRange.lowerBound - totalDaytime)
-        let adjustment = daytimeDeficit / 3
-        let deficitDelta = -adjustment
-
-        var factors: [PersonalizationFactorResult] = []
-
-        if abs(wakeOffsetDelta) >= 3 {
-            factors.append(PersonalizationFactorResult(
-                id: "wake_up",
-                title: "Today's wake-up",
-                valueText: time(wakeAnchor),
-                deltaMinutes: wakeOffsetDelta
-            ))
-        }
-
-        if abs(napTimingDelta) >= 3 {
-            factors.append(PersonalizationFactorResult(
-                id: "last_nap",
-                title: "Last nap ended at",
-                valueText: time(actualLastNapEnd),
-                deltaMinutes: napTimingDelta
-            ))
-        }
-
-        if deficitDelta != 0 {
-            factors.append(PersonalizationFactorResult(
-                id: "daytime_deficit",
-                title: "Today's daytime sleep",
-                valueText: TimeFormat.minutes(totalDaytime),
-                deltaMinutes: deficitDelta
-            ))
-        }
-
-        guard !factors.isEmpty else { return nil }
-
-        let narrative = buildPersonalizationNarrative(factors: factors, babyName: displayedBabyName)
-
-        return PersonalizationBreakdown(
-            baselineDate: baselineDate,
-            finalDate: finalDate,
-            factors: factors,
-            narrative: narrative
-        )
-    }
-
-    private var personalizationCard: some View {
-        Group {
-            switch personalizationCardState() {
-            case .notApplicable:
-                EmptyView()
-            case .insufficientData(let missingNaps):
-                personalizationEmptyContent(missingNaps: missingNaps)
-            case .ready(let breakdown):
-                personalizationContent(breakdown)
-            }
-        }
-    }
-
-    private func personalizationContent(_ breakdown: PersonalizationBreakdown) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 7) {
-                ZStack {
-                    Circle()
-                        .fill(CoachColor.purpleDeep.opacity(0.12))
-                        .frame(width: 19, height: 19)
-                    Text("2")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(CoachColor.purpleDeep)
-                }
-                sectionHeader("PERSONALIZATION (HOW WE ADJUSTED)", icon: nil)
-            }
-
-            HStack(alignment: .top, spacing: 0) {
-                personalizationColumn(
-                    title: "AAP baseline", subtitle: "(bedtime range)",
-                    value: time(breakdown.baselineDate), delta: nil, isEndpoint: true
-                )
-                ForEach(breakdown.factors) { factor in
-                    personalizationColumn(
-                        title: factor.title, subtitle: nil,
-                        value: factor.valueText, delta: factor.deltaMinutes, isEndpoint: false
-                    )
-                }
-                personalizationColumn(
-                    title: "Final recommendation", subtitle: nil,
-                    value: time(breakdown.finalDate), delta: nil, isEndpoint: true
-                )
-            }
-
-            personalizationDotTrack(stepCount: breakdown.factors.count + 2)
-
-            HStack(alignment: .top, spacing: 8) {
-                Image(systemName: "sparkles")
-                    .font(.system(size: 10.5, weight: .semibold))
-                    .foregroundStyle(CoachColor.purpleDeep.opacity(0.85))
-                    .padding(.top, 1)
-                Text(breakdown.narrative)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(CoachColor.ink.opacity(0.75))
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(11)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 11, style: .continuous)
-                    .fill(CoachColor.purple.opacity(0.07))
-            )
-        }
-        .padding(15)
-        .background(premiumCardBackground())
-        .overlay(cardStroke(18))
-    }
-
-    private func personalizationColumn(
-        title: String, subtitle: String?, value: String, delta: Int?, isEndpoint: Bool
-    ) -> some View {
-        VStack(spacing: 4) {
-            Text(title)
-                .font(.system(size: 9.5, weight: .semibold))
-                .foregroundStyle(CoachColor.muted)
-                .multilineTextAlignment(.center)
-                .lineLimit(2)
-                .minimumScaleFactor(0.85)
-
-            if let subtitle {
-                Text(subtitle)
-                    .font(.system(size: 8.5, weight: .medium))
-                    .foregroundStyle(CoachColor.muted.opacity(0.75))
-            }
-
-            Text(value)
-                .font(.system(size: isEndpoint ? 13 : 11.5, weight: .bold, design: .rounded))
-                .foregroundStyle(isEndpoint ? CoachColor.purpleDeep : CoachColor.ink)
-                .monospacedDigit()
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-
-            if let delta {
-                Text("\(delta >= 0 ? "+" : "–")\(abs(delta)) min")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(CoachColor.sun)
-            }
-        }
-        .frame(maxWidth: .infinity)
-    }
-
-    private func personalizationDotTrack(stepCount: Int) -> some View {
-        HStack(spacing: 0) {
-            ForEach(0..<stepCount, id: \.self) { index in
-                Circle()
-                    .stroke(CoachColor.purpleDeep, lineWidth: 1.5)
-                    .background(Circle().fill(Color(.systemBackground)))
-                    .frame(width: 8, height: 8)
-                if index < stepCount - 1 {
-                    Rectangle()
-                        .fill(CoachColor.purpleDeep.opacity(0.35))
-                        .frame(height: 1.5)
-                }
-            }
-        }
-    }
-
-    // MARK: - Logic
-
     private var predictionLogicStack: some View {
         VStack(spacing: 12) {
-            medicalEvidenceCard
-            personalizationCard
-            agentContributionCard
-            confidenceExplainerGrid
-            todayComparisonCard
-            decisionTimelineCard
+            if let snapshot = orchestrator.snapshot {
+                medicalEvidenceCard(ageMonths: snapshot.ageMonths)
+                planningEvidenceCard(snapshot)
+                coverageDetailsCard(snapshot.dataQualityReport)
+                todayComparisonCard(snapshot)
+                decisionTimelineCard
+            }
         }
     }
 
-    private var medicalEvidenceCard: some View {
-        let ageMonths = orchestrator.snapshot?.ageMonths ?? 6
+    private func planningEvidenceCard(_ snapshot: OrchestratedSnapshot) -> some View {
+        let isBedtime = snapshot.nextSleepKind == .bedtime
+        let recorded = snapshot.sleepAssessment?.anchor
+        let source = snapshot.hasCurrentSleep ? .currentActivity : (isBedtime ? snapshot.night.source : snapshot.daytime.source)
+        let limitation = isBedtime ? snapshot.night.recommendation.limitation : snapshot.daytime.recommendation.limitation
+
+        return VStack(alignment: .leading, spacing: 8) {
+            sectionHeader("PLANNING SOURCE", icon: nil)
+            Text(source.rawValue).font(.subheadline.weight(.semibold))
+            if source == .recordedEstimate {
+                switch recorded {
+                case .wake(let date): Text("Observed wake at \(time(date))")
+                case .napEnd(_, let date): Text("Recorded nap ended at \(time(date))")
+                case nil: EmptyView()
+                }
+            }
+            if let limitation { Text(limitation.rawValue) }
+        }
+        .font(.footnote)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(15)
+        .background(premiumCardBackground())
+        .overlay(cardStroke(18))
+    }
+
+    private func medicalEvidenceCard(ageMonths: Int) -> some View {
         let profile = DefaultAgeBasedSleepProfileProvider().profile(forAgeMonths: ageMonths)
 
         return VStack(alignment: .leading, spacing: 13) {
@@ -1204,207 +861,44 @@ struct InsightsView: View {
         .overlay(cardStroke(18))
     }
 
-    private var agentContributionCard: some View {
-        VStack(alignment: .leading, spacing: 13) {
-            numberedSectionHeader(number: 3, title: "AGENT CONTRIBUTIONS")
-
-            VStack(spacing: 9) {
-                ForEach(agentContributions) { item in
-                    agentContributionRow(item)
-                }
+    private func coverageDetailsCard(_ report: DataQualityReport) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            sectionHeader("RECORDING COVERAGE", icon: nil)
+            Text("\(report.trackedDays) of the last 14 days contain records.")
+            Text(report.completeDays == 0 ? "Complete day coverage is unconfirmed."
+                 : "\(report.completeDays) days have confirmed coverage.")
+            if report.plausibilityAnomalyCount > 0 {
+                Text("Some recorded entries need review.")
             }
         }
+        .font(.footnote)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(15)
         .background(premiumCardBackground())
         .overlay(cardStroke(18))
     }
 
-    private func agentContributionRow(_ item: AgentContribution) -> some View {
-        HStack(spacing: 9) {
-            ZStack {
-                Circle()
-                    .fill(CoachColor.purple.opacity(0.11))
-                    .frame(width: 23, height: 23)
-                Image(systemName: item.icon)
-                    .font(.system(size: 10.5, weight: .bold))
-                    .foregroundStyle(CoachColor.purpleDeep)
+    @ViewBuilder private func todayComparisonCard(_ snapshot: OrchestratedSnapshot) -> some View {
+        if let today = snapshot.recordedSleepDay.comparableMinutes,
+           let previousDay = snapshot.evaluationCalendar.date(byAdding: .day, value: -1, to: snapshot.generatedAt),
+           let records = SleepRecordPersistence().load(),
+           let previous = SleepAccounting(records: records, now: snapshot.generatedAt,
+                                          calendar: snapshot.evaluationCalendar).completedSubtotal(on: previousDay).comparableMinutes {
+            VStack(alignment: .leading, spacing: 8) {
+                sectionHeader("TODAY VS YESTERDAY", icon: nil)
+                Text("Today \(TimeFormat.minutes(today)) · Yesterday \(TimeFormat.minutes(previous))")
+                    .font(.footnote)
             }
-
-            Text(item.name)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(CoachColor.ink)
-                .frame(width: 132, alignment: .leading)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    Capsule()
-                        .fill(CoachColor.purple.opacity(0.10))
-                    if let score = item.score {
-                        Capsule()
-                            .fill(
-                                LinearGradient(
-                                    colors: [CoachColor.purple.opacity(0.75), CoachColor.purpleDeep],
-                                    startPoint: .leading,
-                                    endPoint: .trailing
-                                )
-                            )
-                            .frame(width: geo.size.width * CGFloat(score) / 100)
-                    }
-                }
-            }
-            .frame(height: 5)
-
-            Text(item.score.map { "\($0)%" } ?? "–")
-                .font(.system(size: 10.5, weight: .bold, design: .rounded))
-                .foregroundStyle(CoachColor.ink)
-                .monospacedDigit()
-                .frame(width: 34, alignment: .trailing)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(15)
+            .background(premiumCardBackground())
+            .overlay(cardStroke(18))
         }
-    }
-
-    private var confidenceExplainerGrid: some View {
-        HStack(alignment: .top, spacing: 10) {
-            confidenceDetailsCard
-            whyNotHundredCard
-        }
-    }
-
-    private var confidenceDetailsCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            numberedSectionHeader(number: 4, title: "CONFIDENCE DETAILS")
-
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(overallConfidence.map { "\($0)%" } ?? "–")
-                    .font(.system(size: 30, weight: .bold, design: .rounded))
-                    .foregroundStyle(CoachColor.purpleDeep)
-                    .monospacedDigit()
-                Text(confidenceLevelText)
-                    .font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(confidenceLevelColor)
-            }
-
-            VStack(alignment: .leading, spacing: 7) {
-                ForEach(confidenceSignals.prefix(5)) { signal in
-                    HStack(alignment: .top, spacing: 7) {
-                        Image(systemName: signal.isPositive ? "checkmark.circle" : "exclamationmark.circle")
-                            .font(.system(size: 11, weight: .bold))
-                            .foregroundStyle(signal.isPositive ? CoachColor.green : CoachColor.sun)
-                            .padding(.top, 1)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(signal.title)
-                                .font(.system(size: 10.5, weight: .bold))
-                                .foregroundStyle(CoachColor.ink)
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.78)
-                            Text(signal.detail)
-                                .font(.system(size: 9, weight: .medium))
-                                .foregroundStyle(CoachColor.muted)
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.76)
-                        }
-                    }
-                }
-            }
-        }
-        .padding(15)
-        .frame(maxWidth: .infinity, minHeight: 194, alignment: .topLeading)
-        .background(premiumCardBackground())
-        .overlay(cardStroke(18))
-    }
-
-    private var whyNotHundredCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            numberedSectionHeader(number: 5, title: "WHY NOT 100%?")
-
-            Text(confidenceLimitTitle)
-                .font(.system(size: 11.5, weight: .bold))
-                .foregroundStyle(CoachColor.ink)
-
-            Text(confidenceLimitDetail)
-                .font(.system(size: 11, weight: .medium))
-                .lineSpacing(2)
-                .foregroundStyle(CoachColor.muted)
-                .fixedSize(horizontal: false, vertical: true)
-
-            Spacer(minLength: 4)
-
-            HStack(alignment: .bottom, spacing: 7) {
-                ForEach(0..<6, id: \.self) { index in
-                    RoundedRectangle(cornerRadius: 3, style: .continuous)
-                        .fill(
-                            LinearGradient(
-                                colors: [CoachColor.purple.opacity(0.20), CoachColor.purpleDeep.opacity(0.72)],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            )
-                        )
-                        .frame(width: 13, height: CGFloat(8 + index * 8))
-                        .opacity(index < min(trackedDays / 2, 6) ? 0.95 : 0.24)
-                }
-
-                Spacer()
-
-                Image(systemName: "arrow.up.right")
-                    .font(.system(size: 26, weight: .bold))
-                    .foregroundStyle(CoachColor.purple.opacity(0.45))
-            }
-        }
-        .padding(15)
-        .frame(maxWidth: .infinity, minHeight: 194, alignment: .topLeading)
-        .background(premiumCardBackground())
-        .overlay(cardStroke(18))
-    }
-
-    private var todayComparisonCard: some View {
-        VStack(alignment: .leading, spacing: 13) {
-            numberedSectionHeader(number: 6, title: "TODAY VS YESTERDAY")
-
-            HStack(spacing: 0) {
-                ForEach(Array(comparisonMetrics.enumerated()), id: \.element.id) { index, metric in
-                    comparisonMetricView(metric)
-                    if index < comparisonMetrics.count - 1 {
-                        Rectangle()
-                            .fill(CoachColor.stroke)
-                            .frame(width: 1, height: 44)
-                            .padding(.horizontal, 8)
-                    }
-                }
-            }
-        }
-        .padding(15)
-        .background(premiumCardBackground())
-        .overlay(cardStroke(18))
-    }
-
-    private func comparisonMetricView(_ metric: ComparisonMetric) -> some View {
-        VStack(spacing: 5) {
-            Image(systemName: metric.icon)
-                .font(.system(size: 13, weight: .bold))
-                .foregroundStyle(metric.color)
-            Text(metric.title)
-                .font(.system(size: 9.5, weight: .semibold))
-                .foregroundStyle(CoachColor.muted)
-                .lineLimit(1)
-                .minimumScaleFactor(0.78)
-            Text(metric.value)
-                .font(.system(size: 12, weight: .bold, design: .rounded))
-                .foregroundStyle(metric.color)
-                .lineLimit(1)
-                .minimumScaleFactor(0.75)
-            Text(metric.detail)
-                .font(.system(size: 9, weight: .medium))
-                .foregroundStyle(CoachColor.muted)
-                .lineLimit(1)
-                .minimumScaleFactor(0.78)
-        }
-        .frame(maxWidth: .infinity)
     }
 
     private var decisionTimelineCard: some View {
         VStack(alignment: .leading, spacing: 13) {
-            numberedSectionHeader(number: 7, title: "DECISION FLOW")
+            sectionHeader("DECISION FLOW", icon: nil)
 
             HStack(alignment: .top, spacing: 0) {
                 ForEach(Array(decisionSteps.enumerated()), id: \.element.id) { index, step in
@@ -1546,20 +1040,6 @@ struct InsightsView: View {
         .foregroundStyle(CoachColor.purpleDeep)
     }
 
-    private func numberedSectionHeader(number: Int, title: String) -> some View {
-        HStack(spacing: 7) {
-            ZStack {
-                Circle()
-                    .fill(CoachColor.purpleDeep.opacity(0.12))
-                    .frame(width: 20, height: 20)
-                Text("\(number)")
-                    .font(.system(size: 10, weight: .bold, design: .rounded))
-                    .foregroundStyle(CoachColor.purpleDeep)
-            }
-            sectionHeader(title, icon: nil)
-        }
-    }
-
     private func insightMiniRow(icon: String, title: String, text: String, color: Color) -> some View {
         HStack(alignment: .top, spacing: 10) {
             iconTile(icon, color: color, size: 34)
@@ -1607,206 +1087,46 @@ struct InsightsView: View {
         return confidence.map { max(0, min(100, $0)) }
     }
 
-    private var confidenceLevelText: String {
-        guard let confidence = overallConfidence else { return "Unavailable" }
-        switch confidence {
-        case 85...100: return "Very high"
-        case 70..<85: return "High"
-        case 50..<70: return "Learning"
-        default: return "Needs logs"
-        }
-    }
-
-    private var confidenceLevelColor: Color {
-        guard let confidence = overallConfidence else { return CoachColor.muted }
-        switch confidence {
-        case 70...100: return CoachColor.green
-        case 50..<70: return CoachColor.sun
-        default: return CoachColor.red
-        }
-    }
-
-    private var agentContributions: [AgentContribution] {
-        guard let snapshot = orchestrator.snapshot else { return [] }
-
-        let report = snapshot.dataQualityReport
-        return [
-            AgentContribution(id: "phase", name: "Sleep Phase Agent", icon: "moonphase.first.quarter", score: snapshot.readiness.confidence),
-            AgentContribution(id: "pattern", name: "Pattern Agent", icon: "chart.xyaxis.line", score: report.rhythmStabilityScore),
-            AgentContribution(id: "wake", name: "Wake Window Agent", icon: "clock.arrow.circlepath", score: snapshot.daytime.confidence),
-            AgentContribution(id: "transition", name: "Transition Agent", icon: "arrow.triangle.2.circlepath", score: transitionContributionScore),
-            AgentContribution(id: "risk", name: "Overtired Risk Agent", icon: "exclamationmark.triangle", score: snapshot.night.confidence),
-            AgentContribution(id: "confidence", name: "Confidence Agent", icon: "shield.checkered", score: report.score)
-        ]
-    }
-
-    private var transitionContributionScore: Int {
-        guard let strength = orchestrator.snapshot?.transition.signalStrength else { return 50 }
-        switch strength {
-        case .none: return 68
-        case .weak: return 74
-        case .moderate: return 82
-        case .strong: return 90
-        }
-    }
-
-    private var confidenceSignals: [ConfidenceSignal] {
-        guard let report = orchestrator.snapshot?.dataQualityReport else {
-            return [ConfidenceSignal(id: "empty", title: "Waiting for logs", detail: "Add wake and sleep data", isPositive: false)]
-        }
-
-        return [
-            ConfidenceSignal(
-                id: "tracked",
-                title: "\(min(report.trackedDays, 14)) of 14 days tracked",
-                detail: report.trackedDays >= 14 ? "Personalized phase active" : "\(max(0, 14 - report.trackedDays)) days left",
-                isPositive: report.trackedDays >= 7
-            ),
-            ConfidenceSignal(
-                id: "wake",
-                title: orchestrator.snapshot?.evaluationWake != nil ? "Wake-up time logged" : "Wake-up time unconfirmed",
-                detail: orchestrator.snapshot?.daytime.source == .routine ? "Using usual wake for guidance" : "Record an observed wake for a stronger anchor",
-                isPositive: orchestrator.snapshot?.evaluationWake != nil
-            ),
-            ConfidenceSignal(
-                id: "complete",
-                title: "\(report.completeDays) complete days",
-                detail: report.completeDays >= 7 ? "Good coverage" : "More full days will help",
-                isPositive: report.completeDays >= min(7, max(1, report.trackedDays))
-            ),
-            ConfidenceSignal(
-                id: "consistency",
-                title: "Consistency \(qualityWord(report.consistencyScore))",
-                detail: "Routine stability signal",
-                isPositive: report.consistencyScore >= 70
-            ),
-            ConfidenceSignal(
-                id: "plausibility",
-                title: report.plausibilityAnomalyCount == 0 ? "No major data gaps" : "\(report.plausibilityAnomalyCount) data checks",
-                detail: report.plausibilityAnomalyCount == 0 ? "Logs look plausible" : "Some entries need review",
-                isPositive: report.plausibilityScore >= 80
-            )
-        ]
-    }
-
-    private var confidenceLimitTitle: String {
-        orchestrator.snapshot?.phase == .personalized ? "Real life still varies." : "We are still learning."
-    }
-
-    private var confidenceLimitDetail: String {
-        let remaining = max(0, 14 - trackedDays)
-        if remaining > 0 {
-            return "\(remaining) more day\(remaining == 1 ? "" : "s") until prediction confidence increases. Sleep cues and late logs can still shift the window."
-        }
-        return "Even with 14+ days, naps can shift with growth, illness, travel, and missed sleepy cues."
-    }
-
-    private var comparisonMetrics: [ComparisonMetric] {
-        [
-            ComparisonMetric(
-                id: "lastNap",
-                title: "Last nap",
-                value: signedMinutesText(todayLastNapDelta),
-                detail: todayLastNapDelta.map { $0 == 0 ? "stable" : ($0 > 0 ? "longer" : "shorter") } ?? "Unavailable",
-                icon: "moon.zzz.fill",
-                color: CoachColor.purpleDeep
-            ),
-            ComparisonMetric(
-                id: "bedtime",
-                title: "Bedtime shift",
-                value: signedMinutesText(bedtimeShiftDelta),
-                detail: bedtimeShiftDelta.map { $0 == 0 ? "same" : ($0 > 0 ? "later" : "earlier") } ?? "Unavailable",
-                icon: "sparkles",
-                color: bedtimeShiftDelta.map { $0 <= 0 } == true ? CoachColor.green : CoachColor.sun
-            ),
-            ComparisonMetric(
-                id: "risk",
-                title: "Overtired risk",
-                value: overtiredRiskComparisonValue,
-                detail: overtiredRiskComparisonDetail,
-                icon: "exclamationmark.triangle",
-                color: overtiredRiskComparisonValue == "Higher" ? CoachColor.red : CoachColor.sun
-            )
-        ]
-    }
-
     private var decisionSteps: [DecisionStep] {
-        let target = orchestrator.snapshot?.nextSleepKind == .bedtime
-            ? orchestrator.snapshot?.night.recommendation.value
-            : orchestrator.snapshot?.daytime.recommendation.value
-        let lastNapEnd = todayLastNapEnd
+        guard let snapshot = orchestrator.snapshot else { return [] }
+        let isBedtime = snapshot.nextSleepKind == .bedtime
+        let source = snapshot.hasCurrentSleep ? .currentActivity : (isBedtime ? snapshot.night.source : snapshot.daytime.source)
+        let anchor: String
+        switch source {
+        case .recorded, .recordedEstimate:
+            if case .napEnd = snapshot.sleepAssessment?.anchor { anchor = "Recorded nap end" }
+            else { anchor = "Observed wake" }
+        case .routine: anchor = "Saved routine"
+        case .ageGuidance: anchor = "Age guidance"
+        case .currentActivity, .activityEstimate: anchor = "Current sleep"
+        }
 
         return [
-            DecisionStep(id: "record", time: "Input", title: lastNapEnd == nil ? "Wake anchor" : "Last nap end", icon: "clock.badge.checkmark", color: CoachColor.purpleDeep),
-            DecisionStep(id: "rule", time: "Rules", title: "Age guideline", icon: "gearshape.2.fill", color: CoachColor.purpleDeep),
-            DecisionStep(id: "pattern", time: "Pattern", title: "Baby rhythm", icon: "brain.head.profile", color: CoachColor.purple),
-            DecisionStep(id: "confidence", time: "Trust", title: "Quality check", icon: "checkmark.seal.fill", color: CoachColor.purpleDeep),
-            DecisionStep(id: "final", time: time(target), title: orchestrator.snapshot?.nextSleepKind == .bedtime ? "Bedtime target" : "Sleep target", icon: "shield.lefthalf.filled", color: CoachColor.sun)
+            DecisionStep(id: "record", time: "Input", title: anchor, icon: "clock.badge.checkmark", color: CoachColor.purpleDeep),
+            DecisionStep(id: "window", time: "Window",
+                         title: snapshot.recordedDaytime.isIncomplete ? "Incomplete total" : "Recorded total",
+                         icon: "checkmark.seal.fill", color: CoachColor.purpleDeep),
+            DecisionStep(id: "final", time: time(actionTargetTime), title: isBedtime ? "Bedtime estimate" : "Nap estimate",
+                         icon: "moon", color: CoachColor.sun)
         ]
-    }
-
-    private var todayLastNapEnd: Date? {
-        guard let snapshot = orchestrator.snapshot else { return nil }
-        return loadTodayRecordsForBreakdown().filter { $0.kind == .dayNap }
-            .compactMap { $0.completedEnd(at: snapshot.generatedAt) }.max()
-    }
-
-    private var todayLastNapDelta: Int? {
-        guard let snapshot = orchestrator.snapshot, let end = todayLastNapEnd,
-              let average = snapshot.pattern?.averageNapDurationMinutes,
-              let latest = loadTodayRecordsForBreakdown().first(where: {
-                  $0.kind == .dayNap && $0.completedEnd(at: snapshot.generatedAt) == end
-              }) else { return nil }
-        return Int(end.timeIntervalSince(latest.date) / 60) - average
-    }
-
-    private var bedtimeShiftDelta: Int? {
-        orchestrator.snapshot?.pattern?.estimatedBedtimeShiftMinutes
-    }
-
-    private var overtiredRiskComparisonValue: String {
-        guard let risk = orchestrator.snapshot?.night.overtiredRiskTime else { return "Unavailable" }
-        return risk <= Date() ? "Higher" : "Stable"
-    }
-
-    private var overtiredRiskComparisonDetail: String {
-        switch overtiredRiskComparisonValue {
-        case "Higher": return "act soon"
-        case "Stable": return "within window"
-        default: return "Requires a bedtime estimate"
-        }
     }
 
     private var trackedDays: Int {
-        guard let readiness = orchestrator.snapshot?.readiness else { return 0 }
-        return max(0, 14 - readiness.daysUntilPersonalized)
-    }
-
-    private var learningProgressTitle: String {
-        orchestrator.snapshot?.phase == .personalized
-            ? "Your baby's rhythm is personalized"
-            : "Learning your baby's unique rhythm"
-    }
-
-    private func learningProgressDetail(remaining: Int) -> String {
-        if orchestrator.snapshot?.phase == .personalized {
-            return "Predictions now prioritize recent wake windows, naps, and bedtime patterns."
-        }
-        if remaining == 1 {
-            return "1 more day until predictions become fully personalized and even more accurate."
-        }
-        return "\(remaining) more days until predictions become fully personalized and even more accurate."
+        orchestrator.snapshot?.dataQualityReport.trackedDays ?? 0
     }
 
     private var coachTipText: String {
-        if let llmMessage = orchestrator.llmResponse?.coachMessage, !llmMessage.isEmpty {
+        if orchestrator.snapshot?.hasCurrentSleep == true {
+            return "Record the observed end when your baby wakes."
+        }
+        if let llmMessage = orchestrator.currentCoaching?.coachMessage, !llmMessage.isEmpty {
             return llmMessage
         }
         if orchestrator.isLLMLoading {
-            return "Analyzing \(displayedBabyName)'s sleep patterns..."
+            return "Reviewing \(displayedBabyName)'s recorded sleep…"
         }
         return orchestrator.snapshot?.insights.coachTip
-            ?? "Keep logging to unlock personalized tips."
+            ?? "Record an actual wake or sleep end to use it as a planning reference."
     }
 
     private var napWindowText: String {
@@ -1839,21 +1159,6 @@ struct InsightsView: View {
         formatter.timeZone = orchestrator.snapshot?.evaluationCalendar.timeZone ?? .current
         formatter.dateFormat = "h:mm a"
         return formatter.string(from: date)
-    }
-
-    private func signedMinutesText(_ minutes: Int?) -> String {
-        guard let minutes else { return "Unavailable" }
-        guard minutes != 0 else { return "Unchanged" }
-        return "\(minutes > 0 ? "+" : "-")\(abs(minutes)) min"
-    }
-
-    private func qualityWord(_ score: Int) -> String {
-        switch score {
-        case 85...100: return "excellent"
-        case 70..<85: return "good"
-        case 50..<70: return "building"
-        default: return "limited"
-        }
     }
 
     private func refresh() {

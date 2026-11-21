@@ -30,7 +30,7 @@ struct DataQualityReport {
     let level: DataQuality
     let completenessScore: Int
     let consistencyScore: Int
-    let rhythmStabilityScore: Int
+    let rhythmStabilityScore: Int?
     let plausibilityScore: Int
     let plausibilityAnomalyCount: Int
     let plausibilityWarnings: [String]
@@ -63,12 +63,12 @@ struct OrchestratedSnapshot {
        let dataQualityReport:  DataQualityReport
 
        // Günlük uyku durumu
-       let todayTotalMinutes:  Int
+       let todayTotalMinutes:  Int?
        let sleepStatus:        DailySleepStatus?
        let nextSleepKind:      NextSleepKind
     var sleepDayIsProvisional: Bool = true
-    var rolling24hMinutes: Int = 0
-    var daytimeMinutes: Int = 0
+    var rolling24hMinutes: Int? = nil
+    var daytimeMinutes: Int? = nil
     var subtotalsAreReliable: Bool = true
     var rolling24hIsProvisional: Bool = false
     var recordedSleepDay: CompletedRecordedSubtotal = .incomplete(nil, reason: .missing)
@@ -77,7 +77,9 @@ struct OrchestratedSnapshot {
     var evaluationCalendar: Calendar = .current
     var evaluationRoutine: SleepRoutine? = nil
     var evaluationWake: Date? = nil
-    var hasCurrentSleep = false
+    var sleepAssessment: SleepStateAssessment? = nil
+    var currentSleepKind: SleepKind? { sleepAssessment?.active?.record.kind }
+    var hasCurrentSleep: Bool { currentSleepKind != nil }
 
 
 }
@@ -94,22 +96,23 @@ final class SleepCoachOrchestrator: ObservableObject {
     @Published private(set) var isLoading = false
     @Published private(set) var llmResponse: LLMCoachResponse?
     @Published private(set) var isLLMLoading = false
-    private(set) var llmCacheState: LLMCacheState = .expired
+    @Published private(set) var llmCacheState: LLMCacheState = .expired
+    var currentCoaching: LLMCoachResponse? { llmCacheState == .current ? llmResponse : nil }
     private var currentLLMSourceFingerprint: String?
     private var cachedLLMSourceFingerprint: String?
 
     // MARK: - Agents
 
     private let phaseAgent:      PhaseAgentProtocol
-    private let patternAgent:    PatternAgentProtocol
+    private let patternAgent:    PatternAgentProtocol?
     private let daytimeAgent:    DaytimePredictionAgentProtocol
     private let nightAgent:      NightPredictionAgentProtocol
-    private let transitionAgent: NapTransitionAgentProtocol
+    private let transitionAgent: NapTransitionAgentProtocol?
     private let insightAgent:    InsightAgentProtocol
     private let overtiredCalc:   OvertiredCalculator
     private let profileProvider: AgeBasedSleepProfileProviding
     private let llmAgent: SleepCoachLLMAgentProtocol
-    private let ageCalculator: BabyAgeCalculating
+    private let ageCalculator: BabyAgeCalculating?
     private let calendar: Calendar
     private var activeLLMTask: Task<Void, Never>?
     private var llmRequestToken = 0
@@ -144,15 +147,15 @@ final class SleepCoachOrchestrator: ObservableObject {
 
        ) {
            self.phaseAgent      = phaseAgent
-           self.patternAgent    = patternAgent ?? PatternAgent(calendar: calendar)
+           self.patternAgent    = patternAgent
            self.daytimeAgent    = daytimeAgent ?? DefaultDaytimePredictionAgent(profileProvider: profileProvider, calendar: calendar)
            self.nightAgent      = nightAgent ?? DefaultNightPredictionAgent(profileProvider: profileProvider, calendar: calendar)
-           self.transitionAgent = transitionAgent ?? DefaultNapTransitionAgent(profileProvider: profileProvider, calendar: calendar)
+           self.transitionAgent = transitionAgent
            self.insightAgent    = insightAgent
            self.llmAgent        = llmAgent
            self.overtiredCalc   = overtiredCalc ?? OvertiredCalculator(profileProvider: profileProvider, calendar: calendar)
            self.profileProvider = profileProvider
-           self.ageCalculator = ageCalculator ?? DefaultBabyAgeCalculator(calendar: calendar)
+           self.ageCalculator = ageCalculator
            self.calendar = calendar
 
        }
@@ -171,18 +174,19 @@ final class SleepCoachOrchestrator: ObservableObject {
 
         guard let birthDate = loadBabyBirthDate() else {
             if requestCoaching { previousTriggerSleepMinutes = nil }
+            updateLLMSource(nil)
+            latestGeneratedRecords = []
             snapshot = nil
             return
         }
 
-        let ageMonths = ageCalculator.ageInMonths(
+        let evaluationCalendar = DaytimeReviewWindow.capture(calendar)
+        let ageMonths = (ageCalculator ?? DefaultBabyAgeCalculator(calendar: evaluationCalendar)).ageInMonths(
             birthDate: birthDate,
             on: now
         )
 
         // 2. Temel metrikler
-        var evaluationCalendar = calendar
-        evaluationCalendar.timeZone = calendar.timeZone
         let evaluation = SleepEvaluation(now: now, calendar: evaluationCalendar, routine: .load(defaults: .standard),
                                          confirmation: confirmation, instant: ContinuousClock.now)
         let planning = SleepPredictionContext(records: records, wakes: wakeRecords, evaluation: evaluation)
@@ -194,27 +198,26 @@ final class SleepCoachOrchestrator: ObservableObject {
 
         let trackedDays = countTrackedDays(
             records:     records,
-            wakeRecords: wakeRecords
+            wakeRecords: wakeRecords, calendar: evaluationCalendar
         )
 
 
-        // 3. Phase
+        // Legacy phase information only gates age-appropriate pattern summaries.
+        // Tracking frequency is not personalization authority.
         let phase = phaseAgent.currentPhase(
             ageMonths:   ageMonths,
             trackedDays: trackedDays
         )
 
         // Wake time ve gece uykusu sinyalleri
-        let hasTodayWake = wakeRecords.contains {
-            calendar.isDate($0.day, inSameDayAs: now)
-        }
+        let hasTodayWake = planning.assessment.recordedWake != nil
         let hasYesterdayNight: Bool = {
-            guard let yesterday = calendar.date(
+            guard let yesterday = evaluationCalendar.date(
                 byAdding: .day, value: -1, to: now
             ) else { return false }
             return records.contains {
                 $0.kind == .nightSleep &&
-                calendar.isDate($0.date, inSameDayAs: yesterday)
+                $0.completedEnd(at: now) != nil && evaluationCalendar.isDate($0.date, inSameDayAs: yesterday)
             }
         }()
 
@@ -230,7 +233,7 @@ final class SleepCoachOrchestrator: ObservableObject {
         if case .tooYoung = phase {
             pattern = nil
         } else {
-            pattern = patternAgent.analyze(
+            pattern = (patternAgent ?? PatternAgent(calendar: evaluationCalendar)).analyze(
                 records:     records,
                 wakeRecords: wakeRecords,
                 ageMonths:   ageMonths,
@@ -266,14 +269,16 @@ final class SleepCoachOrchestrator: ObservableObject {
         let expectedNaps      = profile.expectedNapCount
 
         let nextSleepKind: NextSleepKind = {
-            let cutoff = overtiredCalc.lastNapCutoffTime(ageMonths: ageMonths, on: now)
+            if let current = planning.assessment.active { return current.record.kind == .nightSleep ? .bedtime : .nap }
+            let cutoff = overtiredCalc.lastNapCutoffTime(ageMonths: ageMonths, on: now, using: evaluationCalendar)
             guard now < cutoff else { return .bedtime }
-            if todayDayNapsCount >= expectedNaps.upperBound { return .bedtime }
+            if recordedDaytime.comparableMinutes != nil && todayDayNapsCount >= expectedNaps.upperBound { return .bedtime }
             return .nap
         }()
 
         // 8. Nap transition
-        let transition = transitionAgent.assess(
+        let transition = (transitionAgent ?? DefaultNapTransitionAgent(profileProvider: profileProvider,
+                                                                       calendar: evaluationCalendar)).assess(
             records:     records,
             wakeRecords: wakeRecords,
             ageMonths:   ageMonths,
@@ -289,17 +294,16 @@ final class SleepCoachOrchestrator: ObservableObject {
         )
 
         let dataQualityReport = makeDataQualityReport(
-            records: records,
-            wakeRecords: wakeRecords,
-            now: now
+            accounting: accounting, wakeRecords: wakeRecords
         )
 
         // 10. Sleep status
         let sleepStatus = rolling.comparableMinutes.map {
             overtiredCalc.dailySleepStatus(totalMinutes: $0, ageMonths: ageMonths)
         }
-        let completed = todayRecs.filter { $0.kind != .break && $0.completedEnd(at: now) != nil }
-        let conflicts = accounting.conflicts(affecting: completed, completedOnly: true)
+        let uncertainTotals = [recordedDay, rolling, recordedDaytime].contains {
+            $0.unavailableReason == .conflict || $0.unavailableReason == .unresolvedBreak
+        }
 
         // 11. Snapshot oluştur
         let result = OrchestratedSnapshot(
@@ -314,29 +318,26 @@ final class SleepCoachOrchestrator: ObservableObject {
             transition:        transition,
             insights:          insights,
             dataQualityReport: dataQualityReport,
-            todayTotalMinutes: recordedDay.minutes ?? 0,
+            todayTotalMinutes: recordedDay.minutes,
             sleepStatus:       sleepStatus,
             nextSleepKind:     nextSleepKind,
             sleepDayIsProvisional: recordedDay.isIncomplete,
-            rolling24hMinutes: rolling.minutes ?? 0,
-            daytimeMinutes: recordedDaytime.minutes ?? 0,
-            subtotalsAreReliable: !conflicts.classification && !conflicts.assignment,
+            rolling24hMinutes: rolling.minutes,
+            daytimeMinutes: recordedDaytime.minutes,
+            subtotalsAreReliable: !uncertainTotals,
             rolling24hIsProvisional: rolling.isIncomplete,
             recordedSleepDay: recordedDay, recordedRolling24h: rolling, recordedDaytime: recordedDaytime,
             evaluationCalendar: evaluationCalendar, evaluationRoutine: evaluation.routine,
             evaluationWake: planning.assessment.recordedWake?.wakeTime,
-            hasCurrentSleep: planning.assessment.active != nil
+            sleepAssessment: planning.assessment
         )
-        self.snapshot = result
         latestGeneratedRecords = records
-        currentLLMSourceFingerprint = llmSourceFingerprint(
-            snapshot: result,
-            records: records
-        )
+        updateLLMSource(llmSourceFingerprint(snapshot: result, records: records))
+        self.snapshot = result
 
         if requestCoaching {
             let trigger = determineTrigger(records: records, snapshot: result, previousMinutes: previousTriggerSleepMinutes)
-            previousTriggerSleepMinutes = recordedDay.minutes
+            previousTriggerSleepMinutes = recordedDaytime.minutes
             if let trigger { startLLMRequest(snapshot: result, records: records, trigger: trigger) }
         }
         updateLLMCacheState()
@@ -374,7 +375,8 @@ final class SleepCoachOrchestrator: ObservableObject {
 
             private func countTrackedDays(
                 records:     [SleepRecord],
-                wakeRecords: [DailyWakeRecord]
+                wakeRecords: [DailyWakeRecord],
+                calendar: Calendar
             ) -> Int {
                 let sleepDays = records.map { calendar.startOfDay(for: $0.date) }
                 let wakeDays  = wakeRecords.map { calendar.startOfDay(for: $0.day) }
@@ -393,16 +395,13 @@ final class SleepCoachOrchestrator: ObservableObject {
     
     // MARK: - Data Quality
 
-    private func makeDataQualityReport(
-        records: [SleepRecord],
-        wakeRecords: [DailyWakeRecord],
-        now: Date
-    ) -> DataQualityReport {
-        let breaks = records.filter { $0.kind == .break }
+    private func makeDataQualityReport(accounting: SleepAccounting, wakeRecords: [DailyWakeRecord]) -> DataQualityReport {
+        let now = accounting.now
+        let calendar = accounting.calendar
+        let records = accounting.records
         let lookbackDays = 14
         let today = calendar.startOfDay(for: now)
-
-        var dailyScores: [Int] = []
+        var dailyObservationPoints: [Int] = []
         var completeDays = 0
         var trackedDays = 0
         var missedStreak = 0
@@ -411,127 +410,77 @@ final class SleepCoachOrchestrator: ObservableObject {
 
         for offset in 0..<lookbackDays {
             guard let day = calendar.date(byAdding: .day, value: -offset, to: today) else { continue }
-
-            let dayRecords = records.filter { calendar.isDate($0.date, inSameDayAs: day) }
+            let dayRecords = accounting.records(on: day).filter { $0.date <= now && $0.kind != .break }
             let naps = dayRecords.filter { $0.kind == .dayNap }
-            let nightSleeps = dayRecords.filter { $0.kind == .nightSleep }
-            let dayWakes = wakeRecords.filter { calendar.isDate($0.day, inSameDayAs: day) }
-            let hasWake = dayWakes.count == 1 && dayWakes.allSatisfy {
-                $0.wakeTime <= now && calendar.isDate($0.wakeTime, inSameDayAs: day)
-            }
-
-            var dayScore = 0
-            if hasWake { dayScore += 25 } else { missingCriticalFields.insert("daily wake time") }
+            let nights = dayRecords.filter { $0.kind == .nightSleep }
+            let hasWake = DailyWakeRecord.uniqueObservation(in: wakeRecords, on: day, at: now, calendar: calendar) != nil
+            var observationPoints = 0
+            if hasWake { observationPoints += 25 } else { missingCriticalFields.insert("daily wake time") }
             if !naps.isEmpty, naps.allSatisfy({ $0.completedEnd(at: now) != nil }) {
-                dayScore += 25
-            } else {
-                missingCriticalFields.insert("day naps")
-            }
-            if !nightSleeps.isEmpty, nightSleeps.allSatisfy({ $0.completedEnd(at: now) != nil }) {
-                dayScore += 35
-            } else {
-                missingCriticalFields.insert("night sleep")
-            }
-            if dayRecords.contains(where: { $0.kind != .break }) { dayScore += 15 }
+                observationPoints += 25
+            } else { missingCriticalFields.insert("day naps") }
+            if !nights.isEmpty, nights.allSatisfy({ $0.completedEnd(at: now) != nil }) {
+                observationPoints += 35
+            } else { missingCriticalFields.insert("night sleep") }
+            if !dayRecords.isEmpty { observationPoints += 15 }
+            dailyObservationPoints.append(observationPoints)
 
-            dailyScores.append(dayScore)
-
-            if dayScore > 0 {
+            let hasWakeEntry = wakeRecords.contains {
+                $0.day.timeIntervalSinceReferenceDate.isFinite && calendar.isDate($0.day, inSameDayAs: day)
+            }
+            if !dayRecords.isEmpty || hasWakeEntry {
                 trackedDays += 1
                 missedStreak = 0
             } else {
                 missedStreak += 1
                 longestRecentMissedStreak = max(longestRecentMissedStreak, missedStreak)
             }
-
-            if dayScore >= 70 {
-                completeDays += 1
-            }
+            if accounting.completedSubtotal(on: day).comparableMinutes != nil { completeDays += 1 }
         }
 
-        let completeness = dailyScores.isEmpty ? 0 : dailyScores.reduce(0, +) / dailyScores.count
-        let coverageConsistency = Int((Double(completeDays) / Double(lookbackDays)) * 100)
-        let rhythmStability = rhythmStabilityScore(
-            records: records,
-            wakeRecords: wakeRecords,
-            now: now
-        )
-        let consistency = clamp(Int(Double(coverageConsistency) * 0.55 + Double(rhythmStability) * 0.45))
-        let plausibility = plausibilityResult(records: records, breaks: breaks, now: now)
+        let observationScore = dailyObservationPoints.reduce(0, +) / max(1, dailyObservationPoints.count)
+        let completeness = completeDays * 100 / lookbackDays
+        let recordingFrequency = trackedDays * 100 / lookbackDays
+        let rhythmStability = rhythmStabilityScore(accounting: accounting, wakeRecords: wakeRecords)
+        let plausibility = plausibilityResult(accounting: accounting)
         let timeliness = timelinessResult(records: records)
-        let contextRichness = contextRichnessResult(
-            records: records,
-            wakeRecords: wakeRecords,
-            completeDays: completeDays
-        )
+        let contextRichness = contextRichnessResult(records: records, wakeRecords: wakeRecords, completeDays: completeDays)
+        let score = clamp(Int(Double(observationScore) * 0.30 + Double(timeliness.score) * 0.20 +
+            Double(recordingFrequency) * 0.20 + Double(plausibility.score) * 0.20 + Double(contextRichness.score) * 0.10))
 
-        let score = clamp(
-            Int(
-                Double(completeness) * 0.30 +
-                Double(timeliness.score) * 0.20 +
-                Double(consistency) * 0.20 +
-                Double(plausibility.score) * 0.20 +
-                Double(contextRichness.score) * 0.10
-            )
-        )
-
-        var warnings = dataQualityWarnings(
-            records: records,
-            breaks: breaks,
-            completeDays: completeDays,
-            missedStreak: longestRecentMissedStreak,
-            consistency: consistency,
-            rhythmStability: rhythmStability,
-            plausibility: plausibility.score,
-            plausibilityWarnings: plausibility.warnings,
-            contextRichness: contextRichness.score
-        )
-
-        let conflicts = SleepAccounting(records: records, now: now, calendar: calendar).conflicts(affecting: records, completedOnly: true)
-        if conflicts.classification { warnings.append("Overlapping nap and night records: sleep subtotals are unreliable until corrected.") }
-        if conflicts.assignment { warnings.append("Overlapping records assigned to different Sleep Days: day subtotals are unreliable until corrected.") }
-        let accounting = SleepAccounting(records: records, now: now, calendar: calendar)
-        if accounting.sleepDay(on: now).isProvisional {
-            warnings.append("The current Sleep Day total is provisional until its night sleep is completed; 24-hour status uses the separate rolling window.")
+        var warnings: [String] = []
+        if completeDays == 0 { warnings.append("No recent Sleep Day has confirmed recording coverage.") }
+        if longestRecentMissedStreak >= 2 { warnings.append("There are gaps in recent recording activity.") }
+        warnings.append(contentsOf: plausibility.warnings.prefix(3))
+        let conflicts = accounting.conflicts(affecting: records, completedOnly: true)
+        if conflicts.classification { warnings.append("Overlapping nap and night records make sleep subtotals unreliable.") }
+        if conflicts.assignment { warnings.append("Overlapping records assigned to different Sleep Days make day subtotals unreliable.") }
+        if let reason = accounting.completedRolling24h.unavailableReason {
+            warnings.append("Rolling 24-hour coverage is unconfirmed. \(reason.rawValue).")
         }
-        if accounting.rolling24hIsProvisional {
-            warnings.append("Rolling 24-hour sleep is incomplete because a sleep end is unconfirmed.")
+        if timeliness.score < 70, let averageDelay = timeliness.averageDelayMinutes {
+            warnings.append("Average delay between sleep start and logging is \(averageDelay) minutes.")
         }
 
-        return DataQualityReport(
-            score: score,
-            level: quality(forScore: score),
-            completenessScore: clamp(completeness),
-            consistencyScore: clamp(consistency),
-            rhythmStabilityScore: rhythmStability,
-            plausibilityScore: plausibility.score,
-            plausibilityAnomalyCount: plausibility.anomalyCount,
-            plausibilityWarnings: plausibility.warnings,
-            timelinessScore: timeliness.score,
-            contextRichnessScore: contextRichness.score,
-            contextSignals: contextRichness.signals,
-            missingContextSignals: contextRichness.missingSignals,
-            averageLoggingDelayMinutes: timeliness.averageDelayMinutes,
-            trackedDays: trackedDays,
-            completeDays: completeDays,
-            consecutiveMissedDays: longestRecentMissedStreak,
-            missingCriticalFields: Array(missingCriticalFields).sorted(),
-            warnings: warnings,
-            confidenceNote: confidenceNote(forScore: score, warnings: warnings)
-        )
+        return DataQualityReport(score: score, level: quality(forScore: score), completenessScore: completeness,
+            consistencyScore: recordingFrequency, rhythmStabilityScore: rhythmStability,
+            plausibilityScore: plausibility.score, plausibilityAnomalyCount: plausibility.anomalyCount,
+            plausibilityWarnings: plausibility.warnings, timelinessScore: timeliness.score,
+            contextRichnessScore: contextRichness.score, contextSignals: contextRichness.signals,
+            missingContextSignals: contextRichness.missingSignals, averageLoggingDelayMinutes: timeliness.averageDelayMinutes,
+            trackedDays: trackedDays, completeDays: completeDays, consecutiveMissedDays: longestRecentMissedStreak,
+            missingCriticalFields: Array(missingCriticalFields).sorted(), warnings: warnings,
+            confidenceNote: "Recording coverage is unconfirmed. Guidance uses recorded boundaries, saved routines, or general age ranges.")
     }
 
-    private func plausibilityResult(
-        records: [SleepRecord],
-        breaks: [SleepRecord],
-        now: Date
-    ) -> (score: Int, anomalyCount: Int, warnings: [String]) {
+    private func plausibilityResult(accounting: SleepAccounting) -> (score: Int, anomalyCount: Int, warnings: [String]) {
+        let now = accounting.now
+        let records = accounting.records
         guard !records.isEmpty else { return (0, 0, []) }
 
         var warnings = Set<String>()
         var anomalyCount = 0
         let sleepRecords = records.filter { $0.kind != .break && $0.completedEnd(at: now) != nil }
-        let accounting = SleepAccounting(records: records, now: now, calendar: calendar)
 
         for record in records {
             let netMinutes = accounting.completedMinutes(sleepIDs: [record.id])
@@ -541,11 +490,11 @@ final class SleepCoachOrchestrator: ObservableObject {
             let durationIsImplausible: Bool
             switch record.kind {
             case .dayNap:
-                durationIsImplausible = !record.isOngoing && !(5...240).contains(netMinutes)
+                durationIsImplausible = netMinutes.map { !(5...240).contains($0) } ?? false
             case .nightSleep:
-                durationIsImplausible = !record.isOngoing && !(120...780).contains(netMinutes)
+                durationIsImplausible = netMinutes.map { !(120...780).contains($0) } ?? false
             case .break:
-                durationIsImplausible = !(1...180).contains(record.duration)
+                durationIsImplausible = record.completedEnd(at: now).map { !(60...10800).contains($0.timeIntervalSince(record.date)) } ?? false
             }
 
             if hasNegativeDuration {
@@ -576,9 +525,10 @@ final class SleepCoachOrchestrator: ObservableObject {
             if record.kind == .break,
                let parentNapID = record.parentNapID,
                let parent = records.first(where: { $0.id == parentNapID }) {
-                let parentEnd = parent.date.addingTimeInterval(max(0, (parent.observedEnd ?? now).timeIntervalSince(parent.date)))
-                let breakEnd = record.observedEnd ?? record.date
-                if record.date < parent.date || breakEnd > parentEnd {
+                let exceedsObservedEnd = parent.completedEnd(at: now).map { parentEnd in
+                    record.completedEnd(at: now).map { $0 > parentEnd } ?? false
+                } ?? false
+                if record.date < parent.date || exceedsObservedEnd {
                     anomalyCount += 1
                     warnings.insert("A wake period falls outside its parent sleep interval.")
                 }
@@ -587,17 +537,15 @@ final class SleepCoachOrchestrator: ObservableObject {
 
         let sortedSleepRecords = sleepRecords.sorted { $0.date < $1.date }
         for pair in zip(sortedSleepRecords, sortedSleepRecords.dropFirst()) {
-            let firstEnd = pair.0.date.addingTimeInterval(max(0, (pair.0.observedEnd ?? now).timeIntervalSince(pair.0.date)))
-            if pair.1.date < firstEnd {
+            if let firstEnd = pair.0.completedEnd(at: now), pair.1.date < firstEnd {
                 anomalyCount += 1
                 warnings.insert("Two sleep records overlap in time.")
             }
         }
 
-        let dailyGroups = Dictionary(grouping: sleepRecords) { calendar.startOfDay(for: $0.date) }
-        for dayRecords in dailyGroups.values {
-            let dayTotal = accounting.completedMinutes(sleepIDs: Set(dayRecords.map(\.id)))
-            if dayTotal > 20 * 60 {
+        let days = Set(sleepRecords.map { accounting.calendar.startOfDay(for: $0.date) })
+        for day in days {
+            if let dayTotal = accounting.completedSubtotal(on: day).comparableMinutes, dayTotal > 20 * 60 {
                 anomalyCount += 1
                 warnings.insert("A day has more than 20 hours of total sleep.")
             }
@@ -608,12 +556,12 @@ final class SleepCoachOrchestrator: ObservableObject {
     }
 
     private func timelinessResult(records: [SleepRecord]) -> (score: Int, averageDelayMinutes: Int?) {
-        let sleepRecords = records.filter { $0.kind != .break }
-        guard !sleepRecords.isEmpty else { return (0, nil) }
-
-        let delays = sleepRecords.map { record in
-            max(0, Int(record.createdAt.timeIntervalSince(record.date) / 60))
+        let delays = records.compactMap { record -> Int? in
+            let minutes = record.createdAt.timeIntervalSince(record.date) / 60
+            guard record.kind != .break, minutes.isFinite, minutes < Double(Int.max) else { return nil }
+            return Int(max(0, minutes))
         }
+        guard !delays.isEmpty else { return (0, nil) }
         let averageDelay = delays.reduce(0, +) / delays.count
 
         let scoredDelays = delays.map { delay -> Int in
@@ -629,40 +577,20 @@ final class SleepCoachOrchestrator: ObservableObject {
         return (scoredDelays.reduce(0, +) / scoredDelays.count, averageDelay)
     }
 
-    private func rhythmStabilityScore(
-        records: [SleepRecord],
-        wakeRecords: [DailyWakeRecord],
-        now: Date
-    ) -> Int {
-        guard let windowStart = calendar.date(byAdding: .day, value: -13, to: calendar.startOfDay(for: now)) else {
-            return 0
-        }
-
-        let recentRecords = records.filter { $0.date >= windowStart && $0.kind != .break }
-        let recentWakeRecords = wakeRecords.filter { $0.day >= windowStart }
-
-        var components: [Int] = []
-
-        let wakeMinutes = recentWakeRecords.map { minutesSinceStartOfDay($0.wakeTime) }
-        if let score = stabilityScore(for: wakeMinutes, excellentSpread: 30, poorSpread: 150) {
-            components.append(score)
-        }
-
-        let nightStartMinutes = recentRecords
-            .filter { $0.kind == .nightSleep }
-            .map { minutesSinceStartOfDay($0.date) }
-        if let score = stabilityScore(for: nightStartMinutes, excellentSpread: 45, poorSpread: 180) {
-            components.append(score)
-        }
-
-        let dayNaps = recentRecords.filter { $0.kind == .dayNap }
-        let napsByDay = Dictionary(grouping: dayNaps) { calendar.startOfDay(for: $0.date) }
-        let napCounts = napsByDay.values.map { $0.count }
-        if let score = stabilityScore(for: napCounts, excellentSpread: 1, poorSpread: 3) {
-            components.append(score)
-        }
-
-        guard !components.isEmpty else { return 0 }
+    private func rhythmStabilityScore(accounting: SleepAccounting, wakeRecords: [DailyWakeRecord]) -> Int? {
+        let calendar = accounting.calendar
+        let now = accounting.now
+        guard let windowStart = calendar.date(byAdding: .day, value: -13, to: calendar.startOfDay(for: now)) else { return nil }
+        let days = Set(wakeRecords.filter { $0.day >= windowStart && $0.day <= now }.map { calendar.startOfDay(for: $0.day) })
+        let wakeMinutes = days.compactMap {
+            DailyWakeRecord.uniqueObservation(in: wakeRecords, on: $0, at: now, calendar: calendar)?.wakeTime
+        }.map { $0.timeIntervalSince(calendar.startOfDay(for: $0)) / 60 }.map(Int.init)
+        let nightStartMinutes = accounting.records.filter {
+            $0.kind == .nightSleep && $0.date >= windowStart && accounting.completedMinutes(sleepIDs: [$0.id]) != nil
+        }.map { $0.date.timeIntervalSince(calendar.startOfDay(for: $0.date)) / 60 }.map(Int.init)
+        let components = [stabilityScore(for: wakeMinutes, excellentSpread: 30, poorSpread: 150),
+                          stabilityScore(for: nightStartMinutes, excellentSpread: 45, poorSpread: 180)].compactMap { $0 }
+        guard !components.isEmpty else { return nil }
         return clamp(components.reduce(0, +) / components.count)
     }
 
@@ -707,7 +635,7 @@ final class SleepCoachOrchestrator: ObservableObject {
             score += 20
             signals.append("multi-day coverage")
         } else {
-            missingSignals.append("7+ complete days")
+            missingSignals.append("confirmed daily recording coverage")
         }
 
         return (clamp(score), signals, missingSignals)
@@ -736,57 +664,6 @@ final class SleepCoachOrchestrator: ObservableObject {
         return sqrt(variance)
     }
 
-    private func minutesSinceStartOfDay(_ date: Date) -> Int {
-        let components = calendar.dateComponents([.hour, .minute], from: date)
-        return (components.hour ?? 0) * 60 + (components.minute ?? 0)
-    }
-
-    private func dataQualityWarnings(
-        records: [SleepRecord],
-        breaks: [SleepRecord],
-        completeDays: Int,
-        missedStreak: Int,
-        consistency: Int,
-        rhythmStability: Int,
-        plausibility: Int,
-        plausibilityWarnings: [String],
-        contextRichness: Int
-    ) -> [String] {
-        var warnings: [String] = []
-
-        if completeDays < 7 {
-            warnings.append("Fewer than 7 complete days in the last 14 days.")
-        }
-        if missedStreak >= 2 {
-            warnings.append("\(missedStreak) consecutive missed day(s) increase prediction variance.")
-        }
-        if consistency < 70 {
-            warnings.append("Tracking consistency is low across the last 14 days.")
-        }
-        if rhythmStability < 70 {
-            warnings.append("Sleep timing varies enough to make pattern learning less stable.")
-        }
-        if plausibility < 80 {
-            warnings.append("Some sleep durations look unusual and should be reviewed.")
-        }
-        warnings.append(contentsOf: plausibilityWarnings.prefix(3))
-        if contextRichness < 60 {
-            warnings.append("Context is thin, so recommendations should stay more general.")
-        }
-        let timeliness = timelinessResult(records: records)
-        if timeliness.score < 70, let averageDelay = timeliness.averageDelayMinutes {
-            warnings.append("Average logging delay is \(averageDelay) minutes, which lowers prediction reliability.")
-        }
-        if !records.contains(where: { $0.kind == .nightSleep }) {
-            warnings.append("Night sleep is missing, so bedtime predictions should stay conservative.")
-        }
-        if !records.contains(where: { $0.kind == .dayNap }) {
-            warnings.append("Day naps are missing, so wake-window learning is limited.")
-        }
-
-        return warnings
-    }
-
     private func quality(forScore score: Int) -> DataQuality {
         switch score {
         case 0..<50:  return .poor
@@ -796,38 +673,34 @@ final class SleepCoachOrchestrator: ObservableObject {
         }
     }
 
-    private func confidenceNote(forScore score: Int, warnings: [String]) -> String {
-        if score >= 90 {
-            return "High reliability: recent sleep data is complete and consistent."
-        }
-        if score >= 70 {
-            return "Good reliability: predictions can be personalized, with a few caveats."
-        }
-        if score >= 50 {
-            return "Medium reliability: use a blend of personal pattern and age baseline."
-        }
-        return "Low reliability: keep guidance general until more complete daily records are logged."
-    }
-
     private func clamp(_ value: Int) -> Int {
         min(100, max(0, value))
     }
     // MARK: - LLM
+
+    private func updateLLMSource(_ fingerprint: String?) {
+        if currentLLMSourceFingerprint != fingerprint {
+            currentLLMSourceFingerprint = fingerprint
+            if activeLLMTask != nil {
+                activeLLMTask?.cancel()
+                activeLLMTask = nil
+                llmRequestToken += 1
+                isLLMLoading = false
+            }
+        }
+        updateLLMCacheState()
+    }
 
     private func startLLMRequest(
         snapshot: OrchestratedSnapshot,
         records: [SleepRecord],
         trigger: LLMTrigger
     ) {
+        guard let sourceFingerprint = currentLLMSourceFingerprint else { return }
         activeLLMTask?.cancel()
         llmRequestToken += 1
         let requestToken = llmRequestToken
         isLLMLoading = true
-        let sourceFingerprint = llmSourceFingerprint(
-            snapshot: snapshot,
-            records: records
-        )
-
         activeLLMTask = Task { [weak self] in
             await self?.callLLM(
                 snapshot: snapshot,
@@ -853,14 +726,17 @@ final class SleepCoachOrchestrator: ObservableObject {
         )
 
         guard requestToken == llmRequestToken else { return }
+        defer {
+            isLLMLoading = false
+            activeLLMTask = nil
+        }
+        guard sourceFingerprint == currentLLMSourceFingerprint else { return }
 
         if let response {
             llmResponse = response
             cacheLLMResponse(response, sourceFingerprint: sourceFingerprint)
         }
 
-        isLLMLoading = false
-        activeLLMTask = nil
     }
 
     private func determineTrigger(
@@ -883,21 +759,21 @@ final class SleepCoachOrchestrator: ObservableObject {
         }
 
         // Yeni nap eklendiyse — önceki snapshot'tan fazla kayıt var mı?
-        if let current = snapshot.recordedSleepDay.minutes,
+        if let current = snapshot.recordedDaytime.minutes,
            previousMinutes.map({ current > $0 }) ?? (current > 0) {
             // Kısa nap mı?
             let todayNaps = records
                 .filter { $0.kind == .dayNap && cal.isDate($0.date, inSameDayAs: now) && $0.completedEnd(at: now) != nil }
                 .sorted { $0.date > $1.date }
 
-            if let lastNap = todayNaps.first, lastNap.duration < 45 {
-                return .shortNapDetected
+            if let lastNap = todayNaps.first,
+               let minutes = SleepAccounting(records: records, now: now, calendar: cal).completedMinutes(sleepIDs: [lastNap.id]) {
+                return minutes < 45 ? .shortNapDetected : .napLogged
             }
-            return .napLogged
         }
 
         // Transition sinyali güçlendiyse
-        if snapshot.transition.signalStrength == .strong {
+        if snapshot.transition.isReadyToTransit && snapshot.transition.signalStrength == .strong {
             return .transitionSignalHigh
         }
 
@@ -924,12 +800,12 @@ final class SleepCoachOrchestrator: ObservableObject {
         UserDefaults.standard.set(response.confidenceNote, forKey: "llm_confidenceNote")
         UserDefaults.standard.set(sourceFingerprint, forKey: "llm_sourceFingerprint")
         cachedLLMSourceFingerprint = sourceFingerprint
-        llmCacheState = .current
         if let alert = response.alert {
             UserDefaults.standard.set(alert, forKey: "llm_alert")
         } else {
             UserDefaults.standard.removeObject(forKey: "llm_alert")
         }
+        updateLLMCacheState()
     }
 
     private func loadLastLLMDate() -> Date? {
@@ -967,7 +843,7 @@ final class SleepCoachOrchestrator: ObservableObject {
     }
 
     private func updateLLMCacheState() {
-        guard llmResponse != nil else {
+        guard let llmResponse, Date().timeIntervalSince(llmResponse.generatedAt) < 86400 else {
             llmCacheState = .expired
             return
         }
@@ -982,7 +858,7 @@ final class SleepCoachOrchestrator: ObservableObject {
         snapshot: OrchestratedSnapshot,
         records: [SleepRecord]
     ) -> String {
-        var source = "prompt-version:2|model:gemini-2.5-flash"
+        var source = "prompt-version:3|model:gemini-2.5-flash"
         source += "|snapshot:" + canonicalSnapshot(snapshot)
         source += "|records:"
         for record in records.sorted(by: { $0.id.uuidString < $1.id.uuidString }) {
@@ -1003,7 +879,19 @@ final class SleepCoachOrchestrator: ObservableObject {
     }
 
     private func canonicalSnapshot(_ snapshot: OrchestratedSnapshot) -> String {
-        [
+        let currentState: String
+        switch snapshot.sleepAssessment?.state {
+        case .active(let record, let confirmation, _):
+            currentState = "active:\(record.id):\(confirmation?.timeIntervalSince1970.description ?? "-")"
+        case .observed(.wake(let time)):
+            currentState = "wake:\(time.timeIntervalSince1970)"
+        case .observed(.napEnd(let record, let end)):
+            currentState = "napEnd:\(record.id):\(end.timeIntervalSince1970)"
+        case .unconfirmed: currentState = "unconfirmed"
+        case .conflicting: currentState = "conflicting"
+        case .missing, nil: currentState = "missing"
+        }
+        return [
             "babyName=\(snapshot.babyName)",
             "ageMonths=\(snapshot.ageMonths)",
             "phase=\(String(reflecting: snapshot.phase))",
@@ -1018,6 +906,9 @@ final class SleepCoachOrchestrator: ObservableObject {
             "rolling24h=\(snapshot.recordedRolling24h)",
             "daytime=\(snapshot.recordedDaytime)",
             "timeZone=\(snapshot.evaluationCalendar.timeZone.identifier)",
+            "evaluationDay=\(snapshot.evaluationCalendar.startOfDay(for: snapshot.generatedAt).timeIntervalSince1970)",
+            "currentSleepState=\(currentState)",
+            "wake=\(snapshot.evaluationWake?.timeIntervalSince1970.description ?? "-")",
             "sleepDayIsProvisional=\(snapshot.sleepDayIsProvisional)",
             "rolling24hIsProvisional=\(snapshot.rolling24hIsProvisional)",
             "subtotalsAreReliable=\(snapshot.subtotalsAreReliable)",

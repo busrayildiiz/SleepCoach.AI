@@ -100,7 +100,8 @@ final class SleepCoachOrchestratorTests: XCTestCase {
         XCTAssertEqual(snapshot.babyName, "Test Baby")
         XCTAssertEqual(snapshot.ageMonths, 9)
         XCTAssertEqual(snapshot.nextSleepKind, .nap)
-        XCTAssertEqual(snapshot.todayTotalMinutes, 0)
+        XCTAssertNil(snapshot.todayTotalMinutes)
+        XCTAssertEqual(snapshot.recordedSleepDay, .incomplete(nil, reason: .missing))
         XCTAssertEqual(snapshot.phase, .baseline)
 
         XCTAssertFalse(orchestrator.isLoading)
@@ -245,7 +246,7 @@ final class SleepCoachOrchestratorTests: XCTestCase {
         )
     }
 
-    func testNextSleepKindIsBedtimeWhenExpectedNapCountIsReached() {
+    func testExpectedNapCountDoesNotProveCoverageOrForceBedtimeBeforeCutoff() {
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: Date())
         let currentDayNow = calendar.date(byAdding: .hour, value: 10, to: today)!
@@ -267,8 +268,10 @@ final class SleepCoachOrchestratorTests: XCTestCase {
 
         XCTAssertEqual(
             orchestrator.snapshot?.nextSleepKind,
-            .bedtime
+            .nap
         )
+        XCTAssertEqual(orchestrator.snapshot?.recordedDaytime, .incomplete(120, reason: .incomplete))
+        XCTAssertNil(orchestrator.snapshot?.sleepStatus)
     }
 
     func testNextSleepKindIsBedtimeAfterNapCutoff() {
@@ -393,6 +396,94 @@ final class SleepCoachOrchestratorTests: XCTestCase {
         )
     }
 
+    func testRecordedNightsAndWakesDoNotConfirmCoverageOrPersonalizedCoaching() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let day = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 11, day: 19)))
+        let evaluation = day.addingTimeInterval(14 * 3600)
+        let pairs = (0..<14).map { offset -> (SleepRecord, DailyWakeRecord) in
+            let start = day.addingTimeInterval(Double(-offset) * 86400)
+            let wake = start.addingTimeInterval(7 * 3600)
+            return (SleepRecord(date: start, duration: 420, kind: .nightSleep, createdAt: start, endDate: wake),
+                    DailyWakeRecord(day: start, wakeTime: wake))
+        }
+        let unresolved = SleepRecord(date: day.addingTimeInterval(8 * 3600), duration: 0, createdAt: day)
+        let nap = SleepRecord(date: day.addingTimeInterval(12 * 3600), duration: 60, createdAt: day)
+        let raw = pairs.map { $0.0 } + [unresolved, nap]
+        saveRecords(raw)
+        saveWakeRecords(pairs.map { $0.1 })
+        UserDefaults.standard.set(day.addingTimeInterval(-270 * 86400), forKey: "babyBirthDate")
+        let before = UserDefaults.standard.data(forKey: "sleepRecords")
+        let beforeWake = UserDefaults.standard.data(forKey: "dailyWakeRecords_v1")
+        let real = SleepCoachOrchestrator(llmAgent: llmAgent, calendar: calendar)
+        real.generate(now: evaluation, requestCoaching: false)
+
+        let snapshot = try XCTUnwrap(real.snapshot)
+        XCTAssertEqual(snapshot.dataQualityReport.trackedDays, 14)
+        XCTAssertEqual(snapshot.dataQualityReport.completeDays, 0)
+        XCTAssertEqual(snapshot.dataQualityReport.completenessScore, 0)
+        XCTAssertFalse(snapshot.dataQualityReport.contextSignals.contains("multi-day coverage"))
+        XCTAssertEqual(snapshot.recordedDaytime, .incomplete(60, reason: .unresolved))
+        XCTAssertEqual(snapshot.recordedSleepDay, .incomplete(480, reason: .unresolved))
+        XCTAssertNil(snapshot.sleepStatus)
+        XCTAssertNil(snapshot.daytime.confidence)
+        XCTAssertNil(snapshot.night.confidence)
+        XCTAssertNil(snapshot.night.overtiredRiskTime)
+        XCTAssertNil(snapshot.night.daytimeSleepStatus)
+        XCTAssertEqual(snapshot.night.source, .recordedEstimate)
+        XCTAssertEqual(snapshot.night.recommendation.limitation, .unresolved)
+        XCTAssertEqual(snapshot.sleepAssessment?.anchor?.date, nap.observedEnd)
+        XCTAssertNil(snapshot.pattern?.averageWakeWindowMinutes)
+        XCTAssertTrue(llmAgent.receivedTriggers.isEmpty)
+        XCTAssertEqual(UserDefaults.standard.data(forKey: "sleepRecords"), before)
+        XCTAssertEqual(UserDefaults.standard.data(forKey: "dailyWakeRecords_v1"), beforeWake)
+
+        let builder = DefaultSleepCoachLLMAgent()
+        let prompt = builder.buildPrompt(snapshot: snapshot, records: raw, trigger: .manualRefresh)
+        let week = builder.buildLast7DaysSummary(records: raw, now: evaluation, calendar: calendar)
+        XCTAssertTrue(prompt.contains("Sleep Days with confirmed recording coverage: 0"))
+        XCTAssertTrue(prompt.contains("Prediction confidence: Unavailable"))
+        XCTAssertTrue(prompt.contains("Daily sleep status: Unavailable"))
+        XCTAssertTrue(prompt.contains("Overtired risk after: Unavailable"))
+        XCTAssertTrue(prompt.contains("Bedtime planning source: Estimate from recorded sleep"))
+        XCTAssertTrue(prompt.contains("Bedtime planning limitation: Sleep end unconfirmed"))
+        XCTAssertTrue(prompt.contains("Withhold daily deficit, surplus, bedtime compensation, personalized claims, and confidence"))
+        XCTAssertTrue(prompt.contains("Coverage of those days is unconfirmed"))
+        XCTAssertTrue(prompt.contains(week), "The real primary prompt includes the separate production summary.")
+        XCTAssertTrue(week.contains("1 completed nap(s). Completed-recorded subtotal: 1h · Incomplete. Sleep end unconfirmed."))
+        XCTAssertEqual(week.components(separatedBy: "No naps logged. Nap coverage is unknown.").count - 1, 6)
+        XCTAssertFalse(week.contains("0m"))
+    }
+
+    func testPromptLeavesClockTimesUnavailableWithoutAnAnchorAndLabelsSavedRoutine() throws {
+        let calendar = Calendar.current
+        let local = SleepCoachOrchestrator(llmAgent: llmAgent, calendar: calendar)
+        let builder = DefaultSleepCoachLLMAgent()
+        local.generate(now: now, requestCoaching: false)
+        let missing = try XCTUnwrap(local.snapshot)
+        let agePrompt = builder.buildPrompt(snapshot: missing, records: [], trigger: .manualRefresh)
+        XCTAssertNil(missing.daytime.recommendation.value)
+        XCTAssertNil(missing.night.recommendation.value)
+        XCTAssertTrue(agePrompt.contains("Nap planning source: Age-based guidance"))
+        XCTAssertTrue(agePrompt.contains("Bedtime planning source: Age-based guidance"))
+        XCTAssertTrue(agePrompt.contains("Nap window: Unavailable"))
+        XCTAssertTrue(agePrompt.contains("Rolling 24h completed-recorded subtotal: Unknown"))
+        XCTAssertTrue(agePrompt.contains("Prediction confidence: Unavailable"))
+
+        UserDefaults.standard.set(7.0, forKey: "typicalWakeHour")
+        UserDefaults.standard.set(19.0, forKey: "typicalBedHour")
+        defer { UserDefaults.standard.removeObject(forKey: "typicalBedHour") }
+        local.generate(now: now, requestCoaching: false)
+        let routine = try XCTUnwrap(local.snapshot)
+        let routinePrompt = builder.buildPrompt(snapshot: routine, records: [], trigger: .manualRefresh)
+        XCTAssertTrue(routinePrompt.contains("Nap planning source: Routine-based guidance"))
+        XCTAssertTrue(routinePrompt.contains("Bedtime planning source: Routine-based guidance"))
+        XCTAssertTrue(routinePrompt.contains("Bedtime planning limitation: Missing observations"))
+        XCTAssertNil(routine.evaluationWake)
+        XCTAssertNil(UserDefaults.standard.data(forKey: "dailyWakeRecords_v1"))
+        XCTAssertTrue(llmAgent.receivedTriggers.isEmpty)
+    }
+
     // MARK: - LLM Trigger
 
     func testFirstGenerationTriggersNewDayLLMCall() async throws {
@@ -457,7 +548,7 @@ final class SleepCoachOrchestratorTests: XCTestCase {
         UserDefaults.standard.set(currentDay.timeIntervalSince1970, forKey: "llm_lastGenerated")
 
         orchestrator.generate(now: currentDay)
-        XCTAssertEqual(orchestrator.snapshot?.todayTotalMinutes, 0)
+        XCTAssertNil(orchestrator.snapshot?.todayTotalMinutes)
         saveRecords([
             // A completed nap must end by the injected reference, not start at it.
             SleepRecord(date: currentDay.addingTimeInterval(-30 * 60), duration: 30,
@@ -976,6 +1067,48 @@ final class SleepCoachOrchestratorLLMLifecycleTests: XCTestCase {
         XCTAssertEqual(UserDefaults.standard.string(forKey: "llm_coachMessage"), "newer")
     }
 
+    func testResponseAfterConfirmationExpiryCannotBecomeCurrentWithoutANewRequest() async throws {
+        let day = Calendar.current.startOfDay(for: now)
+        let oldNight = SleepRecord(date: day.addingTimeInterval(-25 * 3600), duration: 0,
+                                   kind: .nightSleep, isOngoing: true)
+        let nap = SleepRecord(date: day.addingTimeInterval(8 * 3600), duration: 60)
+        saveRecords([oldNight, nap])
+        let persisted = try XCTUnwrap(SleepRecordPersistence().load()?.first { $0.id == oldNight.id })
+        let source = UserDefaults.standard.data(forKey: "sleepRecords")
+        let confirmation = StillSleepingConfirmation(record: persisted, date: now)
+        let started = expectation(description: "Snapshot A request started")
+        let completed = expectation(description: "Cancelled request A still returned")
+        llmAgent.onRequest = { index in
+            XCTAssertEqual(index, 0, "Clock-only evaluation never launches a replacement request.")
+            if index == 0 { started.fulfill() }
+        }
+        llmAgent.onCompletion = { index in if index == 0 { completed.fulfill() } }
+
+        orchestrator.generate(now: now, confirmation: confirmation)
+        await fulfillment(of: [started], timeout: 1)
+        XCTAssertEqual(orchestrator.snapshot?.currentSleepKind, .nightSleep)
+        XCTAssertEqual(orchestrator.snapshot?.sleepAssessment?.active?.confirmation, now)
+        XCTAssertTrue(orchestrator.isLLMLoading)
+
+        let expiry = now.addingTimeInterval(90 * 60)
+        orchestrator.generate(now: expiry, confirmation: confirmation, requestCoaching: false)
+        XCTAssertEqual(orchestrator.snapshot?.generatedAt, expiry)
+        XCTAssertNil(orchestrator.snapshot?.currentSleepKind)
+        XCTAssertEqual(orchestrator.snapshot?.sleepAssessment?.reviewRecord?.id, oldNight.id)
+        XCTAssertEqual(orchestrator.snapshot?.recordedSleepDay, .incomplete(60, reason: .incomplete))
+        XCTAssertEqual(UserDefaults.standard.data(forKey: "sleepRecords"), source)
+
+        llmAgent.release(0, with: response("Snapshot A"))
+        await fulfillment(of: [completed], timeout: 1)
+        XCTAssertEqual(llmAgent.receivedSnapshots.count, 1)
+        XCTAssertNil(orchestrator.currentCoaching)
+        XCTAssertNil(orchestrator.llmResponse)
+        XCTAssertEqual(orchestrator.llmCacheState, .expired)
+        XCTAssertFalse(orchestrator.isLLMLoading)
+        XCTAssertNil(UserDefaults.standard.string(forKey: "llm_coachMessage"))
+        XCTAssertNil(UserDefaults.standard.string(forKey: "llm_sourceFingerprint"))
+    }
+
     func testStaleCompletionDoesNotClearLoadingForNewerRequest() async throws {
         let firstRequestStarted = expectation(description: "First LLM request started")
         let secondRequestStarted = expectation(description: "Second LLM request started")
@@ -1053,7 +1186,8 @@ final class SleepCoachOrchestratorLLMLifecycleTests: XCTestCase {
         } else {
             XCTFail("Expected a manual refresh trigger")
         }
-        XCTAssertEqual(llmAgent.receivedSnapshots.last?.todayTotalMinutes, 0)
+        XCTAssertNil(llmAgent.receivedSnapshots.last?.todayTotalMinutes)
+        XCTAssertEqual(llmAgent.receivedSnapshots.last?.recordedSleepDay, .incomplete(nil, reason: .missing))
         XCTAssertEqual(llmAgent.receivedRecords.last?.count, 0)
         llmAgent.release(0, with: nil)
         await fulfillment(of: [requestCompleted], timeout: 1)

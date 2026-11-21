@@ -120,6 +120,21 @@ final class SleepStateCalculatorTests: XCTestCase {
 }
 
 extension SleepStateCalculatorTests {
+    func testLegacyUnknownEndRemainsReviewableAndCannotBecomeActive() {
+        let day = calendar.startOfDay(for: now)
+        let wake = DailyWakeRecord(day: day, wakeTime: day.addingTimeInterval(7 * 3600))
+        let legacy = SleepRecord(date: day.addingTimeInterval(8 * 3600), duration: 0)
+        let confirmation = StillSleepingConfirmation(record: legacy, date: now.addingTimeInterval(-60))
+        let state = SleepStateCalculator.assess(records: [legacy], wakes: [wake],
+            evaluation: .init(now: now, calendar: calendar, confirmation: confirmation))
+        XCTAssertEqual(state.unavailableReason, .unresolved)
+        XCTAssertNil(state.active)
+        XCTAssertNil(state.anchor)
+        XCTAssertEqual(state.recordedWake?.id, wake.id)
+        XCTAssertEqual(state.reviewRecord?.id, legacy.id)
+        XCTAssertNil(state.reviewRecord?.observedEnd)
+    }
+
     func testUnconfirmedNightAndNapExpireAtExactElapsedLimits() {
         for (kind, hours) in [(SleepKind.nightSleep, 24.0), (.dayNap, 4.0)] {
             let start = now.addingTimeInterval(-hours * 3600)

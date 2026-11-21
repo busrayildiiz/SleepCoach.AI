@@ -79,7 +79,7 @@ final class SleepOverviewCalculatorTests: XCTestCase {
         XCTAssertEqual(varied.consistencyPercent, 55)
     }
 
-    func testTodayNapCountAndGoalProgressUseCurrentDayOnly() {
+    func testTodayNapCountUsesCurrentDayAndIncompleteDataCannotShowGoalProgress() {
         let nap = record(dayOffset: 0, duration: 60, kind: .dayNap)
         let ongoingNap = record(dayOffset: 0, hour: 10, duration: 60, kind: .dayNap, isOngoing: true)
         let night = record(dayOffset: 0, hour: 22, duration: 480, kind: .nightSleep)
@@ -90,7 +90,7 @@ final class SleepOverviewCalculatorTests: XCTestCase {
         XCTAssertEqual(metrics.todayNapCount, 1)
         XCTAssertEqual(metrics.recordedDaytime, .incomplete(60, reason: .unresolved))
         XCTAssertNil(metrics.recordedGoalProgress)
-        XCTAssertEqual(metrics.todayGoalProgress, min(Double(metrics.rolling24hMinutes) / 660.0, 1.0))
+        XCTAssertNil(metrics.todayGoalProgress)
     }
 
     private func calculate(_ records: [SleepRecord]) -> SleepOverviewMetrics {
@@ -136,7 +136,8 @@ final class SleepAccountingRegressionTests: XCTestCase {
         XCTAssertEqual(result.daytimeMinutes, 90)
         XCTAssertEqual(result.nightMinutes, 630)
         XCTAssertEqual(result.totalMinutes, 720)
-        XCTAssertTrue(result.isFinalized)
+        XCTAssertTrue(result.isProvisional)
+        XCTAssertEqual(sut.completedSubtotal(on: nap.date), .incomplete(720, reason: .incomplete))
         XCTAssertEqual(sut.sleepDay(on: sut.now).totalMinutes, 0)
         XCTAssertTrue(sut.records(on: nap.date).contains { $0.id == wake.id })
         XCTAssertEqual(night.date, date("2026-09-01T20:00:00Z"))
@@ -356,8 +357,86 @@ extension SleepAccountingRegressionTests {
         XCTAssertEqual(accounting.completedSubtotal(on: day), .incomplete(45, reason: .unresolved))
         XCTAssertEqual(accounting.completedRolling24h, .incomplete(45, reason: .unresolved))
         XCTAssertEqual(accounting.completedSubtotal(on: day, kind: .dayNap).minutes, 45)
+        XCTAssertEqual(accounting.completedMinutes(sleepIDs: [nap.id]), 45)
+        XCTAssertEqual(PatternAgent(calendar: calendar).analyze(records: records, wakeRecords: [], ageMonths: 9,
+                                                               now: now).averageNapDurationMinutes, 45)
         XCTAssertNil(SleepOverviewCalculator(records: records, now: now, calendar: calendar,
                                               totalSleepReference: 600...800).calculate().recordedGoalProgress)
         XCTAssertNil(night.observedEnd)
+
+        let older = SleepRecord(id: night.id, date: day.addingTimeInterval(-4 * 3600), duration: 0,
+                                kind: .nightSleep, isOngoing: true)
+        let fullContext = SleepAccounting(records: [older, nap, awake], now: now, calendar: calendar)
+        XCTAssertEqual(fullContext.completedSubtotal(on: day, kind: .dayNap), .incomplete(45, reason: .incomplete))
+        XCTAssertEqual(fullContext.completedMinutes(sleepIDs: [nap.id]), 45)
+        XCTAssertEqual(PatternAgent(calendar: calendar).analyze(records: fullContext.records, wakeRecords: [], ageMonths: 9,
+                                                               now: now).averageNapDurationMinutes, 45)
+    }
+
+    func testSingleNapHasReliableMinutesWithoutProvingDailyOrRollingCoverage() {
+        let nap = sleep("2026-09-02T10:00:00Z", "2026-09-02T11:00:00Z", kind: .dayNap)
+        let sut = accounting([nap])
+        XCTAssertEqual(sut.completedMinutes(sleepIDs: [nap.id]), 60)
+        XCTAssertEqual(sut.completedSubtotal(on: nap.date), .incomplete(60, reason: .incomplete))
+        XCTAssertEqual(sut.completedSubtotal(on: nap.date, kind: .dayNap), .incomplete(60, reason: .incomplete))
+        XCTAssertEqual(sut.completedRolling24h, .incomplete(60, reason: .incomplete))
+        XCTAssertNil(sut.completedRolling24h.comparableMinutes)
+        XCTAssertEqual(accounting([]).completedRolling24h, .incomplete(nil, reason: .missing))
+        XCTAssertEqual(accounting([]).completedRolling24h.display, "Unknown")
+    }
+
+    func testCompletedParentWithOpenOrUnknownBreakHasNoExactNetDuration() {
+        let night = sleep("2026-09-01T20:00:00Z", "2026-09-02T07:00:00Z")
+        let nap = sleep("2026-09-01T12:00:00Z", "2026-09-01T13:00:00Z", kind: .dayNap)
+        for ongoing in [true, false] {
+            let awake = SleepRecord(date: date("2026-09-02T02:30:00Z"), duration: 0,
+                                    kind: .break, parentNapID: night.id, isOngoing: ongoing)
+            let sut = accounting([night, nap, awake])
+            XCTAssertNil(sut.completedMinutes(sleepIDs: [night.id]))
+            XCTAssertNil(sut.completedMinutes(sleepIDs: [night.id, nap.id]))
+            XCTAssertEqual(sut.completedMinutes(sleepIDs: [nap.id]), 60)
+            XCTAssertEqual(sut.completedSubtotal(on: night.date), .incomplete(60, reason: .unresolvedBreak))
+            let pattern = PatternAgent(calendar: sut.calendar).analyze(records: sut.records, wakeRecords: [], ageMonths: 9, now: sut.now)
+            XCTAssertNil(pattern.averageNightSleepMinutes)
+            XCTAssertEqual(pattern.averageNapDurationMinutes, 60)
+        }
+    }
+
+    func testUnresolvedBreakAttachedToOlderNightInvalidatesOverlappingNapDuration() {
+        let night = sleep("2026-09-01T20:00:00Z", nil)
+        let nap = sleep("2026-09-02T10:00:00Z", "2026-09-02T11:00:00Z", kind: .dayNap)
+        for ongoing in [true, false] {
+            let awake = SleepRecord(date: date("2026-09-02T10:15:00Z"), duration: 0,
+                                    kind: .break, parentNapID: night.id, isOngoing: ongoing)
+            let sut = accounting([night, nap, awake])
+            XCTAssertNil(sut.completedMinutes(sleepIDs: [nap.id]))
+            XCTAssertEqual(sut.completedSubtotal(on: nap.date, kind: .dayNap), .incomplete(nil, reason: .unresolvedBreak))
+            XCTAssertEqual(nap.completedEnd(at: sut.now), date("2026-09-02T11:00:00Z"))
+            XCTAssertNil(PatternAgent(calendar: sut.calendar).analyze(records: sut.records, wakeRecords: [], ageMonths: 9,
+                                                                      now: sut.now).averageNapDurationMinutes)
+        }
+    }
+
+    func testUnresolvedOnsetBreaksAwakeContinuityWhileLaterEndRemainsAPlanningAnchor() {
+        let wake = DailyWakeRecord(day: date("2026-09-02T00:00:00Z"), wakeTime: date("2026-09-02T07:00:00Z"))
+        let unresolved = SleepRecord(date: date("2026-09-02T08:00:00Z"), duration: 0)
+        let nap = sleep("2026-09-02T12:00:00Z", "2026-09-02T13:00:00Z", kind: .dayNap)
+        let sut = accounting([unresolved, nap], now: "2026-09-02T14:00:00Z")
+        let pattern = PatternAgent(calendar: sut.calendar).analyze(records: sut.records, wakeRecords: [wake], ageMonths: 9, now: sut.now)
+        XCTAssertNil(sut.recordedAwakeMinutes(from: wake.wakeTime, until: nap.date))
+        XCTAssertNil(pattern.averageWakeWindowMinutes)
+        XCTAssertEqual(pattern.wakingWindowTrend, .insufficient)
+        XCTAssertEqual(pattern.averageNapDurationMinutes, 60)
+
+        let context = SleepPredictionContext(records: sut.records, wakes: [wake], evaluation: .init(now: sut.now, calendar: sut.calendar))
+        XCTAssertEqual(context.assessment.reviewRecord?.id, unresolved.id)
+        XCTAssertEqual(context.assessment.anchor?.date, date("2026-09-02T13:00:00Z"))
+        let guidance = DefaultDaytimePredictionAgent(calendar: sut.calendar)
+            .predictNextNap(pattern: pattern, todayRecords: sut.records, wakeRecords: [wake], ageMonths: 9,
+                            trackedDays: 14, now: sut.now, planning: context)
+        XCTAssertEqual(guidance.nextNapTime, date("2026-09-02T16:30:00Z"))
+        XCTAssertEqual(guidance.source, .recordedEstimate)
+        XCTAssertEqual(guidance.recommendation.limitation, .unresolved)
+        XCTAssertNil(guidance.confidence)
     }
 }

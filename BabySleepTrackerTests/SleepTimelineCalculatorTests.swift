@@ -61,12 +61,38 @@ final class SleepTimelineCalculatorTests: XCTestCase {
         for record in records {
             let result = try item(record, in: items)
             XCTAssertEqual(result.visualState, .unavailable)
-            XCTAssertEqual(result.unavailableReason, record.id == records[0].id ? .endUnconfirmed : .invalidRecord)
+            XCTAssertEqual(result.unavailableReason, record.date <= at(12) ? .endUnconfirmed : .invalidRecord)
             XCTAssertNil(result.durationMinutes)
             XCTAssertNil(result.elapsedMinutes)
             XCTAssertNil(result.observedEnd)
             XCTAssertNil(result.awakeBeforeMinutes)
         }
+    }
+
+    func testUnknownLegacyEndBlocksAwakeGapButCompletedNapEndRemainsVisible() throws {
+        let wake = DailyWakeRecord(day: day, wakeTime: at(7))
+        let unknown = SleepRecord(date: at(8), duration: 0)
+        let nap = SleepRecord(date: at(12), duration: 60)
+        let timeline = calculate(records: [unknown, nap], wake: wake, now: at(14))
+        let unresolved = try item(unknown, in: timeline)
+        XCTAssertEqual(unresolved.time, at(8))
+        XCTAssertEqual(unresolved.unavailableReason, .endUnconfirmed)
+        XCTAssertFalse(unresolved.isActive)
+        XCTAssertNil(unresolved.observedEnd)
+        let completed = try item(nap, in: timeline)
+        XCTAssertEqual(completed.observedEnd, at(13))
+        XCTAssertEqual(completed.durationMinutes, 60)
+        XCTAssertNil(completed.awakeBeforeMinutes)
+    }
+
+    func testCompletedObservationKeepsEndAndShowsUnknownNetWhenAwakeBreakIsOpen() throws {
+        let night = SleepRecord(date: at(1), duration: 360, kind: .nightSleep, endDate: at(7))
+        let awake = SleepRecord(date: at(5), duration: 0, kind: .break, parentNapID: night.id, isOngoing: true)
+        let result = try item(night, in: calculate(records: [night, awake]))
+        XCTAssertEqual(result.visualState, .completed)
+        XCTAssertEqual(result.observedEnd, at(7))
+        XCTAssertNil(result.durationMinutes)
+        XCTAssertEqual(result.unavailableReason, .netSleepUnconfirmed)
     }
 
     func testWakeRequiresValidRecordedTimeForSelectedDay() throws {

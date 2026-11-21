@@ -134,7 +134,11 @@ struct TodaySleepHeroCard: View {
             }
         case .napCompleted:
             VStack(alignment: .leading, spacing: 3) {
-                Text("\(napLabel) · \(duration(model.netMinutes)) net sleep")
+                if let net = model.netMinutes {
+                    Text("\(napLabel) · \(TimeFormat.minutes(net)) net sleep")
+                } else {
+                    Text("\(napLabel) · Net sleep unknown")
+                }
                 if let start = model.record?.date, let end = model.record?.observedEnd {
                     Text("\(time(start)) – \(time(end))")
                 }

@@ -5,6 +5,7 @@ struct ContentView: View {
     @State private var selectedTab: Tab = .home
     @State private var showAddSheet = false
     @State private var sleepConfirmation: StillSleepingConfirmation?
+    @Environment(\.scenePhase) private var scenePhase
 
     private let tabAccent = Color(red: 0.40, green: 0.29, blue: 0.90)
 
@@ -25,7 +26,7 @@ struct ContentView: View {
                     .opacity(selectedTab == .history ? 1 : 0)
                     .allowsHitTesting(selectedTab == .history)
 
-                InsightsView(sleepConfirmation: $sleepConfirmation, isVisible: selectedTab == .insights)
+                InsightsView(sleepConfirmation: $sleepConfirmation)
                     .opacity(selectedTab == .insights ? 1 : 0)
                     .allowsHitTesting(selectedTab == .insights)
 
@@ -51,6 +52,13 @@ struct ContentView: View {
         }
         .onChange(of: selectedTab) { tab in
             if tab == .insights {
+                SleepCoachOrchestrator.shared.generate(confirmation: sleepConfirmation, requestCoaching: false)
+            }
+        }
+        .task(id: scenePhase) { @MainActor in
+            guard scenePhase == .active else { return }
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(60)) } catch { return }
                 SleepCoachOrchestrator.shared.generate(confirmation: sleepConfirmation, requestCoaching: false)
             }
         }

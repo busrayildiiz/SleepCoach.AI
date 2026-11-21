@@ -90,7 +90,7 @@ final class DaytimePredictionAgentTests: XCTestCase {
         XCTAssertEqual(result.nextNapTime, expectedNextNap)
 
         XCTAssertTrue(result.reasoning.contains {
-            $0.contains("last nap end time")
+            $0.contains("last recorded nap end")
         })
     }
 
@@ -220,7 +220,7 @@ final class DaytimePredictionAgentTests: XCTestCase {
         XCTAssertEqual(result.wakeWindowUsed, 210)
     }
 
-    func testBlendedWakeWindowUsesObservedPatternAtSevenDays() {
+    func testDescriptivePatternDoesNotShiftAgeWindowAtSevenTrackedDays() {
         let pattern = makePattern(
             averageWakeWindowMinutes: 300
         )
@@ -234,13 +234,13 @@ final class DaytimePredictionAgentTests: XCTestCase {
             now: now
         )
 
-        // baseline = 210
-        // weight = 7 / 14 = 0.5
-        // blended = 255
-        XCTAssertEqual(result.wakeWindowUsed, 255)
+        XCTAssertEqual(result.wakeWindowUsed, 210)
+        XCTAssertEqual(result.nextNapTime, day(hour: 10, minute: 30))
+        XCTAssertEqual(result.recommendation.source, .recordedEstimate)
+        XCTAssertNil(result.confidence)
     }
 
-    func testBlendedWakeWindowUsesFullyObservedPatternAtFourteenDays() {
+    func testDescriptivePatternDoesNotShiftAgeWindowAtFourteenTrackedDays() {
         let pattern = makePattern(
             averageWakeWindowMinutes: 300
         )
@@ -254,10 +254,13 @@ final class DaytimePredictionAgentTests: XCTestCase {
             now: now
         )
 
-        XCTAssertEqual(result.wakeWindowUsed, 285)
+        XCTAssertEqual(result.wakeWindowUsed, 210)
+        XCTAssertEqual(result.nextNapTime, day(hour: 10, minute: 30))
+        XCTAssertEqual(result.mode, .ageBaseline)
+        XCTAssertNil(result.confidence)
     }
 
-    func testBlendedWakeWindowIsClampedToLowerBound() {
+    func testAnImplausiblyShortDescriptivePatternCannotChangeAgeWindow() {
         let pattern = makePattern(
             averageWakeWindowMinutes: 0
         )
@@ -271,11 +274,12 @@ final class DaytimePredictionAgentTests: XCTestCase {
             now: now
         )
 
-        // profile lower bound = 180, lower clamp = 150
-        XCTAssertEqual(result.wakeWindowUsed, 150)
+        XCTAssertEqual(result.wakeWindowUsed, 210)
+        XCTAssertEqual(result.nextNapTime, day(hour: 10, minute: 30))
+        XCTAssertNil(result.confidence)
     }
 
-    func testBlendedWakeWindowIsClampedToUpperBound() {
+    func testAnImplausiblyLongDescriptivePatternCannotChangeAgeWindow() {
         let pattern = makePattern(
             averageWakeWindowMinutes: 1000
         )
@@ -289,8 +293,10 @@ final class DaytimePredictionAgentTests: XCTestCase {
             now: now
         )
 
-        // profile upper bound = 240, upper clamp = 285
-        XCTAssertEqual(result.wakeWindowUsed, 285)
+        XCTAssertEqual(result.wakeWindowUsed, 210)
+        XCTAssertEqual(result.nextNapTime, day(hour: 10, minute: 30))
+        XCTAssertEqual(result.mode, .ageBaseline)
+        XCTAssertNil(result.confidence)
     }
 
     // MARK: - Expected Nap Duration
@@ -312,7 +318,7 @@ final class DaytimePredictionAgentTests: XCTestCase {
         )
     }
 
-    func testExpectedDurationUsesPatternAverageForFirstNap() {
+    func testExpectedDurationKeepsAgeReferenceWithFirstNapPattern() {
         let pattern = makePattern(
             averageNapDurationMinutes: 100
         )
@@ -328,11 +334,12 @@ final class DaytimePredictionAgentTests: XCTestCase {
 
         XCTAssertEqual(
             result.expectedDurationMinutes,
-            100
+            90
         )
+        XCTAssertEqual(result.recommendation.source, .recordedEstimate)
     }
 
-    func testExpectedDurationSubtractsTenMinutesForLaterNaps() {
+    func testExpectedDurationKeepsAgeReferenceAfterAnObservedNap() {
         let pattern = makePattern(
             averageNapDurationMinutes: 100
         )
@@ -358,7 +365,7 @@ final class DaytimePredictionAgentTests: XCTestCase {
         )
     }
 
-    func testPatternNapDurationNeverFallsBelowThirtyMinutes() {
+    func testAnImplausiblePatternNapDurationCannotReplaceAgeReference() {
         let pattern = makePattern(
             averageNapDurationMinutes: 20
         )
@@ -380,8 +387,9 @@ final class DaytimePredictionAgentTests: XCTestCase {
 
         XCTAssertEqual(
             result.expectedDurationMinutes,
-            30
+            90
         )
+        XCTAssertEqual(result.recommendation.limitation, .incomplete)
     }
 
     // MARK: - Prediction Mode
@@ -408,7 +416,7 @@ final class DaytimePredictionAgentTests: XCTestCase {
         )
     }
 
-    func testPredictionModeIsBlendedForSevenToThirteenTrackedDays() throws {
+    func testGeneralWindowStaysUnchangedAfterSevenTrackedDays() throws {
         let result = agent.predictNextNap(
             pattern: nil,
             todayRecords: [],
@@ -419,18 +427,19 @@ final class DaytimePredictionAgentTests: XCTestCase {
         )
 
         let nextNapTime = try XCTUnwrap(result.nextNapTime)
-        XCTAssertEqual(result.mode, .blended)
+        XCTAssertEqual(result.mode, .ageBaseline)
+        XCTAssertNil(result.confidence)
         XCTAssertEqual(
             result.windowStart,
-            nextNapTime.addingTimeInterval(-15 * 60)
+            nextNapTime.addingTimeInterval(-20 * 60)
         )
         XCTAssertEqual(
             result.windowEnd,
-            nextNapTime.addingTimeInterval(15 * 60)
+            nextNapTime.addingTimeInterval(20 * 60)
         )
     }
 
-    func testPredictionModeIsBlendedAtFourteenDaysWithoutPattern() {
+    func testFourteenTrackedDaysWithoutAnAnchorKeepGeneralGuidance() {
         let result = agent.predictNextNap(
             pattern: nil,
             todayRecords: [],
@@ -440,10 +449,11 @@ final class DaytimePredictionAgentTests: XCTestCase {
             now: now
         )
 
-        XCTAssertEqual(result.mode, .blended)
+        XCTAssertEqual(result.mode, .ageBaseline)
+        XCTAssertNil(result.confidence)
     }
 
-    func testPredictionModeIsPersonalizedAtFourteenDaysWithPattern() throws {
+    func testFourteenTrackedDaysWithAPatternKeepGeneralWindow() throws {
         let pattern = makePattern()
 
         let result = agent.predictNextNap(
@@ -456,14 +466,16 @@ final class DaytimePredictionAgentTests: XCTestCase {
         )
 
         let nextNapTime = try XCTUnwrap(result.nextNapTime)
-        XCTAssertEqual(result.mode, .personalized)
+        XCTAssertEqual(result.mode, .ageBaseline)
+        XCTAssertEqual(result.recommendation.source, .recordedEstimate)
+        XCTAssertNil(result.confidence)
         XCTAssertEqual(
             result.windowStart,
-            nextNapTime.addingTimeInterval(-10 * 60)
+            nextNapTime.addingTimeInterval(-20 * 60)
         )
         XCTAssertEqual(
             result.windowEnd,
-            nextNapTime.addingTimeInterval(10 * 60)
+            nextNapTime.addingTimeInterval(20 * 60)
         )
     }
 
@@ -484,7 +496,7 @@ final class DaytimePredictionAgentTests: XCTestCase {
         XCTAssertEqual(result.generalWakeWindow, 180...240)
     }
 
-    func testConfidenceAddsWakeTimeAndPattern() {
+    func testWakeAndDescriptivePatternGiveTimingWithoutConfidence() {
         let pattern = makePattern()
 
         let wake = DailyWakeRecord(
@@ -501,14 +513,12 @@ final class DaytimePredictionAgentTests: XCTestCase {
             now: now
         )
 
-        // blended: 58
-        // wake: +8
-        // pattern: +5
-        // = 71
-        XCTAssertEqual(result.confidence, 71)
+        XCTAssertNil(result.confidence)
+        XCTAssertEqual(result.nextNapTime, day(hour: 10, minute: 30))
+        XCTAssertEqual(result.recommendation.limitation, .missing)
     }
 
-    func testConfidenceSubtractsTenForOngoingNap() {
+    func testOngoingNapEstimateDoesNotClaimConfidence() {
         let ongoingNap = SleepRecord(
             date: now.addingTimeInterval(-10 * 60),
             duration: 0,
@@ -525,8 +535,8 @@ final class DaytimePredictionAgentTests: XCTestCase {
             now: now
         )
 
-        // 44 - 10 = 34
-        XCTAssertEqual(result.confidence, 34)
+        XCTAssertNil(result.confidence)
+        XCTAssertEqual(result.recommendation.limitation, .unresolved)
         XCTAssertEqual(result.recommendation.source, .activityEstimate)
     }
 
@@ -559,18 +569,18 @@ final class DaytimePredictionAgentTests: XCTestCase {
 
         XCTAssertTrue(
             result.reasoning.contains {
-                $0.contains("last nap end time")
+                $0.contains("last recorded nap end")
             }
         )
 
         XCTAssertTrue(
             result.reasoning.contains {
-                $0.contains("Blending age baseline")
+                $0.contains("general age guidance")
             }
         )
     }
 
-    func testPersonalizedReasoningUsesBabyName() {
+    func testObservedWakeReasoningKeepsSourceAndMissingCoverageExplicit() {
         UserDefaults.standard.set(
             "Umay",
             forKey: "babyName"
@@ -585,14 +595,13 @@ final class DaytimePredictionAgentTests: XCTestCase {
             now: now
         )
 
-        XCTAssertTrue(
-            result.reasoning.contains {
-                $0.contains("Umay's own sleep pattern")
-            }
-        )
+        XCTAssertEqual(result.recommendation.source, .recordedEstimate)
+        XCTAssertTrue(result.reasoning.contains { $0.contains("recorded wake") && $0.contains("general age guidance") })
+        XCTAssertTrue(result.reasoning.contains(SleepPlanningUnavailable.missing.rawValue))
+        XCTAssertFalse(result.reasoning.joined().contains("own sleep pattern"))
     }
 
-    func testEmptyBabyNameFallsBackToBaby() {
+    func testMissingNameAndPatternDoNotCreatePersonalizedReasoning() {
         UserDefaults.standard.set(
             "   ",
             forKey: "babyName"
@@ -607,11 +616,10 @@ final class DaytimePredictionAgentTests: XCTestCase {
             now: now
         )
 
-        XCTAssertTrue(
-            result.reasoning.contains {
-                $0.contains("Baby's own sleep pattern")
-            }
-        )
+        XCTAssertEqual(result.recommendation.source, .recordedEstimate)
+        XCTAssertTrue(result.reasoning.contains { $0.contains("recorded wake") && $0.contains("general age guidance") })
+        XCTAssertTrue(result.reasoning.contains(SleepPlanningUnavailable.missing.rawValue))
+        XCTAssertFalse(result.reasoning.joined().contains("own sleep pattern"))
     }
 
     // MARK: - Helpers

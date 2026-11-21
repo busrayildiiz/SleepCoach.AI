@@ -6,7 +6,7 @@ struct SleepTimelineItem: Equatable, Identifiable {
     enum VisualState: Equatable { case completed, active, next, future, unavailable }
     enum Source: Equatable { case recorded(UUID), estimate, defaultValue, guidance, unavailable }
     enum UnavailableReason: Equatable {
-        case missingRecord, invalidRecord, endUnconfirmed, eligibilityUnverified, missingPrediction, overdue, notAnObservation
+        case missingRecord, invalidRecord, endUnconfirmed, netSleepUnconfirmed, eligibilityUnverified, missingPrediction, overdue, notAnObservation
     }
 
     let id: String
@@ -82,7 +82,10 @@ struct SleepTimelineCalculator {
             let end = record.completedEnd(at: now)
             let completed = end != nil
             let isActive = active?.record.id == record.id
-            let unresolved = record.date <= now && (record.isOngoing || (record.endDate == nil && record.duration == 0))
+            let unresolved = record.needsEndReview(at: now)
+            let duration = completed ? accounting.completedMinutes(sleepIDs: [record.id]) : nil
+            let reason: SleepTimelineItem.UnavailableReason? = isActive || duration != nil ? nil :
+                (completed ? .netSleepUnconfirmed : (unresolved ? .endUnconfirmed : .invalidRecord))
             let originalDay = calendar.startOfDay(for: record.date)
             let kind: SleepTimelineItem.Kind = record.kind == .nightSleep ? .bedtime :
                 .nap(index: completed || isActive ? napNumber(for: record, accounting: accounting) : nil)
@@ -90,10 +93,10 @@ struct SleepTimelineCalculator {
                 id: "record:\(record.id.uuidString)", kind: kind, sleepDay: originalDay,
                 source: .recorded(record.id), time: record.date,
                 observedEnd: end,
-                durationMinutes: completed ? accounting.completedMinutes(sleepIDs: [record.id]) : nil,
+                durationMinutes: duration,
                 elapsedMinutes: isActive ? active?.elapsed : nil,
                 visualState: completed ? .completed : (isActive ? .active : .unavailable),
-                unavailableReason: completed || isActive ? nil : (unresolved ? .endUnconfirmed : .invalidRecord),
+                unavailableReason: reason,
                 isCarryover: originalDay != sleepDay))
         }
 
@@ -142,9 +145,9 @@ struct SleepTimelineCalculator {
             let previous = items[index - 1]
             // An ongoing/unknown interval has no observed ending to anchor awake time.
             let end = previous.kind == .wake && previous.visualState == .completed ? previous.time : previous.observedEnd
-            if let end, let start = items[index].time, start >= end,
+            if let end, let start = items[index].time,
                items[index].visualState != .unavailable {
-                items[index].awakeBeforeMinutes = Int(start.timeIntervalSince(end) / 60)
+                items[index].awakeBeforeMinutes = accounting.recordedAwakeMinutes(from: end, until: start)
             }
         }
         return items
@@ -167,7 +170,7 @@ struct SleepTimelineCalculator {
                 durationMinutes: nil, elapsedMinutes: nil, visualState: .unavailable,
                 unavailableReason: .missingRecord)
         }
-        let valid = calendar.isDate(record.wakeTime, inSameDayAs: day) && record.wakeTime <= now
+        let valid = record.isObserved(on: day, at: now, calendar: calendar)
         return SleepTimelineItem(id: "record:\(record.id.uuidString)", kind: .wake,
             sleepDay: day, source: .recorded(record.id), time: record.wakeTime, observedEnd: nil,
             durationMinutes: nil, elapsedMinutes: nil,

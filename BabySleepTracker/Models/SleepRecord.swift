@@ -84,6 +84,10 @@ struct SleepRecord: Identifiable, Codable {
         return end
     }
 
+    func needsEndReview(at now: Date) -> Bool {
+        date.timeIntervalSinceReferenceDate.isFinite && date <= now && completedEnd(at: now) == nil
+    }
+
     func totalMinutes(breaks: [SleepRecord], at referenceDate: Date) -> Int {
         SleepAccounting.netMinutes(records: [self] + breaks.filter { $0.kind == .break }, now: referenceDate)
     }

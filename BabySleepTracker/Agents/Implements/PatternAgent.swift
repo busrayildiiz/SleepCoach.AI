@@ -36,258 +36,50 @@ struct BabyPattern {
 // MARK: - DefaultPatternAgent
 
 final class PatternAgent: PatternAgentProtocol {
-
     private let calendar: Calendar
 
     init(calendar: Calendar = .current) { self.calendar = calendar }
 
-    func analyze(
-        records: [SleepRecord],
-        wakeRecords: [DailyWakeRecord],
-        ageMonths: Int,
-        now: Date
-    ) -> BabyPattern {
+    func analyze(records: [SleepRecord], wakeRecords: [DailyWakeRecord], ageMonths: Int, now: Date) -> BabyPattern {
+        let accounting = SleepAccounting(records: records, now: now, calendar: calendar)
+        let samples = records.compactMap { record -> (record: SleepRecord, minutes: Int)? in
+            guard record.kind != .break, let minutes = accounting.completedMinutes(sleepIDs: [record.id]) else { return nil }
+            return (record, minutes)
+        }
+        let naps = samples.filter { $0.record.kind == .dayNap }
+        let nights = samples.filter { $0.record.kind == .nightSleep }
+        let days = Set(samples.map { calendar.startOfDay(for: $0.record.date) })
+        let wakeWindows = extractWakeWindows(naps: naps.map(\.record), wakeRecords: wakeRecords, accounting: accounting)
 
-        let breaks  = records.filter { $0.kind == .break }
-        let dayNaps = records.filter { $0.kind == .dayNap && $0.observedEnd.map { $0 <= now } == true }.sorted { $0.date < $1.date }
-        let nights  = records.filter { $0.kind == .nightSleep && $0.observedEnd.map { $0 <= now } == true }.sorted { $0.date < $1.date }
-
-        let sampleSize  = trackedDayCount(records: records, wakeRecords: wakeRecords)
-
-        let wakeWindows    = extractWakeWindows(dayNaps: dayNaps, wakeRecords: wakeRecords)
-        let avgWakeWindow  = median(wakeWindows)
-
-        let napDurations   = dayNaps.map { $0.totalMinutes(breaks: breaks, at: $0.observedEnd ?? $0.date) }.filter { $0 > 0 }
-        let avgNapDuration = average(napDurations)
-
-        let (bestHour, bestExtra) = bestNapHour(
-            dayNaps: dayNaps,
-            breaks: breaks,
-            overall: avgNapDuration
-        )
-
-        let napCount = averageNapCount(dayNaps: dayNaps)
-
-        let nightDurations = nights.map { $0.totalMinutes(breaks: breaks, at: $0.observedEnd ?? $0.date) }.filter { $0 > 0 }
-        let avgNight       = average(nightDurations)
-
-        let bedtimeShift = estimateBedtimeShift(
-            dayNaps: dayNaps,
-            nights: nights,
-            breaks: breaks,
-            overallAvgNap: avgNapDuration
-        )
-
-        let wwTrend  = trend(for: recentVsOlder(values: wakeWindows))
-        let napTrend = trend(for: recentVsOlder(values: napDurations))
-
-        let wow = weekOverWeekChange(dayNaps: dayNaps, breaks: breaks, now: now)
-        let quality = dataQuality(sampleSize: sampleSize)
-
-        return BabyPattern(
-            averageWakeWindowMinutes:       avgWakeWindow,
-            bestFirstNapHour:               bestHour,
-            bestNapExtraMinutes:            bestExtra,
-            averageNapDurationMinutes:      avgNapDuration,
-            napCountPerDay:                 napCount,
-            averageNightSleepMinutes:       avgNight,
-            estimatedBedtimeShiftMinutes:   bedtimeShift,
-            wakingWindowTrend:              wwTrend,
-            napDurationTrend:               napTrend,
-            sampleSize:                     sampleSize,
-            dataQuality:                    quality,
-            weekOverWeekNapChange:          wow
-        )
+        // The individual samples describe recorded sessions. They do not measure
+        // the child's complete day or establish a reliable personal trend.
+        return BabyPattern(averageWakeWindowMinutes: median(wakeWindows), bestFirstNapHour: nil,
+            bestNapExtraMinutes: nil, averageNapDurationMinutes: average(naps.map(\.minutes)), napCountPerDay: nil,
+            averageNightSleepMinutes: average(nights.map(\.minutes)), estimatedBedtimeShiftMinutes: nil,
+            wakingWindowTrend: .insufficient, napDurationTrend: .insufficient, sampleSize: days.count,
+            dataQuality: .poor, weekOverWeekNapChange: nil)
     }
 
-    // MARK: - Data Quality
-
-    private func dataQuality(sampleSize: Int) -> DataQuality {
-        switch sampleSize {
-        case 0...3:  return .poor
-        case 4...7:  return .fair
-        case 8...13: return .good
-        default:      return .excellent
+    private func extractWakeWindows(naps: [SleepRecord], wakeRecords: [DailyWakeRecord], accounting: SleepAccounting) -> [Int] {
+        naps.compactMap { nap in
+            let wake = DailyWakeRecord.uniqueObservation(in: wakeRecords, on: nap.date, at: nap.date, calendar: calendar)?.wakeTime
+            let previousEnd = accounting.records.compactMap { record -> Date? in
+                guard record.kind == .dayNap, record.date < nap.date,
+                      let end = record.completedEnd(at: nap.date), calendar.isDate(end, inSameDayAs: nap.date) else { return nil }
+                return end
+            }.max()
+            guard let anchor = [wake, previousEnd].compactMap({ $0 }).max(),
+                  let gap = accounting.recordedAwakeMinutes(from: anchor, until: nap.date),
+                  (30...600).contains(gap) else { return nil }
+            return gap
         }
     }
-
-    // MARK: - Wake Windows
-
-    private func extractWakeWindows(
-        dayNaps: [SleepRecord],
-        wakeRecords: [DailyWakeRecord]
-    ) -> [Int] {
-        var windows: [Int] = []
-
-        for nap in dayNaps {
-            let dayStart = calendar.startOfDay(for: nap.date)
-
-            let previousNap = dayNaps.last {
-                $0.date < nap.date &&
-                calendar.isDate($0.date, inSameDayAs: nap.date)
-            }
-
-            let anchor: Date?
-            if let prev = previousNap {
-                anchor = prev.observedEnd
-            } else {
-                anchor = wakeRecords.first {
-                    calendar.isDate($0.day, inSameDayAs: dayStart) &&
-                    $0.wakeTime <= nap.date
-                }?.wakeTime
-            }
-
-            guard let anchor else { continue }
-            let minutes = Int(nap.date.timeIntervalSince(anchor) / 60)
-            if (30...600).contains(minutes) {
-                windows.append(minutes)
-            }
-        }
-        return windows
-    }
-
-    // MARK: - Best Nap Hour
-
-    private func bestNapHour(
-        dayNaps: [SleepRecord],
-        breaks: [SleepRecord],
-        overall: Int?
-    ) -> (hour: Int?, extraMinutes: Int?) {
-        guard !dayNaps.isEmpty else { return (nil, nil) }
-
-        let byHour = Dictionary(grouping: dayNaps) {
-            calendar.component(.hour, from: $0.date)
-        }
-        let hourAverages = byHour.mapValues { naps -> Int in
-            let durations = naps.map { $0.totalMinutes(breaks: breaks, at: $0.observedEnd ?? $0.date) }
-            return durations.reduce(0, +) / max(durations.count, 1)
-        }
-        guard let best = hourAverages.max(by: { $0.value < $1.value }) else {
-            return (nil, nil)
-        }
-        let extra = overall.map { max(0, best.value - $0) }
-        return (best.key, extra)
-    }
-
-    // MARK: - Average Nap Count
-
-    private func averageNapCount(dayNaps: [SleepRecord]) -> Double? {
-        guard !dayNaps.isEmpty else { return nil }
-        let byDay = Dictionary(grouping: dayNaps) {
-            calendar.startOfDay(for: $0.date)
-        }
-        let total = byDay.values.map { $0.count }.reduce(0, +)
-        return Double(total) / Double(byDay.count)
-    }
-
-    // MARK: - Bedtime Shift
-
-    private func estimateBedtimeShift(
-        dayNaps: [SleepRecord],
-        nights: [SleepRecord],
-        breaks: [SleepRecord],
-        overallAvgNap: Int?
-    ) -> Int? {
-        guard let avgNap = overallAvgNap, !nights.isEmpty else { return nil }
-
-        var longDayBedtimes: [Int] = []
-        var normalDayBedtimes: [Int] = []
-
-        for night in nights {
-            let napsThisDay = dayNaps.filter {
-                calendar.isDate($0.date, inSameDayAs: night.date)
-            }
-            guard !napsThisDay.isEmpty else { continue }
-
-            let totalDaySleep = SleepAccounting.netMinutes(records: napsThisDay + breaks,
-                now: night.observedEnd ?? night.date)
-
-            let bedtimeMinute =
-                calendar.component(.hour,   from: night.date) * 60 +
-                calendar.component(.minute, from: night.date)
-
-            if totalDaySleep > avgNap + 30 {
-                longDayBedtimes.append(bedtimeMinute)
-            } else {
-                normalDayBedtimes.append(bedtimeMinute)
-            }
-        }
-
-        guard let longAvg   = average(longDayBedtimes),
-              let normalAvg = average(normalDayBedtimes)
-        else { return nil }
-
-        return max(0, longAvg - normalAvg)
-    }
-
-    // MARK: - Week Over Week
-
-    private func weekOverWeekChange(
-        dayNaps: [SleepRecord],
-        breaks: [SleepRecord],
-        now: Date
-    ) -> Int? {
-        guard let thisStart = calendar.date(byAdding: .day, value: -7,  to: now),
-              let lastStart = calendar.date(byAdding: .day, value: -14, to: now)
-        else { return nil }
-
-        let thisWeek = dayNaps
-            .filter { $0.date >= thisStart && $0.date < now }
-            .map { $0.totalMinutes(breaks: breaks, at: $0.observedEnd ?? $0.date) }
-
-        let lastWeek = dayNaps
-            .filter { $0.date >= lastStart && $0.date < thisStart }
-            .map { $0.totalMinutes(breaks: breaks, at: $0.observedEnd ?? $0.date) }
-
-        guard let thisAvg = average(thisWeek),
-              let lastAvg = average(lastWeek)
-        else { return nil }
-
-        return thisAvg - lastAvg
-    }
-
-    // MARK: - Trend
-
-    private func recentVsOlder(values: [Int]) -> Double? {
-        guard values.count >= 4 else { return nil }
-        let half   = values.count / 2
-        let older  = Array(values.prefix(half))
-        let recent = Array(values.suffix(half))
-        guard let oldAvg = average(older),
-              let newAvg = average(recent)
-        else { return nil }
-        return Double(newAvg - oldAvg)
-    }
-
-    private func trend(for delta: Double?) -> Trend {
-        guard let delta else { return .insufficient }
-        if delta >  10 { return .increasing }
-        if delta < -10 { return .decreasing }
-        return .stable
-    }
-
- 
-
-    // MARK: - Tracked Day Count
-
-    private func trackedDayCount(
-        records: [SleepRecord],
-        wakeRecords: [DailyWakeRecord]
-    ) -> Int {
-        let sleepDays = records.map { calendar.startOfDay(for: $0.date) }
-        let wakeDays  = wakeRecords.map { calendar.startOfDay(for: $0.day) }
-        return Set(sleepDays + wakeDays).count
-    }
-
-    // MARK: - Math Helpers
 
     private func median(_ values: [Int]) -> Int? {
         guard !values.isEmpty else { return nil }
         let sorted = values.sorted()
-        let mid    = sorted.count / 2
-        return sorted.count.isMultiple(of: 2)
-            ? (sorted[mid - 1] + sorted[mid]) / 2
-            : sorted[mid]
+        let mid = sorted.count / 2
+        return sorted.count.isMultiple(of: 2) ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid]
     }
 
     private func average(_ values: [Int]) -> Int? {

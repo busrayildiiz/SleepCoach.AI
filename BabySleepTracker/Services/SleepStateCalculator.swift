@@ -218,22 +218,30 @@ enum SleepPlanningSource: String, Equatable {
 enum SleepPlanningUnavailable: String, Equatable {
     case missing = "Missing observations"
     case unresolved = "Sleep end unconfirmed"
+    case unresolvedBreak = "Awake break end unconfirmed"
     case conflict = "Conflicting observations"
     case incomplete = "Incomplete sleep totals"
 }
 
 enum SleepPlanningValue<Value> {
-    case available(Value, source: SleepPlanningSource)
+    case available(Value, source: SleepPlanningSource, limitation: SleepPlanningUnavailable? = nil)
     case unavailable(SleepPlanningUnavailable)
 
     var value: Value? {
-        guard case .available(let value, _) = self else { return nil }
+        guard case .available(let value, _, _) = self else { return nil }
         return value
     }
 
     var source: SleepPlanningSource? {
-        guard case .available(_, let source) = self else { return nil }
+        guard case .available(_, let source, _) = self else { return nil }
         return source
+    }
+
+    var limitation: SleepPlanningUnavailable? {
+        switch self {
+        case .available(_, _, let reason): return reason
+        case .unavailable(let reason): return reason
+        }
     }
 }
 
@@ -292,12 +300,12 @@ extension SleepStateCalculator {
         let routine = evaluation.routine
         let ordered = records.filter { $0.kind != .break && $0.date.timeIntervalSinceReferenceDate.isFinite && $0.date <= now }
             .sorted { ($0.date, $0.id.uuidString) > ($1.date, $1.id.uuidString) }
-        let open = ordered.filter(\.isOngoing)
-        let dayWakes = wakes.filter { calendar.isDate($0.day, inSameDayAs: now) }
-        let validWakes = dayWakes.filter {
-            $0.wakeTime.timeIntervalSinceReferenceDate.isFinite && $0.wakeTime <= now &&
-                calendar.isDate($0.wakeTime, inSameDayAs: now)
+        let unresolved = ordered.filter { $0.needsEndReview(at: now) }
+        let open = unresolved.filter(\.isOngoing)
+        let dayWakes = wakes.filter {
+            $0.day.timeIntervalSinceReferenceDate.isFinite && calendar.isDate($0.day, inSameDayAs: now)
         }
+        let validWakes = dayWakes.filter { $0.isObserved(on: now, at: now, calendar: calendar) }
         let wake = dayWakes.count == 1 ? validWakes.first : nil
         let completed = ordered.compactMap { record -> (SleepRecord, Date)? in
             guard let end = record.completedEnd(at: now), calendar.isDate(end, inSameDayAs: now) else { return nil }
@@ -329,13 +337,13 @@ extension SleepStateCalculator {
             return boundary(record).map { record.kind == .nightSleep ? min($0, expires) : expires } ?? expires
         }
 
-        let latestOpen = open.first
+        let latestUnresolved = unresolved.first
         let confirmedOpen = fresh.flatMap { confirmation in open.first { $0.id == confirmation.version.id } }
         let activeCandidate = confirmedOpen.flatMap { record in
-            latestOpen.map { $0.date > (fresh?.date ?? record.date) } == true ? nil : record
-        } ?? latestOpen
+            latestUnresolved.map { $0.date > (fresh?.date ?? record.date) } == true ? nil : record
+        } ?? latestUnresolved.flatMap { $0.isOngoing ? $0 : nil }
         let confirmedAt = activeCandidate.flatMap { fresh?.version.id == $0.id ? fresh?.date : nil }
-        let sleepEvent = confirmedAt ?? activeCandidate?.date
+        let sleepEvent = confirmedAt ?? latestUnresolved?.date
         let conflictTime = dayWakes.count > 1 ? validWakes.map(\.wakeTime).max() ?? now : nil
         let overlappingEnds = completed.enumerated().compactMap { index, first -> Date? in
             completed.dropFirst(index + 1).compactMap { second -> Date? in
@@ -347,8 +355,8 @@ extension SleepStateCalculator {
         let wakeConflictEnd = wake.flatMap { wake in
             completed.filter { record, end in record.date < wake.wakeTime && wake.wakeTime < end }.map { $0.1 }.max()
         }
-        let simultaneousStarts = latestOpen.flatMap { latest in
-            open.dropFirst().first(where: { $0.date == latest.date })?.date
+        let simultaneousStarts = latestUnresolved.flatMap { latest in
+            unresolved.dropFirst().first(where: { $0.date == latest.date })?.date
         }
         let conflict = [conflictTime, overlappingEnds, wakeConflictEnd, simultaneousStarts].compactMap { $0 }.max()
         let equalAndIncompatible: Bool
@@ -364,22 +372,23 @@ extension SleepStateCalculator {
             state = .conflicting
         } else if let activeCandidate, let sleepEvent, observed.map({ $0.date > sleepEvent }) != true,
                   confirmedAt != nil || now < deadline(activeCandidate) {
-            let interrupted = observed.map { $0.date > activeCandidate.date } == true
+            let interrupted = observed.map { $0.date > activeCandidate.date } == true ||
+                unresolved.contains { $0.date > activeCandidate.date }
             let elapsed = now < deadline(activeCandidate) && !interrupted
                 ? Int(now.timeIntervalSince(activeCandidate.date) / 60) : nil
             state = .active(activeCandidate, confirmation: confirmedAt, elapsed: elapsed)
-        } else if let observed, latestOpen.map({ $0.date >= observed.date }) != true,
+        } else if let observed, latestUnresolved.map({ $0.date >= observed.date }) != true,
                   confirmation.map({ $0.date >= observed.date }) != true {
             state = .observed(observed)
         } else {
-            state = open.isEmpty ? .missing : .unconfirmed
+            state = unresolved.isEmpty ? .missing : .unconfirmed
         }
 
         let activeID: UUID?
         if case .active(let record, _, _) = state { activeID = record.id } else { activeID = nil }
-        let unresolved = open.filter { $0.id != activeID }
         let reminder = open.first { record in
             guard record.kind == .nightSleep, let boundary = boundary(record),
+                  latestUnresolved?.id == record.id,
                   observed.map({ $0.date >= record.date }) != true,
                   conflict == nil, activeID == nil,
                   routine?.morningContains(now, boundary: boundary, calendar: calendar) == true else { return false }
@@ -388,8 +397,8 @@ extension SleepStateCalculator {
         let routineMorning = routine?.wake(on: now, calendar: calendar).flatMap { routine?.graceBoundary(for: $0) }
             .map { routine?.morningContains(now, boundary: $0, calendar: calendar) == true } ?? false
         return .init(state: state, recordedWake: wake, latestWake: latestWake,
-                     unresolvedRecords: unresolved, reminderNight: reminder,
-                     morningReminder: reminder != nil || (open.isEmpty && observed == nil && conflict == nil && routineMorning))
+                     unresolvedRecords: unresolved.filter { $0.id != activeID }, reminderNight: reminder,
+                     morningReminder: reminder != nil || (unresolved.isEmpty && observed == nil && conflict == nil && routineMorning))
     }
 }
 

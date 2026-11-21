@@ -41,7 +41,7 @@ struct SleepListView: View {
         case addBreak(parentID: UUID)
         case endSleep(parent: SleepRecord, review: Bool = false)
         case dayDetail(SelectedDay)
-        case wakeTime(associatedNight: SleepRecord? = nil)
+        case wakeTime(association: AssociatedHomeWake? = nil)
 
         var isRecording: Bool {
             switch self {
@@ -62,8 +62,8 @@ struct SleepListView: View {
                 return "endSleep-\(parent.id)"
             case .dayDetail(let day):
                 return "dayDetail-\(day.id)"
-            case .wakeTime(let night):
-                return "wakeTime-\(night?.id.uuidString ?? "independent")"
+            case .wakeTime(let association):
+                return "wakeTime-\(association?.night.id.uuidString ?? "independent")"
             }
         }
     }
@@ -173,10 +173,7 @@ struct SleepListView: View {
     private var todayWakeRecord: DailyWakeRecord? {
         let now = Date()
         let calendar = Calendar.current
-        let candidates = wakeRecords.filter { calendar.isDate($0.day, inSameDayAs: now) }
-        guard candidates.count == 1, let record = candidates.first,
-              calendar.isDate(record.wakeTime, inSameDayAs: now), record.wakeTime <= now else { return nil }
-        return record
+        return DailyWakeRecord.uniqueObservation(in: wakeRecords, on: now, at: now, calendar: calendar)
     }
 
     private var hasPassedTypicalWakeTime: Bool {
@@ -280,19 +277,26 @@ struct SleepListView: View {
     }
     private var wakeWindowBeforeLatest: Int? {
         let now = Date()
-        guard let firstNap = todaySleeps.filter({ $0.kind == .dayNap && $0.completedEnd(at: now) != nil })
+        let calendar = Calendar.current
+        let accounting = SleepAccounting(records: records, now: now, calendar: calendar)
+        let sleeps = accounting.records(on: now)
+        guard let firstNap = sleeps.filter({ $0.kind == .dayNap && $0.completedEnd(at: now) != nil })
             .min(by: { $0.date < $1.date }) else { return nil }
-        let earlierEnd = todaySleeps.compactMap { $0.completedEnd(at: now) }.filter { $0 <= firstNap.date }.max()
-        let wake = todayWakeRecord?.wakeTime
+        let earlierEnd = records.filter { $0.kind != .break }.compactMap { $0.completedEnd(at: now) }
+            .filter { $0 <= firstNap.date && calendar.isDate($0, inSameDayAs: firstNap.date) }.max()
+        let wake = DailyWakeRecord.uniqueObservation(in: wakeRecords, on: now, at: now, calendar: calendar)?.wakeTime
         guard let anchor = [earlierEnd, wake].compactMap({ $0 }).filter({ $0 <= firstNap.date }).max() else { return nil }
-        return Int(firstNap.date.timeIntervalSince(anchor) / 60)
+        return accounting.recordedAwakeMinutes(from: anchor, until: firstNap.date)
     }
 
     private var insightText: String {
-        if let llm = orchestrator.llmResponse?.coachMessage, !llm.isEmpty { return llm }
-        if orchestrator.isLLMLoading { return "Analyzing \(babyName)'s sleep patterns..." }
+        if orchestrator.snapshot?.hasCurrentSleep == true {
+            return "Record the observed end when your baby wakes."
+        }
+        if let llm = orchestrator.currentCoaching?.coachMessage, !llm.isEmpty { return llm }
+        if orchestrator.isLLMLoading { return "Reviewing \(babyName)'s recorded sleep…" }
         return orchestrator.snapshot?.insights.coachTip
-            ?? "Start with one sleep session and your baby's wake window will become easier to predict."
+            ?? "Record an actual wake or sleep end to use it as a planning reference."
     }
 
     // MARK: - Expected Nap Slots Helper
@@ -465,11 +469,11 @@ struct SleepListView: View {
     // personalized (14+ tracked days), predictions are already real and
     // this strip has nothing meaningful left to communicate.
     private var shouldShowRhythmLearningStrip: Bool {
-        orchestrator.snapshot?.phase != .personalized
+        orchestrator.snapshot != nil
     }
 
     private var rhythmLearningDays: Int {
-        orchestrator.snapshot.map { max(0, 14 - $0.readiness.daysUntilPersonalized) } ?? 0
+        orchestrator.snapshot?.dataQualityReport.trackedDays ?? 0
     }
 
     private var rhythmLearningProgress: Double {
@@ -477,29 +481,11 @@ struct SleepListView: View {
     }
 
     private var rhythmQualityLabel: String {
-        guard let report = orchestrator.snapshot?.dataQualityReport else { return "Collecting data" }
-        switch report.score {
-        case 90...100: return "Excellent data quality"
-        case 70..<90:  return "Good data quality"
-        case 50..<70:  return "Data quality building"
-        default:       return "Needs more logs"
-        }
+        "Last 14 days"
     }
 
     private var rhythmLearningHint: String {
-        guard let report = orchestrator.snapshot?.dataQualityReport else {
-            return "Log wake time and naps today"
-        }
-        if report.timelinessScore < 70 {
-            return "Log closer to sleep times"
-        }
-        if report.completeDays < min(7, max(1, report.trackedDays)) {
-            return "Complete today's wake and nap logs"
-        }
-        if rhythmLearningDays >= 14 {
-            return "Personalized predictions active"
-        }
-        return "\(14 - rhythmLearningDays) days until stronger personalization"
+        "Recording coverage is unconfirmed"
     }
 
     private var rhythmLearningStrip: some View {
@@ -537,7 +523,7 @@ struct SleepListView: View {
 
             VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 6) {
-                    Text("Learning your baby's rhythm...")
+                    Text("Days with records")
                         .font(.system(size: 12, weight: .bold))
                         .foregroundStyle(Color(.label))
                         .lineLimit(1)
@@ -663,7 +649,7 @@ struct SleepListView: View {
                 summaryCell(
                     icon: "waveform.path",
                     iconColor: Color(red: 1.0, green: 0.68, blue: 0.24),
-                    title: "Rhythm",
+                    title: "Recorded awake gaps",
                     value: rhythm.map(TimeFormat.minutes) ?? "Unavailable",
                     badge: rhythm == nil ? "Needs records" : "From records",
                     badgeColor: Color(.secondaryLabel)
@@ -913,11 +899,19 @@ struct SleepListView: View {
                         activeSheet = .endSleep(parent: record, review: model.elapsedMinutes == nil)
                     }
                 },
-                reviewEnd: { activeSheet = .endSleep(parent: $0, review: true) },
+                reviewEnd: { record in
+                    activeSheet = record.isOngoing ? .endSleep(parent: record, review: true)
+                        : .addSleep(editing: record, defaultDate: record.date)
+                },
                 addBreak: { if model.canAddBreak, let record = model.record { activeSheet = .addBreak(parentID: record.id) } },
                 viewDetails: { activeSheet = .dayDetail(SelectedDay(day: model.sleepDay ?? context.date)) },
                 viewPlan: { heroShowsPlan = true },
-                confirmWake: { activeSheet = .wakeTime(associatedNight: model.assessment.reminderNight) })
+                confirmWake: {
+                    let association = model.assessment.reminderNight.map {
+                        AssociatedHomeWake(night: $0, morning: model.routineWake ?? model.now, calendar: model.calendar)
+                    }
+                    activeSheet = .wakeTime(association: association)
+                })
         }
     }
 
@@ -934,8 +928,6 @@ struct SleepListView: View {
         if HeroUITestFixture.enabled { return HeroUITestFixture.model(records: records, wakes: wakeRecords, confirmation: sleepConfirmation) }
         if HomeCardTestFixture.enabled { return HeroUITestFixture.legacyModel(records: records, wakes: wakeRecords) }
         #endif
-        let defaults = UserDefaults.standard
-        let routine = TodaySleepHeroModel.Routine.load(defaults: defaults)
         // No verified eligibility provider exists. Do not feed the legacy counter,
         // DQS or LLM text into this prediction display contract.
         return TodaySleepHeroModel.make(records: records, wakeRecords: wakeRecords,
@@ -976,9 +968,11 @@ struct SleepListView: View {
 
     private var todayWakeSection: some View {
         TimelineView(.periodic(from: .now, by: 60)) { context in
-            if HomeWakeCardState(records: wakeRecords).isVisible(now: context.date, calendar: .current) {
+            let calendar = Calendar.current
+            if HomeWakeCardState(records: wakeRecords).isVisible(now: context.date, calendar: calendar) {
                 HomeWakeTimeCard { activeSheet = .wakeTime() }
-            } else if let wakeTime = todayWakeRecord?.wakeTime {
+            } else if let wakeTime = DailyWakeRecord.uniqueObservation(in: wakeRecords, on: context.date,
+                at: context.date, calendar: calendar)?.wakeTime {
                 WakeUpCard(time: wakeTime)
             }
         }
@@ -1444,7 +1438,7 @@ struct SleepListView: View {
 
     private var defaultWakeTimeWarningBanner: some View {
         Button {
-            activeSheet = .wakeTime
+            activeSheet = .wakeTime()
         } label: {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: "exclamationmark.triangle.fill")
@@ -1531,7 +1525,7 @@ struct SleepListView: View {
                                 Capsule()
                                     .fill(Color(red: 0.55, green: 0.45, blue: 0.98).opacity(0.10))
                             )
-                        } else if orchestrator.llmResponse != nil {
+                        } else if orchestrator.currentCoaching != nil {
                             // AI yanıtı var
                             HStack(spacing: 3) {
                                 Image(systemName: "sparkles")
@@ -1604,11 +1598,22 @@ struct SleepListView: View {
                     .foregroundStyle(Color(red: 0.55, green: 0.45, blue: 0.98).opacity(0.25))
                     .offset(y: -2)
 
-                Text(insightText)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(Color(.label).opacity(0.82))
-                    .lineSpacing(4)
-                    .fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(insightText)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(Color(.label).opacity(0.82))
+                        .lineSpacing(4)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let snapshot = orchestrator.snapshot, !snapshot.hasCurrentSleep {
+                        let bedtime = snapshot.nextSleepKind == .bedtime
+                        let source = bedtime ? snapshot.night.source : snapshot.daytime.source
+                        let limitation = bedtime ? snapshot.night.recommendation.limitation : snapshot.daytime.recommendation.limitation
+                        Text([source.rawValue, limitation?.rawValue].compactMap { $0 }.joined(separator: " · "))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
             }
             .padding(.horizontal, 16)
             .padding(.top, 12)

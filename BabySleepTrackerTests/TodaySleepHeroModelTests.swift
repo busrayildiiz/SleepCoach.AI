@@ -267,20 +267,37 @@ final class TodaySleepHeroModelTests: XCTestCase {
         XCTAssertNil(wakes.load())
     }
 
-    func testBedtimeBoundaryReplacesCompletedNapButNotBefore() {
+    func testBedtimeBoundaryUsesRoutineWhenThereIsNoNewerRecordedAnchor() {
         let routine = TodaySleepHeroModel.Routine(wakeHour: 7, bedHour: 19)
         let records = [sleep(16)]
         XCTAssertEqual(model(records, now: 19 - 1.0 / 3600, routine: routine).mode, .napCompleted)
         for hour in [19.0, 20.55, 23.99] {
             let result = model(records, wakes: [wake(7)], now: hour, routine: routine)
-            XCTAssertEqual(result.mode, .bedtimeRoutine)
-            XCTAssertEqual(result.routineBedtime, at(19))
-            XCTAssertEqual(result.title, "Bedtime routine")
-            XCTAssertNil(result.record)
+            XCTAssertEqual(result.mode, .napCompleted)
+            XCTAssertEqual(result.record?.id, records.first?.id)
+            XCTAssertEqual(result.assessment.anchor?.date, at(17))
             XCTAssertNil(result.elapsedMinutes)
-            XCTAssertNil(result.netMinutes)
+            XCTAssertEqual(result.netMinutes, 60)
+            let fallback = model(now: hour, routine: routine)
+            XCTAssertEqual(fallback.mode, .bedtimeRoutine)
+            XCTAssertEqual(fallback.routineBedtime, at(19))
+            XCTAssertNil(fallback.record)
+            XCTAssertNil(fallback.netMinutes)
         }
-        XCTAssertEqual(model(now: 20, routine: routine).mode, .bedtimeRoutine)
+        let before = model(now: 19 - 1.0 / 3600, routine: routine)
+        XCTAssertEqual(before.mode, .morningUnconfirmed)
+        XCTAssertNil(before.routineBedtime)
+    }
+
+    func testCurrentNapHasNoNetDurationAndNoCompletedSubtotal() {
+        let nap = sleep(11, minutes: 0, ongoing: true)
+        let result = model([nap], now: 12)
+        XCTAssertEqual(result.mode, .napActive)
+        XCTAssertEqual(result.elapsedMinutes, 60)
+        XCTAssertNil(result.netMinutes)
+        XCTAssertNil(result.record?.observedEnd)
+        XCTAssertEqual(SleepAccounting(records: [nap], now: at(12), calendar: calendar)
+            .completedSubtotal(on: day, kind: .dayNap), .incomplete(nil, reason: .unresolved))
     }
 
     func testConfirmedOngoingNapAndNightTakePriorityAtBedtime() {
@@ -317,16 +334,19 @@ final class TodaySleepHeroModelTests: XCTestCase {
         let routine = TodaySleepHeroModel.Routine(wakeHour: 7, bedHour: 19)
         let nap = sleep(16)
         let previousNight = sleep(-4, minutes: 660, kind: .nightSleep)
-        XCTAssertEqual(model([nap, previousNight], now: 21, routine: routine).mode, .bedtimeRoutine)
+        XCTAssertEqual(model([nap, previousNight], now: 21, routine: routine).mode, .napCompleted)
         let night = SleepRecord(date: at(18), duration: 120, kind: .nightSleep, createdAt: at(20.5), endDate: at(20))
         let confirmed = model([nap, night], now: 21, routine: routine)
         XCTAssertEqual(confirmed.mode, .morningConfirmed)
         XCTAssertEqual(confirmed.wakeTime, at(20))
         let edited = SleepRecord(id: night.id, date: at(18), duration: 0, kind: .nightSleep, isOngoing: true, createdAt: at(20.5))
         XCTAssertEqual(model([nap, edited], now: 21, routine: routine).mode, .nightActive)
-        XCTAssertEqual(model([nap], now: 21, routine: routine).mode, .bedtimeRoutine)
-        XCTAssertEqual(model([nap, sleep(18, minutes: 0, kind: .nightSleep)], now: 21, routine: routine).mode, .bedtimeRoutine,
-                       "A record with no observed interval is not a confirmed night.")
+        XCTAssertEqual(model([nap], now: 21, routine: routine).mode, .napCompleted)
+        let legacy = sleep(18, minutes: 0, kind: .nightSleep)
+        let unresolved = model([nap, legacy], now: 21, routine: routine)
+        XCTAssertEqual(unresolved.mode, .bedtimeRoutine)
+        XCTAssertEqual(unresolved.reviewRecord?.id, legacy.id)
+        XCTAssertNil(unresolved.assessment.active)
     }
 
     func testLaterConfirmedWakeTakesPriorityOverBedtimeCue() {
@@ -335,9 +355,9 @@ final class TodaySleepHeroModelTests: XCTestCase {
         let result = model(records, wakes: [wake(20)], now: 21, routine: routine)
         XCTAssertEqual(result.mode, .morningConfirmed)
         XCTAssertEqual(result.wakeTime, at(20))
-        XCTAssertEqual(model(records, wakes: [wake(7)], now: 21, routine: routine).mode, .bedtimeRoutine,
-                       "Editing the wake back to morning must remove the later confirmation.")
-        XCTAssertEqual(model(records, now: 21, routine: routine).mode, .bedtimeRoutine)
+        XCTAssertEqual(model(records, wakes: [wake(7)], now: 21, routine: routine).mode, .napCompleted,
+                       "Editing the wake back to morning leaves the newer actual nap end as the anchor.")
+        XCTAssertEqual(model(records, now: 21, routine: routine).mode, .napCompleted)
     }
 
     func testBedtimeCarriesAcrossMidnightAndStopsAtMorningGrace() {
@@ -359,7 +379,8 @@ final class TodaySleepHeroModelTests: XCTestCase {
         let routine = TodaySleepHeroModel.Routine(wakeHour: 7, bedHour: 19)
         XCTAssertEqual(model(records, now: 18, routine: routine).mode, .napCompleted)
         // The existing TimelineView/foreground reload calls the same projection with fresh time.
-        XCTAssertEqual(model(records, now: 20, routine: routine).mode, .bedtimeRoutine)
+        XCTAssertEqual(model(records, now: 20, routine: routine).mode, .napCompleted)
+        XCTAssertEqual(model(now: 20, routine: routine).mode, .bedtimeRoutine)
         XCTAssertEqual(model(records, now: 20, routine: .init(wakeHour: 7, bedHour: 21)).mode, .napCompleted)
         XCTAssertEqual(model(records, now: 20, routine: .init(wakeHour: 7)).mode, .napCompleted)
     }
@@ -387,8 +408,7 @@ final class TodaySleepHeroModelTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
         defer { defaults.removePersistentDomain(forName: name) }
         let persistence = SleepRecordPersistence(defaults: defaults)
-        let nap = sleep(16)
-        XCTAssertTrue(persistence.save([nap]))
+        XCTAssertTrue(persistence.save([]))
         let before = try XCTUnwrap(defaults.data(forKey: "sleepRecords"))
         let routine = TodaySleepHeroModel.Routine(wakeHour: 7, bedHour: 19)
         XCTAssertEqual(model(try XCTUnwrap(persistence.load()), now: 21, routine: routine).mode, .bedtimeRoutine)
@@ -435,9 +455,10 @@ final class TodaySleepHeroModelTests: XCTestCase {
         for kind in [SleepKind.dayNap, .nightSleep] {
             let old = sleep(-4, minutes: 0, kind: kind, ongoing: true)
             let result = model([old, sleep(16)], wakes: [wake(7)], now: 20, routine: routine)
-            XCTAssertEqual(result.mode, .bedtimeRoutine)
-            XCTAssertNil(result.record)
-            XCTAssertNil(result.sleepDay)
+            XCTAssertEqual(result.mode, .napCompleted)
+            XCTAssertEqual(result.record?.observedEnd, at(17))
+            XCTAssertEqual(result.reviewRecord?.id, old.id)
+            XCTAssertEqual(result.sleepDay, day)
             // A new explicit observation still takes priority over the routine cue.
             let confirmation = StillSleepingConfirmation(record: old, date: at(19.5))
             XCTAssertEqual(model([old], wakes: [wake(7)], now: 20, routine: routine,

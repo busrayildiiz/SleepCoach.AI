@@ -170,8 +170,7 @@ final class NightPredictionAgentTests: XCTestCase {
             now: now
         )
 
-        // Observed nap timing is a rule-engine input, not a learned-pattern gate.
-        // Last nap ends at 16:00; 120 daytime minutes leave no deficit adjustment.
+        // The last recorded nap ends at 16:00. The estimate uses the general evening wake window.
 
         XCTAssertEqual(
             result.optimalBedtimeStart,
@@ -185,12 +184,12 @@ final class NightPredictionAgentTests: XCTestCase {
 
         XCTAssertTrue(
             result.reasoning.contains {
-                $0.contains("Last nap ended at")
+                $0.contains("Last recorded nap ended at")
             }
         )
     }
 
-    // MARK: - Personalized Bedtime
+    // MARK: - Recorded Bedtime Estimates
 
     func testUsesLastCompletedNapAfterFourteenTrackedDays() {
 
@@ -237,14 +236,14 @@ final class NightPredictionAgentTests: XCTestCase {
 
         XCTAssertTrue(
             result.reasoning.contains {
-                $0.contains("Last nap ended at")
+                $0.contains("Last recorded nap ended at")
             }
         )
     }
 
     // MARK: - Minimum Nap Count
 
-    func testUsesOneCompletedNapWithoutRequiringExpectedNapCount() {
+    func testUsesOneRecordedNapEndWithoutIncompleteDayDeficitCompensation() {
 
         let onlyNap = makeNap(
             hour: 15,
@@ -262,12 +261,16 @@ final class NightPredictionAgentTests: XCTestCase {
             now: now
         )
 
-        // One observed end is sufficient even though the profile expects two naps.
-        // 16:00 + 210 min - (120 - 60)/3 = 19:10; latest remains 20:00.
+        // The 16:00 recorded end anchors the 210...240 minute age range.
+        XCTAssertEqual(result.recommendation.source, .recordedEstimate)
+        XCTAssertEqual(result.recommendation.limitation, .incomplete)
+        XCTAssertNil(result.daytimeSleepStatus)
+        XCTAssertNil(result.overtiredRiskTime)
+        XCTAssertNil(result.confidence)
 
         XCTAssertEqual(
             result.optimalBedtimeStart,
-            makeDate(hour: 19, minute: 10)
+            makeDate(hour: 19, minute: 30)
         )
 
         XCTAssertEqual(
@@ -277,7 +280,7 @@ final class NightPredictionAgentTests: XCTestCase {
 
         XCTAssertTrue(
             result.reasoning.contains {
-                $0.contains("Last nap ended at")
+                $0.contains("Last recorded nap ended at")
             }
         )
     }
@@ -364,7 +367,7 @@ final class NightPredictionAgentTests: XCTestCase {
 
     // MARK: - Daytime Sleep Status
 
-    func testDaytimeSleepBelowTarget() {
+    func testIncompleteDaytimeSubtotalCannotEstablishADeficit() {
 
         let nap = makeNap(
             hour: 10,
@@ -382,17 +385,13 @@ final class NightPredictionAgentTests: XCTestCase {
             now: now
         )
 
-        // Target = 120...180
-        // Actual = 90
-        // Deficit = 30
-
-        XCTAssertEqual(
-            result.daytimeSleepStatus,
-            .below(deficitMinutes: 30)
-        )
+        XCTAssertNil(result.daytimeSleepStatus)
+        XCTAssertNil(result.overtiredRiskTime)
+        XCTAssertEqual(result.recommendation.source, .recordedEstimate)
+        XCTAssertEqual(result.recommendation.limitation, .incomplete)
     }
 
-    func testDaytimeSleepOnTrack() {
+    func testExpectedNapCountAndMinutesCannotEstablishCoverage() {
 
         let firstNap = makeNap(
             hour: 10,
@@ -416,13 +415,13 @@ final class NightPredictionAgentTests: XCTestCase {
             now: now
         )
 
-        XCTAssertEqual(
-            result.daytimeSleepStatus,
-            .onTrack
-        )
+        XCTAssertNil(result.daytimeSleepStatus)
+        XCTAssertNil(result.overtiredRiskTime)
+        XCTAssertEqual(result.recommendation.source, .recordedEstimate)
+        XCTAssertEqual(result.recommendation.limitation, .incomplete)
     }
 
-    func testDaytimeSleepAboveTarget() {
+    func testIncompleteDaytimeSubtotalCannotEstablishASurplus() {
 
         let firstNap = makeNap(
             hour: 9,
@@ -446,14 +445,10 @@ final class NightPredictionAgentTests: XCTestCase {
             now: now
         )
 
-        // 210 total.
-        // Target max = 180.
-        // Excess = 30.
-
-        XCTAssertEqual(
-            result.daytimeSleepStatus,
-            .above(excessMinutes: 30)
-        )
+        XCTAssertNil(result.daytimeSleepStatus)
+        XCTAssertNil(result.overtiredRiskTime)
+        XCTAssertEqual(result.recommendation.source, .recordedEstimate)
+        XCTAssertEqual(result.recommendation.limitation, .incomplete)
     }
 
     // MARK: - Expected Night Sleep
@@ -493,7 +488,7 @@ final class NightPredictionAgentTests: XCTestCase {
         XCTAssertNil(result.confidence)
     }
 
-    func testConfidenceIncreasesWithTrackedDays() {
+    func testRecordedNapAndTrackedDaysDoNotEstablishConfidence() {
 
         let result = agent.predictBedtime(
             pattern: nil,
@@ -504,15 +499,12 @@ final class NightPredictionAgentTests: XCTestCase {
             now: now
         )
 
-        // 40 + (7 * 2) + 10 for a recorded nap end = 64
-
-        XCTAssertEqual(
-            result.confidence,
-            64
-        )
+        XCTAssertNil(result.confidence)
+        XCTAssertEqual(result.recommendation.source, .recordedEstimate)
+        XCTAssertEqual(result.recommendation.limitation, .incomplete)
     }
 
-    func testConfidenceIncludesLastNap() {
+    func testMultipleNapEndsDoNotEstablishConfidence() {
 
         let firstNap = makeNap(
             hour: 10,
@@ -536,14 +528,9 @@ final class NightPredictionAgentTests: XCTestCase {
             now: now
         )
 
-        // Base = 68
-        // Last nap = +10
-        // Total = 78
-
-        XCTAssertEqual(
-            result.confidence,
-            78
-        )
+        XCTAssertNil(result.confidence)
+        XCTAssertEqual(result.recommendation.source, .recordedEstimate)
+        XCTAssertEqual(result.recommendation.limitation, .incomplete)
     }
 
     // MARK: - Last Nap Cutoff
@@ -603,7 +590,7 @@ final class NightPredictionAgentTests: XCTestCase {
         )
     }
 
-    func testReasoningMentionsLastNapAfterPersonalizationStarts() {
+    func testReasoningAfterFourteenTrackedDaysDescribesRecordedNapEnd() {
 
         let firstNap = makeNap(
             hour: 10,
@@ -629,7 +616,7 @@ final class NightPredictionAgentTests: XCTestCase {
 
         XCTAssertTrue(
             result.reasoning.contains {
-                $0.contains("Last nap ended at")
+                $0.contains("Last recorded nap ended at")
             }
         )
     }

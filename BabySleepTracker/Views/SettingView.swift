@@ -37,32 +37,25 @@ struct SettingsView: View {
         records.filter { $0.kind != .break }
     }
 
-    private func avgDailyNap(_ accounting: SleepAccounting) -> Int? {
-        let subtotals = (0..<7).compactMap { offset -> CompletedRecordedSubtotal? in
+    private func avgDailyNap(_ accounting: SleepAccounting) -> (minutes: Int, days: Int)? {
+        let minutes = (0..<7).compactMap { offset -> Int? in
             guard let day = accounting.calendar.date(byAdding: .day, value: -offset, to: accounting.now) else { return nil }
             let subtotal = accounting.completedSubtotal(on: day, kind: .dayNap)
-            if case .incomplete(nil, reason: .missing) = subtotal { return nil }
-            return subtotal
+            if case .incomplete(let minutes, reason: .incomplete) = subtotal { return minutes }
+            return subtotal.comparableMinutes
         }
-        let minutes = subtotals.compactMap(\.comparableMinutes)
-        guard !minutes.isEmpty, minutes.count == subtotals.count else { return nil }
-        return minutes.reduce(0, +) / minutes.count
+        guard !minutes.isEmpty else { return nil }
+        return (minutes.reduce(0, +) / minutes.count, minutes.count)
     }
 
-    private var consistencyLabel: String {
+    private func recordingFrequency(_ accounting: SleepAccounting) -> String {
         let days = (0..<7).compactMap {
-            Calendar.current.date(byAdding: .day, value: -$0, to: Date())
+            accounting.calendar.date(byAdding: .day, value: -$0, to: accounting.now)
         }
         let active = days.filter { day in
-            napsOnly.contains { Calendar.current.isDate($0.date, inSameDayAs: day) }
+            napsOnly.contains { $0.date <= accounting.now && accounting.calendar.isDate($0.date, inSameDayAs: day) }
         }.count
-        let pct = Double(active) / 7.0
-        switch pct {
-        case 0.86...: return "Excellent"
-        case 0.57...: return "Good"
-        case 0.29...: return "Fair"
-        default:      return "Low"
-        }
+        return "\(active) of 7 days"
     }
 
     private func weekVsLastWeek(_ accounting: SleepAccounting) -> Int? {
@@ -104,7 +97,7 @@ struct SettingsView: View {
                     headerSection
                     profileCard
                     sleepInsightCard(change: weekVsLastWeek(accounting))
-                    atAGlanceCard(averageNap: avgDailyNap(accounting))
+                    atAGlanceCard(averageNap: avgDailyNap(accounting), frequency: recordingFrequency(accounting))
                     napRemindersSection
                     babyProfileSection
                     preferencesAndQuickActions
@@ -250,7 +243,7 @@ struct SettingsView: View {
                 Text(change.map { change in
                     if change == 0 { return "Recorded sleep was the same across the last two weeks." }
                     return "Recorded sleep was \(abs(change))% \(change > 0 ? "longer" : "shorter") over the last seven days than the previous seven."
-                } ?? "Complete more sleep records to compare weekly sleep.")
+                } ?? "Weekly comparisons need confirmed recording coverage.")
                     .font(.subheadline)
                     .foregroundStyle(.primary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -262,7 +255,7 @@ struct SettingsView: View {
 
     // MARK: - At a Glance
 
-    private func atAGlanceCard(averageNap: Int?) -> some View {
+    private func atAGlanceCard(averageNap: (minutes: Int, days: Int)?, frequency: String) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("\(babyName) at a Glance")
                 .font(.headline.weight(.semibold))
@@ -276,12 +269,12 @@ struct SettingsView: View {
                            label: "Age", value:  babyAgeText)
                 Divider().frame(height: 44)
                 glanceCell(icon: "moon.fill", iconColor: .indigo,
-                           label: "Avg Daily Nap",
-                           value: averageNap.map(TimeFormat.minutes) ?? "–")
+                           label: "Avg recorded naps",
+                           value: averageNap.map { "\(TimeFormat.minutes($0.minutes)) · \($0.days) d" } ?? "Unknown")
                 Divider().frame(height: 44)
                 glanceCell(icon: "chart.line.uptrend.xyaxis", iconColor: .green,
-                           label: "Consistency",
-                           value: consistencyLabel,
+                           label: "Recording frequency",
+                           value: frequency,
                            valueColor: .green)
             }
             .padding(.bottom, 14)

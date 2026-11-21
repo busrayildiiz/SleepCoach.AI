@@ -60,6 +60,7 @@ struct TodaySleepHeroModel {
     let wakeTime: Date?
     let routineWake: Date?
     let now: Date
+    let calendar: Calendar
     let napNumber: Int?
     let netMinutes: Int?
     let elapsedMinutes: Int?
@@ -109,10 +110,6 @@ struct TodaySleepHeroModel {
             context = active.record
             mode = active.record.kind == .dayNap ? .napActive : .nightActive
             observedWake = nil
-        } else if showsBedtime {
-            context = nil
-            mode = .bedtimeRoutine
-            observedWake = nil
         } else if case .napEnd(let nap, _) = assessment.anchor {
             context = nap
             mode = .napCompleted
@@ -121,6 +118,10 @@ struct TodaySleepHeroModel {
             context = nil
             mode = .morningConfirmed
             observedWake = wake
+        } else if showsBedtime {
+            context = nil
+            mode = .bedtimeRoutine
+            observedWake = nil
         } else if assessment.morningReminder {
             context = assessment.reminderNight
             mode = .morningUnconfirmed
@@ -143,7 +144,7 @@ struct TodaySleepHeroModel {
             sleepDay: context.map { calendar.startOfDay(for: $0.date) }, wakeTime: observedWake,
             routineWake: (assessment.reminderNight ?? assessment.active?.record).flatMap {
                 $0.kind == .nightSleep ? routine?.wake(after: $0.date, calendar: calendar) : nil
-            } ?? routine?.wake(on: now, calendar: calendar), now: now, napNumber: napNumber,
+            } ?? routine?.wake(on: now, calendar: calendar), now: now, calendar: calendar, napNumber: napNumber,
             netMinutes: context.flatMap {
                 $0.isOngoing ? nil : SleepAccounting(records: records, now: now, calendar: calendar).completedMinutes(sleepIDs: [$0.id])
             },
@@ -189,9 +190,11 @@ enum HeroUITestFixture {
         var records: [SleepRecord] = []
         var wakes: [DailyWakeRecord] = []
         switch scenario {
-        case "napActive":
-            records = [SleepRecord(id: parentID, date: now.addingTimeInterval(-4320), duration: 0, isOngoing: true, createdAt: now.addingTimeInterval(-4320))]
-        case "bedtimeBefore", "bedtimeRoutine":
+        case "napActive", "napNetUnknown":
+            let start = scenario == "napNetUnknown" ? max(now.addingTimeInterval(-4320), cal.startOfDay(for: now))
+                : now.addingTimeInterval(-4320)
+            records = [SleepRecord(id: parentID, date: start, duration: 0, isOngoing: true, createdAt: start)]
+        case "bedtimeBefore":
             records = [SleepRecord(id: parentID, date: now.addingTimeInterval(-3 * 3600), duration: 60,
                                    createdAt: now.addingTimeInterval(-3 * 3600))]
         case "napCompleted":
@@ -201,6 +204,8 @@ enum HeroUITestFixture {
         case "staleNight":
             let start = now.addingTimeInterval(-121 * 3600)
             records = [SleepRecord(id: parentID, date: start, duration: 0, kind: .nightSleep, isOngoing: true, createdAt: start)]
+            defaults.set(cal.date(byAdding: .month, value: -9, to: now), forKey: "babyBirthDate")
+            defaults.set(Double(cal.component(.hour, from: now)), forKey: "typicalBedHour")
         case "nightActive", "morningUnconfirmed":
             records = [SleepRecord(id: parentID, date: nightStart, duration: 0, kind: .nightSleep, isOngoing: true, createdAt: nightStart)]
         case "morningConfirmed":

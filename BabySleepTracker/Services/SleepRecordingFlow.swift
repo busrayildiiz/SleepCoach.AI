@@ -41,13 +41,18 @@ struct SleepRecordingDraft {
         isOngoing = false
         end = now
         initialEnd = end
-        completionCalendar = calendar
+        completionCalendar = calendar.map(DaytimeReviewWindow.capture)
         requiresEndConfirmation = requireConfirmation
         if nightCompletionIntent == nil { nightCompletionIntent = ObservationCreationIntent(recordID: UUID()) }
     }
     mutating func confirmObservedEnd(now: Date) {
         guard nightCompletionIntent != nil, !isOngoing, validationMessage(now: now) == nil else { return }
         confirmedEnd = end
+    }
+
+    mutating func applyEndSelection(_ selection: RecordingEndpointSelection) {
+        if selection.hasChanged { confirmedEnd = nil }
+        end = selection.value
     }
 
     var requiresExplicitCancellation: Bool {
@@ -107,7 +112,17 @@ struct SleepRecordingDraft {
     }
 }
 
-enum RecordingEndpointSelection {
+struct RecordingEndpointSelection {
+    private(set) var value: Date
+    private(set) var hasChanged = false
+
+    init(_ value: Date) { self.value = value }
+
+    mutating func select(_ newValue: Date) {
+        if value != newValue { hasChanged = true }
+        value = newValue
+    }
+
     static func combine(day: Date, time: Date, preserving existing: Date, calendar: Calendar) -> Date? {
         let components = calendar.dateComponents([.hour, .minute], from: time)
         guard let hour = components.hour, let minute = components.minute else { return nil }
@@ -201,9 +216,15 @@ struct AwakeBreakDraft {
                                        intent: "parent-entered-awake-break-v1")
     }
 
-    func netMinutes(existing: [SleepRecord], now: Date) -> Int {
-        let candidate = record(existing: existing, now: now).map { [$0] } ?? []
-        return parent.totalMinutes(breaks: existing.filter { $0.id != editing?.id } + candidate, at: now)
+    func netMinutes(existing: [SleepRecord], records: [SleepRecord]? = nil, now: Date, calendar: Calendar = .current) -> Int? {
+        let stored = records ?? ([parent] + existing)
+        let measured: [SleepRecord]
+        if let candidate = record(existing: existing, now: now) {
+            measured = stored.filter { $0.id != candidate.id } + [candidate]
+        } else {
+            measured = stored
+        }
+        return SleepAccounting(records: measured, now: now, calendar: calendar).completedMinutes(sleepIDs: [parent.id])
     }
 }
 
@@ -224,8 +245,18 @@ enum RecordingSheet: Identifiable {
 struct RecordingSubmission {
     private(set) var isSubmitted = false
 
-    /// Shared Home form dispatch. Confirming Still Sleeping remains an ordinary
-    /// recording action and must not enter canonical night completion.
+    /// An unchanged ongoing observation can be reconfirmed without a persistence transaction.
+    static func confirmStillSleeping(_ expected: SleepRecordVersion, now: Date, persistence: SleepRecordPersistence,
+                                     instant: ContinuousClock.Instant = .now) -> Bool {
+        guard let current = persistence.load()?.first(where: { $0.id == expected.id }),
+              current.isOngoing, current.date <= now, expected.matches(current) else { return false }
+        let confirmation = StillSleepingConfirmation(record: current, date: now, instant: instant)
+        NotificationCenter.default.post(name: .sleepStillSleepingConfirmed, object: current.id,
+                                        userInfo: ["confirmedAt": now, "confirmation": confirmation])
+        return true
+    }
+
+    /// Dispatch a deliberate new or edited observation to its recording command.
     static func saveHomeRecord(_ record: SleepRecord, now: Date,
                                onSave: (SleepRecord) -> Bool,
                                onNightCompletion: ((SleepRecord) -> NightSleepCompletionResult)?,

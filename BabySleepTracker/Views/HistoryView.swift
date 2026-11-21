@@ -92,8 +92,7 @@ struct HistoryView: View {
             records.filter { record in
                 guard record.date < timelineWindowEnd, record.date <= calculationDate else { return false }
                 if let end = record.completedEnd(at: calculationDate) { return end > timelineWindowStart }
-                return record.kind != .break && calendar.isDate(record.date, inSameDayAs: selectedDate) &&
-                    record.date >= timelineWindowStart
+                return record.needsEndReview(at: calculationDate) && record.date >= timelineWindowStart
             }
         }
 
@@ -305,6 +304,7 @@ struct HistoryView: View {
                         ForEach(segments) { record in
                             let end = record.completedEnd(at: now)
                             let isUnconfirmed = end == nil
+                            let observation = record.kind == .break ? "Awake break" : "Sleep"
                             let startX = fraction(for: record.date) * geo.size.width
                             let endX = fraction(for: end ?? record.date) * geo.size.width
                             let width = max(6, endX - startX)
@@ -324,7 +324,7 @@ struct HistoryView: View {
                                     )
                             }
                             .buttonStyle(.plain)
-                            .accessibilityLabel(isUnconfirmed ? "Sleep start recorded, end unconfirmed" : "Recorded sleep interval")
+                            .accessibilityLabel(isUnconfirmed ? "\(observation) start recorded, end unconfirmed" : "\(observation) interval recorded")
                             .offset(x: startX)
                         }
 
@@ -407,8 +407,11 @@ struct HistoryView: View {
             record.kind != .break && weekDays.contains { calendar.isDate(record.date, inSameDayAs: $0) }
         }.map(\.id))
         let data = weekChartData.map(\.subtotal)
-        guard data.contains(where: { $0.minutes != nil }) else { return .incomplete(nil, reason: .missing) }
-        let minutes = accounting.completedMinutes(sleepIDs: ids)
+        let intervals = accounting.completedIntervals(sleepIDs: ids)
+        guard data.contains(where: { $0.minutes != nil }) else {
+            return .incomplete(nil, reason: data.compactMap(\.unavailableReason).first { $0 != .missing } ?? .missing)
+        }
+        let minutes = Int(intervals.reduce(0.0) { $0 + $1.duration } / 60)
         return data.contains(where: \.isIncomplete) ? .incomplete(minutes, reason: .incomplete) : .comparable(minutes)
     }
 
@@ -429,9 +432,14 @@ struct HistoryView: View {
     }
 
     private var dayMessage: String {
-        selectedDaySubtotal.isIncomplete
-            ? "Sleep Day is incomplete. Review unconfirmed or conflicting records."
-            : "Sleep Day includes naps and night sleep starting on this day."
+        switch selectedDaySubtotal.unavailableReason {
+        case .missing: return "No sleep is recorded for this Sleep Day."
+        case .incomplete: return "Recorded sleep is available. Full Sleep Day coverage is unconfirmed."
+        case .unresolved: return "Review the sleep record with an unconfirmed end."
+        case .unresolvedBreak: return "Review the awake break with an unconfirmed end."
+        case .conflict: return "Review the conflicting sleep records."
+        case nil: return "Sleep Day includes naps and night sleep starting on this day."
+        }
     }
 
     // MARK: - Body
@@ -484,6 +492,8 @@ struct HistoryView: View {
             .navigationBarHidden(true)
             .onAppear { calculationDate = Date(); loadRecords() }
             .onReceive(nowTimer) { calculationDate = $0 }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.significantTimeChangeNotification)) { _ in calculationDate = Date() }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in calculationDate = Date() }
             .onReceive(NotificationCenter.default.publisher(for: .sleepRecordsDidChange)) { _ in
                 loadRecords()
             }
@@ -492,6 +502,7 @@ struct HistoryView: View {
                     if let parent = records.first(where: { $0.id == record.parentNapID && $0.kind != .break }) {
                         AddBreakView(parent: parent, editingBreak: record,
                                      existingBreaks: records.filter { $0.parentNapID == parent.id && $0.kind == .break },
+                                     records: records,
                                      onSave: upsertRecord)
                     } else {
                         NavigationStack {
@@ -794,7 +805,7 @@ struct HistoryView: View {
             ForEach(selectedDayNaps) { nap in
                 let napBreaks = selectedDayBreaks.filter { $0.parentNapID == nap.id }.sorted { $0.date < $1.date }
                 let napEnd = nap.completedEnd(at: calculationDate)
-                let net = napEnd.map { _ in accounting.completedMinutes(sleepIDs: [nap.id]) }
+                let net = accounting.completedMinutes(sleepIDs: [nap.id])
 
                 VStack(spacing: 0) {
                     // Nap row
@@ -824,7 +835,7 @@ struct HistoryView: View {
                             Text(net.map(TimeFormat.minutes) ?? "–")
                                 .font(.subheadline.weight(.bold))
                                 .foregroundStyle(.indigo)
-                            Text(net == nil ? "Incomplete" : "Net Sleep")
+                            Text(net == nil ? "Net sleep unknown" : "Net Sleep")
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }
@@ -861,7 +872,8 @@ struct HistoryView: View {
                                     HStack(spacing: 8) {
                                         Text(TimeFormat.ampm(br.date))
                                             .monospacedDigit()
-                                        Text("\(br.duration) min")
+                                        Text(br.completedEnd(at: calculationDate)
+                                            .map { TimeFormat.minutes(Int($0.timeIntervalSince(br.date) / 60)) } ?? "End unconfirmed")
                                         Image(systemName: "chevron.right")
                                             .font(.system(size: 9))
                                             .foregroundStyle(.tertiary)
