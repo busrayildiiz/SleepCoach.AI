@@ -306,7 +306,18 @@ final class SecureDataStore: PrivateDataStore {
 /// paired with a non-migrating key. This is not a cloud sync implementation.
 struct ProtectedVaultFile: PrivateVaultFiles {
     let directory: URL?
+    private let fileManager: FileManager
+    private let writeData: (Data, URL, Data.WritingOptions) throws -> Void
     private var url: URL? { directory?.appendingPathComponent("private-data-v1.bin") }
+
+    init(directory: URL?, fileManager: FileManager = .default,
+         writeData: @escaping (Data, URL, Data.WritingOptions) throws -> Void = {
+             try $0.write(to: $1, options: $2)
+         }) {
+        self.directory = directory
+        self.fileManager = fileManager
+        self.writeData = writeData
+    }
 
     func read() throws -> Data? {
         guard let url else { throw SecureStorageFailure.unavailable }
@@ -323,13 +334,13 @@ struct ProtectedVaultFile: PrivateVaultFiles {
         guard let directory, let url else { throw SecureStorageFailure.unavailable }
         #if os(iOS) || os(tvOS) || os(watchOS) || os(visionOS)
         let attributes: [FileAttributeKey: Any] = [.protectionKey: FileProtectionType.complete]
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: attributes)
-        try FileManager.default.setAttributes(attributes, ofItemAtPath: directory.path)
-        try ciphertext.write(to: url, options: [.atomic, .completeFileProtection])
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true, attributes: attributes)
+        try fileManager.setAttributes(attributes, ofItemAtPath: directory.path)
+        try writeData(ciphertext, url, [.atomic, .completeFileProtection])
         #else
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
-                                                attributes: [.posixPermissions: 0o700])
-        try ciphertext.write(to: url, options: .atomic)
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true,
+                                        attributes: [.posixPermissions: 0o700])
+        try writeData(ciphertext, url, .atomic)
         #endif
     }
 

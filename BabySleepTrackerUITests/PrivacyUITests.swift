@@ -2,6 +2,25 @@ import XCTest
 
 @MainActor
 final class PrivacyUITests: XCTestCase {
+    /// CI runs this first so a shared startup crash stops the job before dozens
+    /// of unrelated UI cases each spend time waiting for the same missing app.
+    func testLaunchShowsHome() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchEnvironment["RECORDING_UI_TESTS"] = "1"
+        addTeardownBlock {
+            let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+            screenshot.name = "STARTUP-TEST-ONLY-home"
+            screenshot.lifetime = .keepAlways
+            self.add(screenshot)
+        }
+        app.launch()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 5))
+        XCTAssertTrue(app.buttons["recording.addSleep"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["recording.addSleep"].isHittable)
+        XCTAssertFalse(app.otherElements["protectedDataUnavailable"].exists)
+    }
+
     private func launchFixture() -> XCUIApplication {
         continueAfterFailure = false
         let app = XCUIApplication()
@@ -22,6 +41,25 @@ final class PrivacyUITests: XCTestCase {
         XCTAssertTrue(button.isHittable)
         button.tap()
         XCTAssertTrue(app.buttons["privacy.delete.confirm"].waitForExistence(timeout: 3))
+    }
+
+    func testBackgroundRoundTripRestoresUsablePrivateScreens() {
+        let app = launchFixture()
+        XCUIDevice.shared.press(.home)
+        let backgrounded = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            app.state == .runningBackground || app.state == .runningBackgroundSuspended
+        }, object: app)
+        XCTAssertEqual(XCTWaiter.wait(for: [backgrounded], timeout: 5), .completed)
+        app.activate()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 5))
+        let addSleep = app.buttons["recording.addSleep"]
+        XCTAssertTrue(addSleep.waitForExistence(timeout: 5))
+        XCTAssertTrue(addSleep.isHittable)
+        XCTAssertFalse(app.otherElements["privacy.windowCover"].exists)
+        addSleep.tap()
+        XCTAssertTrue(app.navigationBars["Add Nap"].waitForExistence(timeout: 5))
+        app.buttons["recording.cancel"].tap()
+        XCTAssertTrue(addSleep.waitForExistence(timeout: 5))
     }
 
     func testDataHandlingExplanationIsReachableFromSettings() {

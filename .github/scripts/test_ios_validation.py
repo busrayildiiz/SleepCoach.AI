@@ -76,15 +76,17 @@ class IOSValidationTests(unittest.TestCase):
             PATH=f"{self.runner_temp}{os.pathsep}{os.environ['PATH']}",
         )
 
-    def build_command(self, code, *arguments, timeout=10, grace=0.3):
+    def build_command(self, code, *arguments, timeout=10, grace=0.3, phase=None):
         return [
             sys.executable, SCRIPT, "run", "--timeout-seconds", str(timeout),
-            "--grace-seconds", str(grace), "--", sys.executable, "-c", code, *arguments,
+            "--grace-seconds", str(grace),
+            *(["--phase", phase] if phase else []),
+            "--", sys.executable, "-c", code, *arguments,
         ]
 
-    def run_build(self, code):
+    def run_build(self, code, phase=None):
         return subprocess.run(
-            self.build_command(code), env=self.env, capture_output=True, text=True, timeout=10
+            self.build_command(code, phase=phase), env=self.env, capture_output=True, text=True, timeout=10
         )
 
     def status(self):
@@ -128,9 +130,9 @@ class IOSValidationTests(unittest.TestCase):
         fake.write_text(f"#!{sys.executable}\n{code}")
         fake.chmod(0o755)
 
-    def collect(self):
+    def collect(self, phase=None):
         return subprocess.run(
-            [sys.executable, SCRIPT, "collect"],
+            [sys.executable, SCRIPT, "collect", *(["--phase", phase] if phase else [])],
             env=self.env, capture_output=True, text=True, timeout=10,
         )
 
@@ -150,6 +152,54 @@ class IOSValidationTests(unittest.TestCase):
         self.assertEqual(self.status()["xcodebuild_exit_code"], 65)
         self.assertEqual(self.status()["validation_exit_code"], 65)
         self.assertIn("test failure", (self.runner_temp / "xcodebuild.log").read_text())
+
+    def test_startup_failure_keeps_evidence_without_creating_full_results(self):
+        result = self.run_build('import sys; print("app launch failed"); sys.exit(65)', phase="startup")
+        self.assertEqual(result.returncode, 65, result.stdout + result.stderr)
+        self.assertIn("full / compact / startup", result.stdout)
+        startup_artifacts = self.artifacts / "startup"
+        status = json.loads((startup_artifacts / "validation-status.json").read_text())
+        self.assertEqual(status["validation_exit_code"], 65)
+        self.assertTrue(status["processes_stopped"])
+
+        self.fake_command("xcrun", FAKE_XCRUN)
+        startup_bundle = self.runner_temp / "startup" / "TestResults.xcresult"
+        startup_bundle.mkdir()
+        (startup_bundle / "crash.txt").write_text("launch exception")
+        self.env["FAKE_PASSED_TESTS"] = "0"
+        self.env["FAKE_MISSING_SCREENSHOT"] = "1"
+        evidence = self.collect(phase="startup")
+        self.assertEqual(evidence.returncode, 1, evidence.stdout + evidence.stderr)
+        self.assertEqual((startup_artifacts / "xcodebuild.log").read_text(), "app launch failed\n")
+        with tarfile.open(startup_artifacts / "TestResults.xcresult.tar") as archive:
+            self.assertEqual(archive.extractfile("TestResults.xcresult/crash.txt").read(), b"launch exception")
+        self.assertEqual(json.loads((startup_artifacts / "test-summary.json").read_text())["passedTests"], 0)
+        self.assertFalse((self.artifacts / "validation-status.json").exists())
+        self.assertFalse(self.bundle.exists())
+
+    def test_startup_and_full_validation_keep_independent_results(self):
+        self.fake_command("xcrun", FAKE_XCRUN)
+        self.env["FAKE_PASSED_TESTS"] = "1"
+        self.assertEqual(self.run_build('print("startup passed")', phase="startup").returncode, 0)
+        startup_bundle = self.runner_temp / "startup" / "TestResults.xcresult"
+        startup_bundle.mkdir()
+        (startup_bundle / "test.txt").write_text("startup")
+        self.assertEqual(self.collect(phase="startup").returncode, 0)
+
+        self.assertEqual(self.run_build('print("full suite passed")').returncode, 0)
+        self.bundle.mkdir()
+        (self.bundle / "test.txt").write_text("full")
+        self.env["FAKE_PASSED_TESTS"] = "983"
+        self.assertEqual(self.collect().returncode, 0)
+        for phase, count, contents in [("startup", 1, b"startup"), ("", 983, b"full")]:
+            with self.subTest(phase=phase):
+                artifacts = self.artifacts / phase
+                self.assertEqual(json.loads((artifacts / "test-summary.json").read_text())["passedTests"], count)
+                with tarfile.open(artifacts / "TestResults.xcresult.tar") as archive:
+                    self.assertEqual(archive.extractfile("TestResults.xcresult/test.txt").read(), contents)
+                self.assertTrue((artifacts / "Screenshots" / "hero.png").is_file())
+        self.assertEqual((self.artifacts / "startup" / "xcodebuild.log").read_text(), "startup passed\n")
+        self.assertEqual((self.artifacts / "xcodebuild.log").read_text(), "full suite passed\n")
 
     def test_timeout_waits_for_child_and_fails_even_after_graceful_xcodebuild_exit(self):
         build, ready = self.start_long_build(timeout=2, grace=0.3)

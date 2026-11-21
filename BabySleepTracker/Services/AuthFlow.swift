@@ -25,16 +25,30 @@ struct RootView: View {
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("authComplete") private var authComplete: Bool = false
     @AppStorage("onboardingComplete") private var onboardingComplete: Bool = false
-    @SecureStorage("profileSetupComplete_v1") private var hasLocalProfile = false
     @State private var authState: AuthState = .landing
-    @State private var storageAvailable = SecureDataStore.shared.isAvailable
-    @State private var storageFailure = SecureDataStore.shared.failureMessage
+    @State private var storageStatus = StorageStatus()
+
+    /// Record maintenance and coaching writes publish during initial navigation
+    /// attachment. They must not invalidate the root router through the shared
+    /// SecureStorage observer; only an actual routing change belongs here.
+    private struct StorageStatus: Equatable {
+        let isAvailable: Bool
+        let hasLocalProfile: Bool
+        let failureMessage: String?
+
+        init() {
+            let store = SecureDataStore.shared
+            isAvailable = store.isAvailable
+            hasLocalProfile = store.bool(forKey: "profileSetupComplete_v1")
+            failureMessage = store.failureMessage
+        }
+    }
 
     var body: some View {
         // Keep lifecycle and privacy modifiers on one stable hosting container,
         // rather than forwarding them through the conditional route's children.
         ZStack {
-            if storageAvailable {
+            if storageStatus.isAvailable {
                 routedContent
             } else {
                 protectedDataUnavailable
@@ -76,7 +90,7 @@ struct RootView: View {
 
     @ViewBuilder
     private var routedContent: some View {
-        if hasLocalProfile {
+        if storageStatus.hasLocalProfile {
             ContentView()
         } else {
             switch authState {
@@ -110,7 +124,7 @@ struct RootView: View {
                 .foregroundStyle(.indigo)
             Text("Your data is protected")
                 .font(.title2.weight(.semibold))
-            Text(storageFailure ?? "Unlock your device to open your saved profile and sleep records.")
+            Text(storageStatus.failureMessage ?? "Unlock your device to open your saved profile and sleep records.")
                 .font(.body)
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
@@ -125,8 +139,9 @@ struct RootView: View {
     }
 
     private func refreshStorageStatus() {
-        storageAvailable = SecureDataStore.shared.isAvailable
-        storageFailure = SecureDataStore.shared.failureMessage
+        let current = StorageStatus()
+        guard current != storageStatus else { return }
+        storageStatus = current
     }
 
     private func closePrivateData() {
@@ -147,8 +162,8 @@ struct RootView: View {
     }
 }
 
-/// A scene-level cover also hides presented sheets and full-screen editors from
-/// app-switcher snapshots. A root SwiftUI overlay alone sits below those views.
+/// Cover the existing app window so presented sheets and full-screen editors are
+/// hidden too, without introducing another window/controller during attachment.
 private struct AppPrivacyShield: UIViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -156,8 +171,8 @@ private struct AppPrivacyShield: UIViewRepresentable {
         let view = AnchorView()
         view.isUserInteractionEnabled = false
         view.accessibilityElementsHidden = true
-        view.onSceneChange = { [weak coordinator = context.coordinator] scene in
-            coordinator?.attach(to: scene)
+        view.onWindowChange = { [weak coordinator = context.coordinator] window in
+            coordinator?.attach(to: window)
         }
         return view
     }
@@ -169,73 +184,77 @@ private struct AppPrivacyShield: UIViewRepresentable {
     }
 
     final class AnchorView: UIView {
-        var onSceneChange: ((UIWindowScene?) -> Void)?
+        var onWindowChange: ((UIWindow?) -> Void)?
 
         override func didMoveToWindow() {
             super.didMoveToWindow()
-            onSceneChange?(window?.windowScene)
+            onWindowChange?(window)
         }
     }
 
     @MainActor
     final class Coordinator: NSObject {
-        private weak var scene: UIWindowScene?
-        private var cover: UIWindow?
+        private weak var window: UIWindow?
+        private var cover: UIView?
 
         override init() {
             super.init()
             NotificationCenter.default.addObserver(self, selector: #selector(show),
                 name: UIApplication.willResignActiveNotification, object: nil)
+            NotificationCenter.default.addObserver(self, selector: #selector(show),
+                name: UIApplication.didEnterBackgroundNotification, object: nil)
             NotificationCenter.default.addObserver(self, selector: #selector(hide),
                 name: UIApplication.didBecomeActiveNotification, object: nil)
         }
 
-        func attach(to scene: UIWindowScene?) {
-            guard self.scene !== scene else { return }
+        func attach(to window: UIWindow?) {
+            guard self.window !== window else { return }
             hide()
-            self.scene = scene
-            // didMoveToWindow runs while SwiftUI is attaching its navigation
-            // controllers. Presenting another window inside that traversal can
-            // reenter UIKit's navigation-bar layout before containment is ready.
-            DispatchQueue.main.async { [weak self, weak scene] in
-                guard let self, let scene, self.scene === scene else { return }
-                if scene.activationState != .foregroundActive { self.show() }
-            }
+            self.window = window
+            // Do not create or display UI while UIKit attaches navigation hosts.
+            // RootView covers initial inactive rendering; lifecycle notifications
+            // synchronously cover the whole existing window before snapshots.
         }
 
         @objc private func show() {
-            guard cover == nil, let scene else { return }
-            let controller = UIViewController()
-            controller.view.backgroundColor = .systemBackground
+            guard let window else { return }
+            if let cover {
+                // A modal transition can finish between resigning and background.
+                window.bringSubviewToFront(cover)
+                return
+            }
+            let shield = UIView(frame: window.bounds)
+            shield.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            shield.backgroundColor = .systemBackground
+            shield.isOpaque = true
+            shield.isUserInteractionEnabled = false
+            shield.accessibilityViewIsModal = true
+            shield.isAccessibilityElement = true
+            shield.accessibilityLabel = "SleepCoach"
+            shield.accessibilityIdentifier = "privacy.windowCover"
             let symbol = UIImageView(image: UIImage(systemName: "moon.stars.fill"))
             symbol.tintColor = .systemIndigo
             symbol.contentMode = .scaleAspectFit
             symbol.translatesAutoresizingMaskIntoConstraints = false
-            controller.view.addSubview(symbol)
+            shield.addSubview(symbol)
             NSLayoutConstraint.activate([
-                symbol.centerXAnchor.constraint(equalTo: controller.view.centerXAnchor),
-                symbol.centerYAnchor.constraint(equalTo: controller.view.centerYAnchor),
+                symbol.centerXAnchor.constraint(equalTo: shield.centerXAnchor),
+                symbol.centerYAnchor.constraint(equalTo: shield.centerYAnchor),
                 symbol.widthAnchor.constraint(equalToConstant: 44),
                 symbol.heightAnchor.constraint(equalToConstant: 44)
             ])
-            let window = UIWindow(windowScene: scene)
-            window.windowLevel = UIWindow.Level(rawValue: UIWindow.Level.alert.rawValue + 1)
-            window.rootViewController = controller
-            window.isUserInteractionEnabled = false
-            window.accessibilityViewIsModal = true
-            // Install the guard before UIKit emits any visibility callbacks.
-            cover = window
-            window.isHidden = false
+            cover = shield
+            window.addSubview(shield)
         }
 
         @objc private func hide() {
-            cover?.isHidden = true
+            cover?.removeFromSuperview()
             cover = nil
         }
 
         func stop() {
             hide()
-            scene = nil // Invalidate any deferred initial presentation.
+            window = nil
             NotificationCenter.default.removeObserver(self)
         }
 

@@ -139,6 +139,8 @@ def run_validation(args, runner_temp, artifacts):
     staging_status.write_text(json.dumps(state, indent=2) + "\n")
     staging_status.replace(artifacts / staging_status.name)
     label = f"{os.environ['TIER']} / {os.environ['SIMULATOR_CLASS']}"
+    if args.phase:
+        label += f" / {args.phase}"
     summary = f"{label} build and test: {time.monotonic() - started:.0f} seconds (exit {status})"
     if interruption:
         summary += f"\nValidation interrupted: {interruption} (xcodebuild exit {xcodebuild_exit})"
@@ -227,12 +229,18 @@ def main():
     run = modes.add_parser("run")
     run.add_argument("--timeout-seconds", type=float, required=True)
     run.add_argument("--grace-seconds", type=float, required=True)
+    run.add_argument("--phase", choices=["startup"])
     run.add_argument("command", nargs=argparse.REMAINDER)
-    modes.add_parser("collect")
+    collect = modes.add_parser("collect")
+    collect.add_argument("--phase", choices=["startup"])
     args = parser.parse_args()
     runner_temp = Path(os.environ["RUNNER_TEMP"])
     artifacts = runner_temp / "CIArtifacts"
-    artifacts.mkdir(exist_ok=True)
+    if args.phase:
+        runner_temp /= args.phase
+        artifacts /= args.phase
+        runner_temp.mkdir(exist_ok=True)
+    artifacts.mkdir(parents=True, exist_ok=True)
     if args.mode == "run":
         if args.command in ([], ["--"]):
             run.error("missing xcodebuild command")

@@ -136,21 +136,22 @@ production AI/backend design is established.
 
 ## Validation evidence
 
-The patch adds 62 test methods and removes none. After applying it to merged
-main `4e7595a`, the portable suite was rerun on Swift 6.0.3/Linux. CI routing
-tests were also rerun after registering the new UI suite:
+The initial reviewed patch added 62 test methods and removed none. After
+applying it to merged main `4e7595a`, the portable suite was rerun on Swift
+6.0.3/Linux. Native CI follow-up results and remaining checks are recorded below.
 
 | Check | Result |
 | --- | --- |
-| Current merged-main portable domain/storage/consent suite | 647 passed, 0 failed, 0 skipped; rerun |
-| CI routing, selection and validation-supervisor tests | 20 Python and 3 Node tests passed; rerun |
-| Supplemental orchestration/prediction/privacy suite | Prior 104 passes retained after source-equivalence check; not rerun |
-| Cloud privacy/transport, Release configuration | Prior 18 passes retained after source-equivalence check; not rerun |
+| Merged-main portable domain/storage/consent suite, before native CI follow-ups | 647 passed, 0 failed, 0 skipped |
+| CI routing, selection and validation-supervisor tests | 23 Python and 3 Node tests passed; rerun |
+| Supplemental orchestration/prediction/privacy suite | Prior 104 passes; source equivalence checked on initial application, not rerun |
+| Cloud privacy/transport, Release configuration | Prior 18 passes; source equivalence checked on initial application, not rerun |
 | Swift syntax parsing and Xcode/plist structure checks | Passed; these are not an iOS compilation |
 
-The supplemental evidence was recovered from the reviewed package. All 38
-direct production/test inputs and the extracted generation-coalescer code
-match the prior integration tree. Frozen service hashes also match; the only
+The supplemental evidence was recovered from the reviewed package. At initial
+application, all 38 direct production/test inputs and the extracted
+generation-coalescer code matched the prior integration tree. Frozen service
+hashes also matched; the only
 transport-test difference from its earlier frozen hash is an extra trailing
 newline that was removed. The final PR #34 caption/UI-test fixes do not alter
 this supplemental test scope.
@@ -163,12 +164,36 @@ and a Google SDK transport stub. Linux XCTest lifecycle signatures are adapted
 only in the scratch harness. Counts across these runs overlap and must not be
 added together as a unique-test total.
 
-Native iOS compilation and XCTest/XCUITest have not run in this environment.
-The new `SecureDataStoreNativeTests` cover actual Keychain behavior and iOS file
-protection, and `PrivacyUITests` cover deletion, legacy-route bypass and the
-data-handling explanation. They are added to the Xcode targets but require
-execution on the supported iOS simulators. Physical-device lock/unlock,
-app-switcher privacy and encrypted backup restoration also need native review.
+Native iOS compilation and tests have now run in GitHub Actions; this workspace
+itself remains Linux. The latest completed compact run passed 939 of 940 unit
+test methods, including the real Keychain test. The remaining failure was the
+missing Simulator file-protection metadata described below. All 43 UI tests
+encountered an app-startup crash. The root-view routing filter and same-window
+privacy cover, startup preflight, and revised file-protection tests still
+require native validation.
+`PrivacyUITests` cover deletion, legacy-route bypass and the data-handling
+explanation. Physical-device metadata/lock-unlock checks, app-switcher privacy
+and encrypted backup restoration remain unverified release checks. Prior
+portable results do not replace native validation of these follow-up changes.
+
+### File-protection test boundary
+
+The iOS 18.5 Simulator run returned no `protectionKey` metadata after a protected
+write. This is not treated as proof of protection. Apple documents that this
+attribute's value is an NSString, and its Simulator guidance requires physical
+devices for hardware-specific features. Apple's upstream WebKit tests also
+exclude Simulator when checking `NSFileProtectionKey` semantics.
+
+`testEveryAtomicReplacementRequestsCompleteProtection` runs on Simulator and
+devices: it forwards real filesystem operations while checking Complete
+directory-creation/update attributes, the exact atomic + complete-protection
+write options on every replacement, and the resulting file contents.
+`testEveryAtomicReplacementKeepsCompleteFileProtectionOnDevice` reports an
+explicit skip on Simulator. On physical devices it still requires non-nil,
+Complete protection metadata for both the file and directory after every
+replacement. The real Keychain test remains active on Simulator and devices.
+Passing the Simulator contract test does not establish hardware enforcement;
+physical-device metadata and lock/unlock validation remain release checks.
 
 Before merging the security change, run the full configured iOS CI and CodeQL
 on the final branch based on the merged PR #34. The three GitHub alerts can be
@@ -180,6 +205,9 @@ portable suite alone does not close them.
 - [Apple: UserDefaults](https://developer.apple.com/documentation/foundation/userdefaults)
 - [Apple: AES.GCM](https://developer.apple.com/documentation/cryptokit/aes/gcm)
 - [Apple: Encrypting your app's files](https://developer.apple.com/documentation/uikit/encrypting-your-app-s-files)
+- [Apple: FileAttributeKey.protectionKey value contract](https://developer.apple.com/documentation/foundation/fileattributekey/protectionkey)
+- [Apple: Simulated and physical device testing](https://developer.apple.com/documentation/xcode/running-your-app-on-simulated-or-physical-devices)
+- [Apple/WebKit: FileSystem tests, makeSafeToUseMemoryMapForPath](https://github.com/WebKit/WebKit/blob/main/Tools/TestWebKitAPI/Tests/WTF/FileSystem.cpp)
 - [Apple: Restricting Keychain item accessibility](https://developer.apple.com/documentation/security/restricting-keychain-item-accessibility)
 - [Apple: Optimizing app data for iCloud Backup](https://developer.apple.com/documentation/foundation/optimizing-your-app-s-data-for-icloud-backup)
 - [Apple: App Review Guidelines, privacy](https://developer.apple.com/app-store/review/guidelines/#privacy)
