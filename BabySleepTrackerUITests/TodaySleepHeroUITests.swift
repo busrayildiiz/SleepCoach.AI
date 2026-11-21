@@ -45,6 +45,67 @@ final class TodaySleepHeroUITests: XCTestCase {
         }
         XCTFail("Hero action is not reachable")
     }
+
+    private func tapHomeButton(_ identifier: String, app: XCUIApplication) {
+        let target = app.buttons[identifier]
+        let fixtureLabel = "TEST FIXTURE — NOT A PREDICTION"
+        let marker = app.staticTexts[fixtureLabel]
+        let scroll = app.scrollViews.containing(.staticText, identifier: fixtureLabel).firstMatch
+        let window = app.windows.firstMatch
+        let tab = app.buttons["recording.addSleep"]
+        let moveLimit = 12
+        var viewport = CGRect.null
+        var moves = 0
+        var stalledMoves = 0
+        var lastAnchor: (tracksTarget: Bool, y: CGFloat)?
+
+        for move in 0...moveLimit {
+            let screen = window.frame
+            let top = screen.minY + 44
+            let bottom = tab.exists && tab.isHittable ? min(screen.maxY, tab.frame.minY) : screen.maxY
+            let usable = CGRect(x: screen.minX, y: top, width: screen.width, height: max(0, bottom - top))
+            viewport = scroll.exists ? usable.intersection(scroll.frame) : usable
+            guard !viewport.isEmpty else { break }
+
+            let frame = target.exists ? target.frame : .null
+            let tracksTarget = !frame.isEmpty
+            if tracksTarget, viewport.contains(CGPoint(x: frame.midX, y: frame.midY)), target.isHittable {
+                target.tap()
+                return
+            }
+
+            // Use the Home marker to measure movement while the target is absent from the hierarchy.
+            let anchorY = tracksTarget ? frame.midY : (marker.exists ? marker.frame.midY : nil)
+            if let anchorY, let lastAnchor, lastAnchor.tracksTarget == tracksTarget, abs(anchorY - lastAnchor.y) < 2 {
+                stalledMoves += 1
+            } else {
+                stalledMoves = 0
+            }
+            lastAnchor = anchorY.map { (tracksTarget, $0) }
+            guard move < moveLimit, stalledMoves < 2 else { break }
+
+            let distance = tracksTarget ? frame.midY - viewport.midY : viewport.height
+            let towardBottom = distance >= 0
+            let step = min(max(abs(distance), 44), viewport.height * 0.72)
+            let startY = viewport.minY + viewport.height * (towardBottom ? 0.86 : 0.14)
+            let start = window.coordinate(withNormalizedOffset: .zero)
+                .withOffset(CGVector(dx: viewport.midX - screen.minX, dy: startY - screen.minY))
+            start.press(forDuration: 0.05,
+                        thenDragTo: start.withOffset(CGVector(dx: 0, dy: towardBottom ? -step : step)),
+                        withVelocity: .slow, thenHoldForDuration: 0.1)
+            moves += 1
+        }
+
+        capture("home-button-not-reachable-\(identifier)", app: app)
+        let hierarchy = XCTAttachment(string: app.debugDescription)
+        hierarchy.name = "Home navigation accessibility hierarchy"
+        hierarchy.lifetime = .keepAlways
+        add(hierarchy)
+        let targetInfo = target.exists ? "frame=\(target.frame), hittable=\(target.isHittable), label=\(target.label)" : "missing from accessibility hierarchy"
+        XCTFail("Home button \(identifier) was unreachable after \(moves) moves (\(stalledMoves) stalled). " +
+                "Target \(targetInfo). Viewport \(viewport). Window \(window.frame).")
+    }
+
     private func revealPlanObservation(_ target: XCUIElement, app: XCUIApplication) {
         // Bring the parent Home content into view before navigating its nested timeline.
         reveal(app.buttons["home.plan.details"], app: app)
@@ -313,9 +374,7 @@ extension TodaySleepHeroUITests {
 extension TodaySleepHeroUITests {
     func testDayDetailShowsUnknownNetForAnOngoingNapAtLargeTextSize() {
         let app = launch("napNetUnknown", live: true, large: true)
-        let today = app.buttons["sleep.todayRecords"]
-        reveal(today, app: app)
-        today.tap()
+        tapHomeButton("sleep.todayRecords", app: app)
         let suffix = "22222222-2222-2222-2222-222222222222"
         let unknown = app.staticTexts["sleep.netSleepUnknown." + suffix]
         XCTAssertTrue(unknown.waitForExistence(timeout: 5))
@@ -343,8 +402,8 @@ extension TodaySleepHeroUITests {
         let picker = app.datePickers["recording.end.time"]
         XCTAssertTrue(picker.waitForExistence(timeout: 5))
         let minute = picker.pickerWheels.element(boundBy: 1)
-        let original = try XCTUnwrap(minute.value as? String)
-        let other = original.contains("15") ? "45" : "15"
+        let original = try selectedMinute(in: minute)
+        let other = original == 15 ? "45" : "15"
         minute.adjust(toPickerWheelValue: other)
         app.buttons["recording.time.cancel"].tap()
         dismissed(app.navigationBars["End time"])
@@ -353,9 +412,10 @@ extension TodaySleepHeroUITests {
         reveal(end, app: app)
         end.tap()
         XCTAssertTrue(picker.waitForExistence(timeout: 5))
-        XCTAssertEqual(minute.value as? String, original)
+        XCTAssertEqual(try selectedMinute(in: minute), original)
         minute.adjust(toPickerWheelValue: other)
-        minute.adjust(toPickerWheelValue: original)
+        minute.adjust(toPickerWheelValue: String(format: "%02d", original))
+        XCTAssertEqual(try selectedMinute(in: minute), original)
         app.buttons["recording.time.done"].tap()
         dismissed(app.navigationBars["End time"])
         XCTAssertFalse(save.isEnabled)
@@ -432,9 +492,7 @@ extension TodaySleepHeroUITests {
         XCTAssertTrue(wake.label.contains(wakeTime.formatted(.dateTime.hour().minute())))
         XCTAssertTrue((wake.value as? String)?.contains(wakeDay.formatted(date: .abbreviated, time: .omitted)) == true)
 
-        let day = app.buttons["sleep.dayRecords.0"]
-        reveal(day, app: app)
-        day.tap()
+        tapHomeButton("sleep.dayRecords.0", app: app)
         XCTAssertTrue(app.navigationBars[startDay.formatted(.dateTime.day().month(.abbreviated))].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Night Sleep"].exists)
         XCTAssertTrue(app.staticTexts["8:12 PM – 7:21 AM"].exists)
@@ -451,6 +509,18 @@ extension TodaySleepHeroUITests {
         if wheels.count == 3 { wheels.element(boundBy: 2).adjust(toPickerWheelValue: "AM") }
     }
 
+    private func selectedMinute(in wheel: XCUIElement) throws -> Int {
+        let value = try XCTUnwrap(wheel.value as? String, "The minute wheel did not report a value.")
+        let number = value.split(whereSeparator: \.isWhitespace).first.flatMap { Int($0) }
+        return try XCTUnwrap(number.flatMap { (0...59).contains($0) ? $0 : nil },
+                            "Expected a minute from 0 through 59 in the wheel value '\(value)'.")
+    }
+
+    private func waitUntilHittable(_ element: XCUIElement) -> Bool {
+        let ready = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == true AND hittable == true"), object: element)
+        return XCTWaiter.wait(for: [ready], timeout: 5) == .completed
+    }
+
     private func selectHistoricalDate(_ date: Date, from initialDay: Date, calendar: Calendar, in app: XCUIApplication) {
         let datePicker = app.datePickers["recording.end.date"]
         reveal(datePicker, app: app)
@@ -460,29 +530,33 @@ extension TodaySleepHeroUITests {
         } else {
             datePicker.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
         }
+        let previousMonthID = "DatePicker.PreviousMonth"
+        let popover = app.datePickers.containing(.button, identifier: previousMonthID).firstMatch
         if !calendar.isDate(date, equalTo: initialDay, toGranularity: .month) {
-            let previousMonth = app.buttons.matching(NSPredicate(
-                format: "label =[c] %@ OR identifier =[c] %@", "Previous month", "Previous month")).firstMatch
-            XCTAssertTrue(previousMonth.waitForExistence(timeout: 5))
+            let previousMonth = popover.buttons[previousMonthID]
+            guard waitUntilHittable(previousMonth) else {
+                XCTFail("The opened calendar's previous-month button is unreachable. \(app.debugDescription)")
+                return
+            }
             previousMonth.tap()
         }
 
         let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US")
         formatter.calendar = calendar
         formatter.timeZone = calendar.timeZone
-        formatter.setLocalizedDateFormatFromTemplate("MMMMd")
-        let day = String(calendar.component(.day, from: date))
-        let matcher = NSPredicate(format: "label == %@ OR label CONTAINS[c] %@", day, formatter.string(from: date))
-        let button = app.buttons.matching(matcher).firstMatch
-        if button.waitForExistence(timeout: 5), button.isHittable {
-            button.tap()
-        } else {
-            let cell = app.cells.matching(matcher).firstMatch
-            XCTAssertTrue(cell.exists && cell.isHittable, "Cannot reach the day in the native calendar. \(app.debugDescription)")
-            cell.tap()
+        formatter.setLocalizedDateFormatFromTemplate("EEEEMMMMd")
+        let label = formatter.string(from: date)
+        let day = popover.buttons.matching(NSPredicate(format: "label == %@", label)).firstMatch
+        guard waitUntilHittable(day) else {
+            XCTFail("The opened calendar's '\(label)' button is unreachable. \(app.debugDescription)")
+            return
         }
-        if !app.datePickers["recording.end.time"].isHittable {
-            app.navigationBars["End time"].staticTexts["End time"].tap()
+        day.tap()
+        if popover.exists {
+            let dismissPopup = app.buttons["PopoverDismissRegion"].firstMatch
+            if dismissPopup.exists && dismissPopup.isHittable { dismissPopup.tap() }
+            dismissed(popover)
         }
     }
 

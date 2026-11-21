@@ -1563,7 +1563,7 @@ struct SleepListView: View {
                         }
                     }
 
-                    Text("Personalized for \(babyName)")
+                    Text("Sleep guidance for \(babyName)")
                         .font(.system(size: 10, weight: .medium))
                         .foregroundStyle(Color(.secondaryLabel))
                 }
