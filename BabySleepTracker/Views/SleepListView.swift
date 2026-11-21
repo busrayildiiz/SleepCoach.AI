@@ -1660,6 +1660,7 @@ struct SleepListView: View {
     private func planNow(_ actual: Date) -> Date {
         #if DEBUG && targetEnvironment(simulator)
         if TodayPlanUITestFixture.enabled { return TodayPlanUITestFixture.now }
+        if let historicalReviewTime = HeroUITestFixture.historicalReviewTime { return historicalReviewTime }
         #endif
         return actual
     }

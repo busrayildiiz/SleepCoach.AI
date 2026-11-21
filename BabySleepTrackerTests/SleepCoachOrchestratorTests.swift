@@ -246,32 +246,88 @@ final class SleepCoachOrchestratorTests: XCTestCase {
         )
     }
 
-    func testExpectedNapCountDoesNotProveCoverageOrForceBedtimeBeforeCutoff() {
-        let calendar = Calendar.current
-        let today = calendar.startOfDay(for: Date())
-        let currentDayNow = calendar.date(byAdding: .hour, value: 10, to: today)!
-        let firstNap = SleepRecord(
-            date: calendar.date(byAdding: .hour, value: 6, to: today)!,
-            duration: 60,
-            kind: .dayNap
-        )
+    func testTwoRecordedNapsAtNineMonthsSelectBedtimeWithIncompleteCoverage() throws {
+        let naps = [SleepRecord(date: planningTime(9), duration: 60), SleepRecord(date: planningTime(13), duration: 60)]
+        let snapshot = try planningSnapshot(records: naps, at: planningTime(14, 15))
 
-        let secondNap = SleepRecord(
-            date: calendar.date(byAdding: .hour, value: 8, to: today)!,
-            duration: 60,
-            kind: .dayNap
-        )
+        XCTAssertEqual(snapshot.ageMonths, 9)
+        XCTAssertEqual(snapshot.night.lastNapCutoffTime, planningTime(16))
+        XCTAssertEqual(snapshot.daytime.recommendation.value, planningTime(17, 30))
+        XCTAssertEqual(snapshot.nextSleepKind, .bedtime)
+        XCTAssertEqual(snapshot.sleepAssessment?.anchor?.date, planningTime(14))
+        XCTAssertEqual(snapshot.night.recommendation.value, planningTime(17, 30))
+        XCTAssertEqual(snapshot.night.optimalBedtimeEnd, planningTime(18))
+        XCTAssertEqual(snapshot.night.source, .recordedEstimate)
+        XCTAssertEqual(snapshot.recordedDaytime, .incomplete(120, reason: .incomplete))
+        XCTAssertEqual(snapshot.recordedSleepDay, .incomplete(120, reason: .incomplete))
+        XCTAssertEqual(snapshot.recordedRolling24h, .incomplete(120, reason: .incomplete))
+        XCTAssertEqual(snapshot.dataQualityReport.completeDays, 0)
+        XCTAssertNil(snapshot.sleepStatus)
+        XCTAssertNil(snapshot.night.daytimeSleepStatus)
+        XCTAssertNil(snapshot.night.overtiredRiskTime)
+        XCTAssertNil(snapshot.night.confidence)
+        XCTAssertNil(snapshot.daytime.confidence)
+        XCTAssertNil(SleepOverviewCalculator(records: naps, now: snapshot.generatedAt,
+                                             calendar: planningCalendar, totalSleepReference: 660...840)
+            .calculate().recordedGoalProgress)
 
-        saveRecords([firstNap, secondNap])
+        let prompt = DefaultSleepCoachLLMAgent().buildPrompt(snapshot: snapshot, records: naps, trigger: .manualRefresh)
+        XCTAssertTrue(prompt.contains("Next planned sleep: Bedtime"))
+        XCTAssertTrue(prompt.contains("Next nap guidance: Unavailable"))
+        XCTAssertTrue(prompt.contains("Nap window: Unavailable"))
+    }
 
-        orchestrator.generate(now: currentDayNow)
+    func testDistinctCompletedBoundariesCanSelectBedtimeBeforeCutoffWithoutExactNetSleep() throws {
+        let first = SleepRecord(date: planningTime(9), duration: 60)
+        let second = SleepRecord(date: planningTime(11), duration: 60)
+        let unknownBreak = SleepRecord(date: planningTime(9, 15), duration: 0, kind: .break,
+                                       parentNapID: first.id, isOngoing: true)
+        let snapshot = try planningSnapshot(records: [first, second, unknownBreak], at: planningTime(12, 15))
 
-        XCTAssertEqual(
-            orchestrator.snapshot?.nextSleepKind,
-            .nap
-        )
-        XCTAssertEqual(orchestrator.snapshot?.recordedDaytime, .incomplete(120, reason: .incomplete))
-        XCTAssertNil(orchestrator.snapshot?.sleepStatus)
+        XCTAssertEqual(snapshot.daytime.recommendation.value, planningTime(15, 30))
+        XCTAssertEqual(snapshot.nextSleepKind, .bedtime)
+        XCTAssertEqual(snapshot.recordedDaytime, .incomplete(60, reason: .unresolvedBreak))
+        XCTAssertEqual(snapshot.sleepAssessment?.anchor?.date, planningTime(12))
+        XCTAssertNil(snapshot.night.daytimeSleepStatus)
+    }
+
+    func testOverlappingOrConflictingRecordsDoNotCountAsTwoNaps() throws {
+        let first = SleepRecord(date: planningTime(9), duration: 60)
+        let second = SleepRecord(date: planningTime(11), duration: 60)
+        let cases: [(String, [SleepRecord], [DailyWakeRecord])] = [
+            ("overlapping naps", [SleepRecord(date: planningTime(10, 30), duration: 60), second], []),
+            ("overlapping night", [first, second, SleepRecord(date: planningTime(8, 30), duration: 90, kind: .nightSleep)], []),
+            ("duplicated identity", [first, SleepRecord(id: first.id, date: second.date, duration: 60)], []),
+            ("unresolved onset inside a nap", [first, second, SleepRecord(date: planningTime(9, 30), duration: 0)], []),
+            ("wake inside a nap", [first, second], [DailyWakeRecord(day: planningTime(0), wakeTime: planningTime(9, 30))])
+        ]
+        for (description, records, wakes) in cases {
+            let snapshot = try planningSnapshot(records: records, wakes: wakes, at: planningTime(12, 15))
+            XCTAssertEqual(snapshot.daytime.recommendation.value, planningTime(15, 30), description)
+            XCTAssertEqual(snapshot.nextSleepKind, .nap, description)
+            XCTAssertTrue(snapshot.recordedDaytime.isIncomplete, description)
+        }
+    }
+
+    func testProposedNapAtOrAfterCutoffSelectsBedtimeWithOnlyOneRecordedNap() throws {
+        for (elapsed, expected) in [(29, NextSleepKind.nap), (30, .bedtime), (45, .bedtime)] {
+            let nap = SleepRecord(date: planningTime(12), duration: elapsed)
+            let snapshot = try planningSnapshot(records: [nap], at: planningTime(13))
+            XCTAssertEqual(snapshot.daytime.recommendation.value, planningTime(15, 30).addingTimeInterval(Double(elapsed) * 60))
+            XCTAssertEqual(snapshot.nextSleepKind, expected)
+            XCTAssertEqual(snapshot.recordedDaytime, .incomplete(elapsed, reason: .incomplete))
+        }
+    }
+
+    func testActiveNapTakesPrecedenceOverTheCountAndCutoff() throws {
+        let naps = [SleepRecord(date: planningTime(9), duration: 60), SleepRecord(date: planningTime(13), duration: 60),
+                    SleepRecord(date: planningTime(16), duration: 0, isOngoing: true)]
+        let snapshot = try planningSnapshot(records: naps, at: planningTime(16, 15))
+
+        XCTAssertEqual(snapshot.currentSleepKind, .dayNap)
+        XCTAssertEqual(snapshot.nextSleepKind, .nap)
+        XCTAssertNil(snapshot.night.recommendation.value)
+        XCTAssertTrue(snapshot.recordedDaytime.isIncomplete)
     }
 
     func testNextSleepKindIsBedtimeAfterNapCutoff() {
@@ -578,6 +634,26 @@ final class SleepCoachOrchestratorTests: XCTestCase {
     }
 
     // MARK: - Helpers
+
+    private var planningCalendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        return calendar
+    }
+
+    private func planningTime(_ hour: Int, _ minute: Int = 0) -> Date {
+        planningCalendar.date(from: DateComponents(year: 2026, month: 11, day: 19, hour: hour, minute: minute))!
+    }
+
+    private func planningSnapshot(records: [SleepRecord], wakes: [DailyWakeRecord] = [], at time: Date) throws -> OrchestratedSnapshot {
+        saveRecords(records)
+        saveWakeRecords(wakes)
+        let birth = planningCalendar.date(byAdding: .month, value: -9, to: planningTime(0))!
+        UserDefaults.standard.set(birth, forKey: "babyBirthDate")
+        let real = SleepCoachOrchestrator(llmAgent: llmAgent, calendar: planningCalendar)
+        real.generate(now: time, requestCoaching: false)
+        return try XCTUnwrap(real.snapshot)
+    }
 
     private func saveRecords(
         _ records: [SleepRecord]

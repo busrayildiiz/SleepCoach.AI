@@ -105,6 +105,8 @@ final class DefaultSleepCoachLLMAgent: SleepCoachLLMAgentProtocol {
                                                 calendar: snapshot.evaluationCalendar)
         let nap = snapshot.daytime
         let night = snapshot.night
+        let showNap = !snapshot.hasCurrentSleep && snapshot.nextSleepKind == .nap
+        let nextSleep = snapshot.hasCurrentSleep ? "Wait for an observed end" : (showNap ? "Nap" : "Bedtime")
         let napTiming = nap.recommendation.value.map { "\(time($0)) (\(nap.source.rawValue))" }
             ?? nap.generalWakeWindow.map { "Age-based wake window \($0.lowerBound)–\($0.upperBound) min" } ?? "Unavailable"
         let bedtimeTiming = night.recommendation.value.map { "\(time($0)) (\(night.source.rawValue))" }
@@ -129,8 +131,9 @@ final class DefaultSleepCoachLLMAgent: SleepCoachLLMAgentProtocol {
         - Current sleep state: \(activeSleep)
 
         RULE ENGINE OUTPUT:
-        - Next nap guidance: \(napTiming)
-        - Nap window: \(napWindow)
+        - Next planned sleep: \(nextSleep)
+        - Next nap guidance: \(showNap ? napTiming : "Unavailable")
+        - Nap window: \(showNap ? napWindow : "Unavailable")
         - Nap planning source: \(nap.source.rawValue)
         - Nap planning limitation: \(nap.recommendation.limitation?.rawValue ?? "None reported")
         - Prediction confidence: Unavailable

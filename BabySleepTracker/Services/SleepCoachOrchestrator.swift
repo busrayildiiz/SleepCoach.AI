@@ -264,16 +264,14 @@ final class SleepCoachOrchestrator: ObservableObject {
         )
 
         // 7. nextSleepKind
-        let todayDayNapsCount = todayRecs.filter { $0.kind == .dayNap && $0.completedEnd(at: now) != nil }.count
-        let profile           = profileProvider.profile(forAgeMonths: ageMonths)
-        let expectedNaps      = profile.expectedNapCount
-
         let nextSleepKind: NextSleepKind = {
             if let current = planning.assessment.active { return current.record.kind == .nightSleep ? .bedtime : .nap }
             let cutoff = overtiredCalc.lastNapCutoffTime(ageMonths: ageMonths, on: now, using: evaluationCalendar)
             guard now < cutoff else { return .bedtime }
-            if recordedDaytime.comparableMinutes != nil && todayDayNapsCount >= expectedNaps.upperBound { return .bedtime }
-            return .nap
+            if let proposedNap = daytime.recommendation.value, proposedNap >= cutoff { return .bedtime }
+            let expectedNaps = profileProvider.profile(forAgeMonths: ageMonths).expectedNapCount
+            return recordedNapCountForPlanning(accounting: accounting, wakeRecords: wakeRecords) >= expectedNaps.upperBound
+                ? .bedtime : .nap
         }()
 
         // 8. Nap transition
@@ -341,6 +339,30 @@ final class SleepCoachOrchestrator: ObservableObject {
             if let trigger { startLLMRequest(snapshot: result, records: records, trigger: trigger) }
         }
         updateLLMCacheState()
+    }
+
+    /// Completed boundaries can inform the next plan even when net duration or day coverage is unknown.
+    private func recordedNapCountForPlanning(accounting: SleepAccounting, wakeRecords: [DailyWakeRecord]) -> Int {
+        let now = accounting.now
+        let calendar = accounting.calendar
+        let sleeps = accounting.records.filter { $0.kind != .break }
+        let wakes = wakeRecords.filter { $0.isObserved(on: now, at: now, calendar: calendar) }
+        return sleeps.indices.filter { index in
+            let nap = sleeps[index]
+            guard nap.kind == .dayNap, let end = nap.completedEnd(at: now),
+                  calendar.isDate(nap.date, inSameDayAs: now),
+                  !wakes.contains(where: { nap.date < $0.wakeTime && $0.wakeTime < end })
+            else { return false }
+            return !sleeps.indices.contains { otherIndex in
+                guard otherIndex != index else { return false }
+                let other = sleeps[otherIndex]
+                if other.id == nap.id { return true }
+                guard other.date < end else { return false }
+                if let otherEnd = other.completedEnd(at: now) { return otherEnd > nap.date }
+                // A known onset inside the nap conflicts. An older open record has no observed end.
+                return other.date >= nap.date
+            }
+        }.count
     }
 
             // MARK: - Data Loaders
@@ -858,7 +880,7 @@ final class SleepCoachOrchestrator: ObservableObject {
         snapshot: OrchestratedSnapshot,
         records: [SleepRecord]
     ) -> String {
-        var source = "prompt-version:3|model:gemini-2.5-flash"
+        var source = "prompt-version:4|model:gemini-2.5-flash"
         source += "|snapshot:" + canonicalSnapshot(snapshot)
         source += "|records:"
         for record in records.sorted(by: { $0.id.uuidString < $1.id.uuidString }) {

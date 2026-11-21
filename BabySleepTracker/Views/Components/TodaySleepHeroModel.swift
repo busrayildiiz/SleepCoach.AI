@@ -164,7 +164,13 @@ struct TodaySleepHeroModel {
 enum HeroUITestFixture {
     static var enabled: Bool { ProcessInfo.processInfo.environment["SLEEP_HERO_UI_TESTS"] == "1" }
     static var scenario: String { ProcessInfo.processInfo.environment["SLEEP_HERO_SCENARIO"] ?? "ready" }
+    // A relaunch can inspect the recorded wake on its own day through the normal Home projection.
+    static var historicalReviewTime: Date? {
+        guard enabled, scenario == "staleNight" else { return nil }
+        return date(from: "SLEEP_HERO_HISTORICAL_REVIEW_TIME")
+    }
     static var now: Date {
+        if let historicalReviewTime { return historicalReviewTime }
         if ProcessInfo.processInfo.environment["SLEEP_HERO_LIVE_CLOCK"] == "1" { return Date() }
         if scenario.hasPrefix("bedtime") {
             return Calendar.current.date(bySettingHour: scenario == "bedtimeBefore" ? 18 : 20,
@@ -175,6 +181,7 @@ enum HeroUITestFixture {
     }
     static let parentID = UUID(uuidString: "22222222-2222-2222-2222-222222222222")!
     static func prepare() {
+        guard ProcessInfo.processInfo.environment["SLEEP_HERO_RESET"] != "0" else { return }
         let defaults = UserDefaults.standard
         if let domain = Bundle.main.bundleIdentifier { defaults.removePersistentDomain(forName: domain) }
         defaults.set(ProcessInfo.processInfo.environment["SLEEP_HERO_DARK"] == "1" ? "dark" : "light", forKey: "appAppearance")
@@ -202,7 +209,7 @@ enum HeroUITestFixture {
                                    createdAt: now.addingTimeInterval(-7200)),
                        SleepRecord(date: now.addingTimeInterval(-6600), duration: 10, kind: .break, parentNapID: parentID)]
         case "staleNight":
-            let start = now.addingTimeInterval(-121 * 3600)
+            let start = date(from: "SLEEP_HERO_HISTORICAL_NIGHT_START") ?? now.addingTimeInterval(-121 * 3600)
             records = [SleepRecord(id: parentID, date: start, duration: 0, kind: .nightSleep, isOngoing: true, createdAt: start)]
             defaults.set(cal.date(byAdding: .month, value: -9, to: now), forKey: "babyBirthDate")
             defaults.set(Double(cal.component(.hour, from: now)), forKey: "typicalBedHour")
@@ -217,6 +224,12 @@ enum HeroUITestFixture {
         SleepRecordPersistence().save(records)
         DailyWakeRecordPersistence().save(wakes)
     }
+
+    private static func date(from key: String) -> Date? {
+        guard let value = ProcessInfo.processInfo.environment[key], let seconds = Double(value), seconds.isFinite else { return nil }
+        return Date(timeIntervalSince1970: seconds)
+    }
+
     static func model(records: [SleepRecord], wakes: [DailyWakeRecord],
                       confirmation: StillSleepingConfirmation? = nil) -> TodaySleepHeroModel {
         let now = self.now
