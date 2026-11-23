@@ -357,8 +357,7 @@ struct SleepListView: View {
     // MARK: - Body
 
     var body: some View {
-        NavigationStack {
-            ScrollViewReader { proxy in
+        ScrollViewReader { proxy in
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 12) {
                     #if DEBUG && targetEnvironment(simulator)
@@ -377,7 +376,6 @@ struct SleepListView: View {
                 .padding(.bottom, 112)
             }
             .background(Color(.systemGroupedBackground))
-            .navigationBarHidden(true)
             .onAppear {
                 _ = sleepRecordPersistence.storage.pruneRecoveryArchives()
                 _ = SleepWakeTimeWorkflow.resumePending(now: Date(), wakePersistence: dailyWakeRecordPersistence,
@@ -417,7 +415,6 @@ struct SleepListView: View {
                     withAnimation { proxy.scrollTo("home.todayPlan", anchor: .top) }
                     heroShowsPlan = false
                 }
-            }
             }
         }
         .sheet(item: presentationSheet(recording: false), content: sheetContent)

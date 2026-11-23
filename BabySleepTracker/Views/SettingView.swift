@@ -99,37 +99,34 @@ struct SettingsView: View {
 
     var body: some View {
         let accounting = SleepAccounting(records: records, now: Date(), calendar: .current)
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    headerSection
-                    profileCard
-                    sleepInsightCard(change: weekVsLastWeek(accounting))
-                    atAGlanceCard(averageNap: avgDailyNap(accounting), frequency: recordingFrequency(accounting))
-                    napRemindersSection
-                    babyProfileSection
-                    preferencesAndQuickActions
-                    privacySection
-                    supportSection
-                }
-                .padding(.horizontal, 16)
-                .padding(.top, 16)
-                .padding(.bottom, 32)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                headerSection
+                profileCard
+                sleepInsightCard(change: weekVsLastWeek(accounting))
+                atAGlanceCard(averageNap: avgDailyNap(accounting), frequency: recordingFrequency(accounting))
+                napRemindersSection
+                babyProfileSection
+                preferencesAndQuickActions
+                privacySection
+                supportSection
             }
-            .accessibilityIdentifier("settings.scroll")
-            .background(Color(.systemGroupedBackground))
-            .navigationBarHidden(true)
-            .onAppear { loadRecords() }
-            .onReceive(NotificationCenter.default.publisher(for: .sleepRecordsDidChange)
-                .receive(on: RunLoop.main)) { _ in
-                loadRecords()
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .secureDataStoreDidChange)
-                .receive(on: RunLoop.main)) { _ in
-                loadRecords()
-            }
-            .onDisappear { avatarImportTask?.cancel() }
+            .padding(.horizontal, 16)
+            .padding(.top, 16)
+            .padding(.bottom, 32)
         }
+        .accessibilityIdentifier("settings.scroll")
+        .background(Color(.systemGroupedBackground))
+        .onAppear { loadRecords() }
+        .onReceive(NotificationCenter.default.publisher(for: .sleepRecordsDidChange)
+            .receive(on: RunLoop.main)) { _ in
+            loadRecords()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .secureDataStoreDidChange)
+            .receive(on: RunLoop.main)) { _ in
+            loadRecords()
+        }
+        .onDisappear { avatarImportTask?.cancel() }
         .confirmationDialog("Appearance", isPresented: $showAppearanceSheet, titleVisibility: .visible) {
             Button("System") { appAppearance = "system" }
             Button("Light")  { appAppearance = "light" }

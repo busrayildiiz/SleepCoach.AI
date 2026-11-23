@@ -43,6 +43,36 @@ final class PrivacyUITests: XCTestCase {
         XCTAssertTrue(app.buttons["privacy.delete.confirm"].waitForExistence(timeout: 3))
     }
 
+    func testRecordingEditorReturnsToHistoryTab() {
+        let app = launchFixture()
+        app.buttons["History"].tap()
+        let weekRange = app.buttons["Week"]
+        XCTAssertTrue(weekRange.waitForExistence(timeout: 5))
+        XCTAssertTrue(weekRange.isHittable)
+
+        app.buttons["recording.addSleep"].tap()
+        let editor = app.navigationBars["Add Nap"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        app.buttons["recording.cancel"].tap()
+        let editorDismissed = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"), object: editor
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [editorDismissed], timeout: 5), .completed)
+
+        let weekView = app.staticTexts["Week view coming soon"]
+        XCTAssertFalse(weekView.exists)
+        XCTAssertTrue(weekRange.isHittable)
+        weekRange.tap()
+        XCTAssertTrue(weekView.waitForExistence(timeout: 5))
+        XCTAssertTrue(weekView.isHittable)
+
+        // Check the top content and bottom tab bar on both simulator sizes.
+        let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        screenshot.name = "history-tab-after-recording-dismissal"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+    }
+
     func testBackgroundRoundTripRestoresUsablePrivateScreens() {
         let app = launchFixture()
         XCUIDevice.shared.press(.home)

@@ -16,7 +16,7 @@ struct ContentView: View {
     var body: some View {
         ZStack(alignment: .bottom) {
 
-            // ── Tab content — hepsi yüklenmiş, sadece görünürlük değişiyor ──
+            // Keep all four tabs mounted. Presented screens own their navigation stacks.
             ZStack {
                 SleepListView(sleepConfirmation: $sleepConfirmation)
                     .opacity(selectedTab == .home ? 1 : 0)
@@ -35,7 +35,6 @@ struct ContentView: View {
                     .allowsHitTesting(selectedTab == .settings)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .ignoresSafeArea()
             .safeAreaInset(edge: .bottom) {
                 Color.clear.frame(height: 72)
             }
