@@ -18,21 +18,10 @@ struct ContentView: View {
 
             // Keep all four tabs mounted. Presented screens own their navigation stacks.
             ZStack {
-                SleepListView(sleepConfirmation: $sleepConfirmation)
-                    .opacity(selectedTab == .home ? 1 : 0)
-                    .allowsHitTesting(selectedTab == .home)
-
-                HistoryView()
-                    .opacity(selectedTab == .history ? 1 : 0)
-                    .allowsHitTesting(selectedTab == .history)
-
-                InsightsView(sleepConfirmation: $sleepConfirmation)
-                    .opacity(selectedTab == .insights ? 1 : 0)
-                    .allowsHitTesting(selectedTab == .insights)
-
-                SettingsView()
-                    .opacity(selectedTab == .settings ? 1 : 0)
-                    .allowsHitTesting(selectedTab == .settings)
+                tabContent(SleepListView(sleepConfirmation: $sleepConfirmation), for: .home)
+                tabContent(HistoryView(), for: .history)
+                tabContent(InsightsView(sleepConfirmation: $sleepConfirmation), for: .insights)
+                tabContent(SettingsView(), for: .settings)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .safeAreaInset(edge: .bottom) {
@@ -70,6 +59,16 @@ struct ContentView: View {
                 }
             )
         }
+    }
+
+    private func tabContent<Content: View>(_ content: Content, for tab: Tab) -> some View {
+        let isSelected = selectedTab == tab
+        // An invisible scroll view can still appear in UIKit's accessibility hierarchy.
+        return content
+            .opacity(isSelected ? 1 : 0)
+            .allowsHitTesting(isSelected)
+            .accessibilityHidden(!isSelected)
+            .zIndex(isSelected ? 1 : 0)
     }
 
     private func saveRecordFromTabBar(_ newRecord: SleepRecord) -> Bool {

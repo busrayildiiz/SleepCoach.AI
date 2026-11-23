@@ -45,10 +45,12 @@ final class PrivacyUITests: XCTestCase {
 
     func testRecordingEditorReturnsToHistoryTab() {
         let app = launchFixture()
-        app.buttons["History"].tap()
         let weekRange = app.buttons["Week"]
+        XCTAssertFalse(weekRange.exists, app.debugDescription)
+
+        app.buttons["History"].tap()
         XCTAssertTrue(weekRange.waitForExistence(timeout: 5))
-        XCTAssertTrue(weekRange.isHittable)
+        XCTAssertTrue(weekRange.isHittable, app.debugDescription)
 
         app.buttons["recording.addSleep"].tap()
         let editor = app.navigationBars["Add Nap"]
@@ -63,6 +65,12 @@ final class PrivacyUITests: XCTestCase {
         XCTAssertFalse(weekView.exists)
         XCTAssertTrue(weekRange.isHittable)
         weekRange.tap()
+        XCTAssertTrue(weekView.waitForExistence(timeout: 5))
+        XCTAssertTrue(weekView.isHittable)
+
+        app.buttons["Home"].tap()
+        XCTAssertFalse(weekRange.exists, app.debugDescription)
+        app.buttons["History"].tap()
         XCTAssertTrue(weekView.waitForExistence(timeout: 5))
         XCTAssertTrue(weekView.isHittable)
 
