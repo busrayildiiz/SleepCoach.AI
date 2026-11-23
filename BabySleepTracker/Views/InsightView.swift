@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct InsightsView: View {
+    @Environment(\.isTabActive) private var isTabActive
     @Binding var sleepConfirmation: StillSleepingConfirmation?
 
     private enum CoachTab: String, CaseIterable {
@@ -51,6 +52,8 @@ struct InsightsView: View {
             .padding(.horizontal, 16)
             .padding(.top, 18)
             .padding(.bottom, 112)
+            .accessibilityElement(children: .contain)
+            .accessibilityHidden(!isTabActive)
         }
         .background(CoachColor.background)
         .onAppear {

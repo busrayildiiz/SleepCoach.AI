@@ -11,6 +11,7 @@ import PhotosUI
 
 @MainActor
 struct SettingsView: View {
+    @Environment(\.isTabActive) private var isTabActive
 
     @State private var records: [SleepRecord] = []
     @State private var napRemindersOn = true
@@ -114,6 +115,8 @@ struct SettingsView: View {
             .padding(.horizontal, 16)
             .padding(.top, 16)
             .padding(.bottom, 32)
+            .accessibilityElement(children: .contain)
+            .accessibilityHidden(!isTabActive)
         }
         .accessibilityIdentifier("settings.scroll")
         .background(Color(.systemGroupedBackground))

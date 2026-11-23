@@ -27,6 +27,7 @@ final class SleepGenerationCoalescer: ObservableObject {
 }
 
 struct SleepListView: View {
+    @Environment(\.isTabActive) private var isTabActive
 
     // MARK: - Sheet routing
 
@@ -374,6 +375,9 @@ struct SleepListView: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 12)
                 .padding(.bottom, 112)
+                // UIKit exposes each scroll view's content through its own accessibility container.
+                .accessibilityElement(children: .contain)
+                .accessibilityHidden(!isTabActive)
             }
             .background(Color(.systemGroupedBackground))
             .onAppear {

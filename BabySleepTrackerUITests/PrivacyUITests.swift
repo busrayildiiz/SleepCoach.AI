@@ -47,6 +47,7 @@ final class PrivacyUITests: XCTestCase {
         let app = launchFixture()
         let weekRange = app.buttons["Week"]
         XCTAssertFalse(weekRange.exists, app.debugDescription)
+        XCTAssertFalse(app.buttons["privacy.dataHandling"].exists, app.debugDescription)
 
         app.buttons["History"].tap()
         XCTAssertTrue(weekRange.waitForExistence(timeout: 5))
@@ -105,13 +106,17 @@ final class PrivacyUITests: XCTestCase {
         app.buttons["Settings"].tap()
         let button = app.buttons["privacy.dataHandling"]
         let scroll = app.scrollViews["settings.scroll"]
+        XCTAssertTrue(scroll.exists, app.debugDescription)
+        XCTAssertLessThanOrEqual(scroll.frame.maxY, app.buttons["recording.addSleep"].frame.minY,
+                                 app.debugDescription)
         for _ in 0..<8 {
             if button.exists && button.isHittable { break }
             scroll.swipeUp()
         }
         XCTAssertTrue(button.isHittable)
         button.tap()
-        XCTAssertTrue(app.navigationBars["How Your Data Is Used"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars["How Your Data Is Used"].waitForExistence(timeout: 5),
+                      app.debugDescription)
         XCTAssertTrue(app.staticTexts["On this device"].exists)
         XCTAssertTrue(app.staticTexts["App preferences"].exists)
         XCTAssertFalse(app.staticTexts["3 members"].exists)

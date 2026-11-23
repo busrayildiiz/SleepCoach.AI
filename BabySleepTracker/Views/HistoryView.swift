@@ -2,6 +2,7 @@ import SwiftUI
 import Charts
 
 struct HistoryView: View {
+    @Environment(\.isTabActive) private var isTabActive
     
     // MARK: - Range Picker (tüm sayfayı filtreleyecek)
 
@@ -486,6 +487,8 @@ struct HistoryView: View {
             .padding(.horizontal, 16)
             .padding(.top, 16)
             .padding(.bottom, 32)
+            .accessibilityElement(children: .contain)
+            .accessibilityHidden(!isTabActive)
         }
         .background(HistoryColor.background)
         .onAppear { calculationDate = Date(); loadRecords() }
