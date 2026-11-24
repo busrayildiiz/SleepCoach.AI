@@ -18,26 +18,71 @@ final class DaytimeCoverageReviewUITests: XCTestCase {
     }
 
     private func reveal(_ element: XCUIElement, in app: XCUIApplication, towardTop: Bool = false,
-                        requireHittable: Bool = true) {
-        for _ in 0..<12 {
-            let window = app.windows.firstMatch.frame
-            let tab = app.buttons["recording.addSleep"]
-            let bottom = tab.isHittable ? tab.frame.minY : window.maxY
-            let viewport = CGRect(x: window.minX + 6, y: window.minY + 55, width: window.width - 12,
-                                  height: max(1, bottom - window.minY - 65))
-            if element.exists, !requireHittable || element.isHittable,
-               viewport.contains(CGPoint(x: element.frame.midX, y: element.frame.midY)) {
+                        requireHittable: Bool = true, reviewForm: XCUIElement? = nil) {
+        let window = app.windows.firstMatch
+        let container = reviewForm ?? window
+        let navigation = app.navigationBars["Daytime recording"]
+        let indicator = reviewForm?.otherElements.matching(NSPredicate(
+            format: "label BEGINSWITH %@", "Vertical scroll bar")).firstMatch
+        let firstCell = reviewForm?.cells.firstMatch
+        let moveLimit = 12
+        var lastPosition: String?
+        var stalledMoves = 0
+        var moves = 0
+        var viewport = CGRect.null
+
+        for move in 0...moveLimit {
+            let screen = window.frame
+            let bounds = container.frame
+            if reviewForm != nil {
+                let form = bounds.intersection(screen)
+                guard !form.isEmpty else { break }
+                let top = max(form.minY, navigation.frame.maxY)
+                viewport = CGRect(x: form.minX, y: top, width: form.width,
+                                  height: max(0, form.maxY - top)).insetBy(dx: 6, dy: 6)
+            } else {
+                let tab = app.buttons["recording.addSleep"]
+                let bottom = tab.exists && tab.isHittable ? tab.frame.minY : screen.maxY
+                viewport = CGRect(x: screen.minX + 6, y: screen.minY + 55, width: screen.width - 12,
+                                  height: max(0, bottom - screen.minY - 65))
+            }
+            guard !viewport.isEmpty else { break }
+
+            let frame = element.exists ? element.frame : .null
+            let hasFrame = !frame.isEmpty
+            if hasFrame, !requireHittable || element.isHittable,
+               viewport.contains(CGPoint(x: frame.midX, y: frame.midY)) {
                 return
             }
-            let distance = element.exists && !element.frame.isEmpty ? element.frame.midY - viewport.midY :
-                (towardTop ? -viewport.height : viewport.height)
-            let step = min(max(30, abs(distance)), viewport.height * 0.4)
-            let start = app.coordinate(withNormalizedOffset: .zero)
-                .withOffset(CGVector(dx: viewport.midX, dy: viewport.midY))
-            let end = start.withOffset(CGVector(dx: 0, dy: distance < 0 ? step : -step))
+
+            // The Form virtualizes rows. Its scroll indicator or first live cell measures
+            // progress while the target row is still absent from the accessibility tree.
+            let position: String?
+            if let indicator, indicator.exists, let value = indicator.value as? String {
+                position = value
+            } else if let firstCell, firstCell.exists {
+                position = String(describing: firstCell.frame)
+            } else {
+                position = nil
+            }
+            stalledMoves = position != nil && position == lastPosition ? stalledMoves + 1 : 0
+            lastPosition = position
+            guard move < moveLimit, stalledMoves < 2 else { break }
+
+            let distance = hasFrame ? frame.midY - viewport.midY : (towardTop ? -viewport.height : viewport.height)
+            let scrollingUp = distance < 0
+            let stride: CGFloat = reviewForm == nil ? 0.4 : 0.75
+            let step = min(max(30, abs(distance)), viewport.height * stride)
+            let startY = reviewForm == nil ? viewport.midY :
+                viewport.minY + viewport.height * (scrollingUp ? 0.12 : 0.88)
+            let start = container.coordinate(withNormalizedOffset: .zero)
+                .withOffset(CGVector(dx: viewport.midX - bounds.minX, dy: startY - bounds.minY))
+            let end = start.withOffset(CGVector(dx: 0, dy: scrollingUp ? step : -step))
             start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.1)
+            moves += 1
         }
-        XCTFail("Review control was unreachable: \(element)\n\(app.debugDescription)")
+        XCTFail("Review control was unreachable after \(moves) moves (\(stalledMoves) without progress). " +
+                "Viewport \(viewport), last position \(lastPosition ?? "unavailable"): \(element)\n\(app.debugDescription)")
     }
 
     private func openFromToday(_ app: XCUIApplication) {
@@ -57,8 +102,10 @@ final class DaytimeCoverageReviewUITests: XCTestCase {
     }
 
     private func expectStatus(_ label: String, app: XCUIApplication) {
-        let status = app.staticTexts["daytimeReview.status"]
-        reveal(status, in: app, towardTop: true)
+        let form = app.collectionViews.firstMatch
+        XCTAssertTrue(form.waitForExistence(timeout: 5))
+        let status = form.staticTexts["daytimeReview.status"]
+        reveal(status, in: app, towardTop: true, reviewForm: form)
         let predicate = NSPredicate(format: "label == %@", label)
         expectation(for: predicate, evaluatedWith: status)
         waitForExpectations(timeout: 5)
