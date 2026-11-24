@@ -43,6 +43,70 @@ final class SleepRecordingFlowTests: XCTestCase {
         XCTAssertNil(draft.record(kind: .nightSleep, editing: night, now: now))
     }
 
+    func testReviewNapRequiresConfirmationAndSavesPrefillsAsUnverified() throws {
+        let suite = "SleepRecordingFlowTests-\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let persistence = SleepRecordPersistence(defaults: defaults)
+        var draft = SleepRecordingDraft(defaultDate: start, now: now, requiresNapTimeConfirmation: true)
+        var submission = RecordingSubmission()
+
+        XCTAssertFalse(draft.isReadyToSubmit)
+        submission.submit(draft: draft, kind: .dayNap, now: now, save: { _ in
+            XCTFail("Saving requires confirmation of both nap times.")
+            return false
+        }, dismiss: { XCTFail("An unconfirmed draft must stay open.") })
+        XCTAssertFalse(submission.isSubmitted)
+
+        draft.confirmObservedNapTimes(now: now)
+        XCTAssertTrue(draft.isReadyToSubmit)
+        submission.submit(draft: draft, kind: .dayNap, now: now, save: { record in
+            XCTAssertNil(record.observationCapture)
+            return persistence.saveRecording(record, now: now)
+        }, dismiss: {})
+        XCTAssertTrue(submission.isSubmitted)
+        let saved = try XCTUnwrap(persistence.load()?.first)
+        XCTAssertEqual(saved.date, start)
+        XCTAssertEqual(saved.observedEnd, start.addingTimeInterval(3600))
+        XCTAssertEqual(TrustedObservationAdapter(defaults: defaults).snapshot().sleeps.map(\.source), [.recordedUnverified])
+
+        let homeDraft = SleepRecordingDraft(defaultDate: start, now: now)
+        XCTAssertNotNil(homeDraft.record(kind: .dayNap, now: now))
+    }
+
+    func testReviewNapRequiresReconfirmationAfterEitherTimeChanges() {
+        var draft = SleepRecordingDraft(defaultDate: start, now: now, requiresNapTimeConfirmation: true)
+        draft.start = start.addingTimeInterval(15 * 60)
+        draft.end = start.addingTimeInterval(45 * 60)
+        XCTAssertFalse(draft.isReadyToSubmit)
+
+        draft.confirmObservedNapTimes(now: now)
+        XCTAssertTrue(draft.isReadyToSubmit)
+        draft.start = start.addingTimeInterval(20 * 60)
+        XCTAssertFalse(draft.isReadyToSubmit)
+
+        draft.confirmObservedNapTimes(now: now)
+        XCTAssertTrue(draft.isReadyToSubmit)
+        let confirmedEnd = draft.end
+        draft.end = confirmedEnd.addingTimeInterval(60)
+        draft.end = confirmedEnd
+        XCTAssertFalse(draft.isReadyToSubmit)
+
+        draft.confirmObservedNapTimes(now: now)
+        XCTAssertTrue(draft.isReadyToSubmit)
+    }
+
+    func testReviewNapCannotConfirmAnInvalidInterval() {
+        var draft = SleepRecordingDraft(defaultDate: start, now: now, requiresNapTimeConfirmation: true)
+        draft.end = draft.start
+        draft.confirmObservedNapTimes(now: now)
+        XCTAssertFalse(draft.isReadyToSubmit)
+
+        draft.end = now.addingTimeInterval(60)
+        draft.confirmObservedNapTimes(now: now)
+        XCTAssertFalse(draft.isReadyToSubmit)
+    }
+
     func testEditingLegacyUnknownEndDoesNotInventACompletedInterval() {
         let legacy = SleepRecord(date: start, duration: 0, kind: .nightSleep)
         let draft = SleepRecordingDraft(defaultDate: start, editing: legacy, now: now)

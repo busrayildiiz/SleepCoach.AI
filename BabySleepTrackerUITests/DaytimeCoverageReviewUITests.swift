@@ -135,6 +135,12 @@ final class DaytimeCoverageReviewUITests: XCTestCase {
         add.tap()
         XCTAssertTrue(app.navigationBars["Add Nap"].waitForExistence(timeout: 5))
         let saveNap = app.buttons["recording.save"]
+        XCTAssertTrue(saveNap.waitForExistence(timeout: 5))
+        XCTAssertFalse(saveNap.isEnabled)
+        let confirmTimes = app.buttons["recording.napTimes.confirm"]
+        reveal(confirmTimes, in: app)
+        XCTAssertEqual(confirmTimes.label, "Confirm observed start and end")
+        confirmTimes.tap()
         XCTAssertTrue(saveNap.isEnabled)
         saveNap.tap()
         XCTAssertTrue(app.navigationBars["Daytime recording"].waitForExistence(timeout: 5))
@@ -144,7 +150,10 @@ final class DaytimeCoverageReviewUITests: XCTestCase {
         reveal(reopen, in: app)
         reopen.tap()
         chooseAndSave("daytimeReview.complete", app: app)
-        expectStatus("Nap recording confirmed", app: app)
+        expectStatus("Daytime nap coverage complete", app: app)
+        let nap = app.descendants(matching: .any).matching(identifier: "daytimeReview.nap.0").firstMatch
+        reveal(nap, in: app)
+        XCTAssertTrue(nap.label.contains("Unverified recording"))
     }
 
     func testMissingFollowingWakeBlocksBothAnswers() {
@@ -156,6 +165,23 @@ final class DaytimeCoverageReviewUITests: XCTestCase {
         XCTAssertTrue(following.label.contains("Missing wake"))
         XCTAssertFalse(app.buttons["daytimeReview.complete"].exists)
         XCTAssertFalse(app.buttons["daytimeReview.incomplete"].exists)
+    }
+
+    func testDuplicateMorningWakeExplainsBlockAndOffersAnotherDate() {
+        let app = launch(scenario: "duplicateMorning")
+        openFromToday(app)
+        expectStatus("Review unavailable", app: app)
+        let morning = app.descendants(matching: .any).matching(identifier: "daytimeReview.morning").firstMatch
+        reveal(morning, in: app)
+        XCTAssertTrue(morning.label.contains("More than one morning wake is recorded for this date."))
+        XCTAssertTrue(morning.label.contains("Choose another date or review later."))
+        XCTAssertFalse(app.buttons["daytimeReview.morning.edit"].exists)
+
+        let chooseDate = app.buttons["Choose another date"]
+        reveal(chooseDate, in: app)
+        XCTAssertFalse(app.buttons["daytimeReview.save"].exists)
+        chooseDate.tap()
+        XCTAssertTrue(app.buttons["daytimeReview.select"].waitForExistence(timeout: 5))
     }
 
     func testHistoricalEntryShowsChronologicalNapsAndReachableActionsAtAccessibilitySize() {
@@ -171,7 +197,7 @@ final class DaytimeCoverageReviewUITests: XCTestCase {
         reveal(second, in: app)
         XCTAssertTrue(second.label.contains("12:00"))
         chooseAndSave("daytimeReview.complete", app: app)
-        expectStatus("Nap recording confirmed", app: app)
+        expectStatus("Daytime nap coverage complete", app: app)
         XCTAssertTrue(app.buttons["daytimeReview.later"].isHittable)
     }
 }

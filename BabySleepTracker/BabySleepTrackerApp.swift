@@ -100,6 +100,11 @@ enum DaytimeCoverageUITestFixture {
                                   capture: capture).execute().evidencePublicationSucceeded
         }) else { return }
 
+        if environment["DAYTIME_COVERAGE_SCENARIO"] == "duplicateMorning", let existing = wakes.load() {
+            let duplicate = DailyWakeRecord(day: yesterday, wakeTime: morning.addingTimeInterval(15 * 60))
+            _ = wakes.save(existing + [duplicate])
+        }
+
         if environment["DAYTIME_COVERAGE_SCENARIO"] == "withNaps" {
             let naps = [12, 9].compactMap { hour -> SleepRecord? in
                 guard let start = calendar.date(bySettingHour: hour, minute: 0, second: 0, of: yesterday) else { return nil }

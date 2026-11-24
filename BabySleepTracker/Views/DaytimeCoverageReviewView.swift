@@ -124,7 +124,7 @@ struct DaytimeCoverageReviewView: View {
                 .font(.body.weight(.semibold))
                 .accessibilityIdentifier("daytimeReview.status")
             if let blocker = inspection.blocker {
-                Text(blockerMessage(blocker)).foregroundStyle(.secondary)
+                Text(blockerMessage(blocker, hasWakeWindow: inspection.hasWakeWindow)).foregroundStyle(.secondary)
                 if inspection.status == .invalidated { Text("The previous answer needs a new review.") }
             }
             if let feedback = model.feedback { feedbackText(feedback) }
@@ -136,17 +136,20 @@ struct DaytimeCoverageReviewView: View {
         switch inspection.status {
         case .unknown: return "Awaiting review"
         case .incomplete: return "Recording marked incomplete"
-        case .confirmed: return inspection.naps.isEmpty ? "Zero naps confirmed" : "Nap recording confirmed"
+        case .confirmed: return inspection.naps.isEmpty ? "Zero naps confirmed" : "Daytime nap coverage complete"
         case .invalidated: return "Needs review again"
         }
     }
 
-    private func blockerMessage(_ blocker: DaytimeCoverageInspection.Blocker) -> LocalizedStringKey {
+    private func blockerMessage(_ blocker: DaytimeCoverageInspection.Blocker, hasWakeWindow: Bool) -> LocalizedStringKey {
         switch blocker {
         case .notHistorical: return "Choose a date before today."
         case .storageUnavailable: return "Saved observations could not be opened."
-        case .wakeBoundaries: return "Review both morning wakes before answering."
-        case .conflictingEvidence: return "Conflicting records prevent a review of this day."
+        case .wakeBoundaries: return "Each date needs one verified morning wake before you can save a review."
+        case .conflictingEvidence:
+            return hasWakeWindow
+                ? "Conflicting records prevent a review of this day."
+                : "The two wakes do not form a valid daytime interval. Use Review recorded wake to check past wake times."
         case .unresolvedNap: return "A nap needs an observed end before this day can be reviewed."
         case .crossingNap: return "A nap crosses a morning wake. Check the recorded times."
         case .crossingBreak: return "An awake break crosses a morning wake. Check the recorded times."
@@ -187,7 +190,7 @@ struct DaytimeCoverageReviewView: View {
     private func wakeStatus(_ status: DaytimeCoverageInspection.Boundary.Status) -> LocalizedStringKey {
         switch status {
         case .missing: return "Missing wake"
-        case .conflicting: return "Conflicting wakes are recorded for this date."
+        case .conflicting: return "More than one morning wake is recorded for this date. Choose another date or review later."
         case .invalid: return "This wake cannot be used for the selected date."
         case .pending: return "Wake recovery is pending. Finish the original recording or reopen the app."
         case .unverified: return "Recorded wake needs verification"

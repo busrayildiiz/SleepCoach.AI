@@ -36,7 +36,8 @@ struct AddRecordView: View {
         if napOnly { vm.kind = .dayNap }
         else if let editingRecord { vm.kind = editingRecord.kind }
         else if let initialKind { vm.kind = initialKind }
-        var initialDraft = SleepRecordingDraft(defaultDate: defaultDate, editing: editingRecord)
+        var initialDraft = SleepRecordingDraft(defaultDate: defaultDate, editing: editingRecord,
+                                               requiresNapTimeConfirmation: napOnly && editingRecord == nil)
         if endingOngoing {
             let initialEnd = napOnly ? editingRecord?.date ?? defaultDate : Date()
             initialDraft.prepareForEnding(at: initialEnd, calendar: !napOnly && editingRecord?.kind == .nightSleep ? .current : nil,
@@ -69,6 +70,17 @@ struct AddRecordView: View {
                                           lockedStartCalendar: draft.completionCalendar,
                                           feedback: feedback, validation: validation,
                                           onEndSelection: { draft.applyEndSelection($0) })
+                    if draft.requiresNapTimeConfirmation {
+                        Button {
+                            draft.confirmObservedNapTimes(now: Date())
+                        } label: {
+                            Text(draft.hasConfirmedNapTimes ? "Nap times confirmed" : "Confirm observed start and end")
+                                .multilineTextAlignment(.center)
+                                .frame(minHeight: 44)
+                        }
+                        .disabled(draft.hasConfirmedNapTimes || draft.validationMessage(now: Date()) != nil)
+                        .accessibilityIdentifier("recording.napTimes.confirm")
+                    }
                     if draft.requiresEndConfirmation && !draft.isOngoing {
                         Button(draft.hasConfirmedEnd ? "Observed end confirmed" : "Confirm observed end") {
                             draft.confirmObservedEnd(now: Date())
