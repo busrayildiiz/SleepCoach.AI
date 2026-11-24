@@ -4,6 +4,7 @@ struct AddRecordView: View {
     let defaultDate: Date
     let editingRecord: SleepRecord?
     let reviewUnconfirmed: Bool
+    private let napOnly: Bool
     let onSave: (SleepRecord) -> Bool
     let onNightCompletion: ((SleepRecord) -> NightSleepCompletionResult)?
 
@@ -22,20 +23,24 @@ struct AddRecordView: View {
 
     init(defaultDate: Date, editingRecord: SleepRecord? = nil, vm: AddRecordViewModel,
          initialKind: SleepKind? = nil, endingOngoing: Bool = false, reviewUnconfirmed: Bool = false,
+         napOnly: Bool = false,
          onNightCompletion: ((SleepRecord) -> NightSleepCompletionResult)? = nil,
          onSave: @escaping (SleepRecord) -> Bool) {
         self.defaultDate = defaultDate
         self.editingRecord = editingRecord
         self.reviewUnconfirmed = reviewUnconfirmed
+        self.napOnly = napOnly
         self.onSave = onSave
         self.onNightCompletion = onNightCompletion
         self.vm = vm
-        if let editingRecord { vm.kind = editingRecord.kind }
+        if napOnly { vm.kind = .dayNap }
+        else if let editingRecord { vm.kind = editingRecord.kind }
         else if let initialKind { vm.kind = initialKind }
         var initialDraft = SleepRecordingDraft(defaultDate: defaultDate, editing: editingRecord)
         if endingOngoing {
-            initialDraft.prepareForEnding(at: Date(), calendar: editingRecord?.kind == .nightSleep ? .current : nil,
-                                          requireConfirmation: reviewUnconfirmed && editingRecord?.kind == .nightSleep)
+            let initialEnd = napOnly ? editingRecord?.date ?? defaultDate : Date()
+            initialDraft.prepareForEnding(at: initialEnd, calendar: !napOnly && editingRecord?.kind == .nightSleep ? .current : nil,
+                                          requireConfirmation: napOnly || (reviewUnconfirmed && editingRecord?.kind == .nightSleep))
         }
         _draft = State(initialValue: initialDraft)
     }
@@ -52,14 +57,15 @@ struct AddRecordView: View {
                             saveEnabled: !submission.isSubmitted && draft.isReadyToSubmit && draft.validationMessage(now: Date()) == nil,
                             onCancel: cancel, onSave: save, spacing: 28,
                             cancelTitle: reviewUnconfirmed && !draft.requiresExplicitCancellation ? "Review later" : "Cancel") {
-                if draft.completionCalendar == nil {
+                if !napOnly && draft.completionCalendar == nil {
                     RecordingKindPicker(selection: $vm.kind)
                         .padding(.horizontal, 2)
                         .padding(.top, 8)
                 }
                 VStack(spacing: 24) {
+                    let tracksOngoing = vm.kind == .nightSleep || editingRecord?.isOngoing == true || draft.isOngoing
                     RecordingIntervalCard(start: $draft.start, end: $draft.end,
-                                          ongoing: vm.kind == .nightSleep || editingRecord?.isOngoing == true || draft.isOngoing ? $draft.isOngoing : nil,
+                                          ongoing: !napOnly && tracksOngoing ? $draft.isOngoing : nil,
                                           lockedStartCalendar: draft.completionCalendar,
                                           feedback: feedback, validation: validation,
                                           onEndSelection: { draft.applyEndSelection($0) })
@@ -127,7 +133,7 @@ struct AddRecordView: View {
     private func save() {
         cancellationFailed = false
         let now = Date()
-        let kind = draft.completionCalendar == nil ? vm.kind : (editingRecord?.kind ?? vm.kind)
+        let kind = napOnly ? SleepKind.dayNap : (draft.completionCalendar == nil ? vm.kind : (editingRecord?.kind ?? vm.kind))
         if let original = editingRecord, original.isOngoing, draft.isOngoing,
            original.kind == kind, original.date == draft.start {
             if draft.requiresExplicitCancellation {

@@ -591,6 +591,247 @@ final class TrustedObservationTests: XCTestCase {
         let following = try trustedWake(at: morning.wakeTime.addingTimeInterval(86400))
         return (morning, following)
     }
+
+    func testDateInspectionUsesWakeWindowWithoutRegisteringCoverage() throws {
+        let pair = try coveragePair()
+        let first = SleepRecord(date: pair.0.wakeTime.addingTimeInterval(3600), duration: 30)
+        let afterMidnight = SleepRecord(date: pair.1.day.addingTimeInterval(3600), duration: 30)
+        let nextWindow = SleepRecord(date: pair.1.wakeTime, duration: 30)
+        XCTAssertTrue(sleep.save([afterMidnight, nextWindow, first]))
+        let metadata = defaults.data(forKey: ObservationProvenance.key)
+        let adapter = TrustedObservationAdapter(defaults: defaults)
+
+        let view = adapter.inspectDaytimeReview(for: first.date, at: pair.1.wakeTime, calendar: calendar)
+        XCTAssertEqual(view.day, pair.0.day)
+        XCTAssertEqual(view.following?.day, pair.1.day)
+        XCTAssertEqual(view.morning?.status, .verified)
+        XCTAssertEqual(view.following?.status, .verified)
+        XCTAssertNil(view.blocker)
+        XCTAssertEqual(view.naps.map(\.id), [first.id, afterMidnight.id])
+        XCTAssertTrue(view.naps.allSatisfy(\.usesLegacyDuration))
+        XCTAssertEqual(view.status, .unknown)
+        XCTAssertEqual(defaults.data(forKey: ObservationProvenance.key), metadata)
+        XCTAssertNil(ObservationProvenance.load(defaults)?.coverageGenerations)
+
+        let review = try XCTUnwrap(adapter.prepareDaytimeReview(for: first.date, at: pair.1.wakeTime, calendar: calendar))
+        XCTAssertEqual(review.naps, view.naps)
+        XCTAssertEqual(review.day.morningWakeID, pair.0.id)
+        XCTAssertEqual(review.day.followingWakeID, pair.1.id)
+    }
+
+    func testDateReviewDistinguishesMissingFutureUnverifiedAndDuplicateWakes() throws {
+        let pair = try coveragePair()
+        let adapter = TrustedObservationAdapter(defaults: defaults)
+        let later = pair.1.wakeTime.addingTimeInterval(3 * 3600)
+        func inspect(_ reference: Date) -> DaytimeCoverageInspection {
+            adapter.inspectDaytimeReview(for: pair.0.day, at: reference, calendar: calendar)
+        }
+        XCTAssertEqual(inspect(pair.0.wakeTime).blocker, .notHistorical)
+        XCTAssertEqual(inspect(pair.1.day).following?.status, .future)
+
+        let third = try trustedWake(at: pair.1.wakeTime.addingTimeInterval(86_400))
+        XCTAssertTrue(wake.save([pair.0, third]))
+        XCTAssertEqual(inspect(later).following?.status, .missing)
+        XCTAssertNil(adapter.prepareDaytimeReview(for: pair.0.day, at: later, calendar: calendar))
+
+        let unverified = DailyWakeRecord(day: pair.1.day, wakeTime: pair.1.wakeTime)
+        XCTAssertTrue(wake.save([pair.0, unverified, third]))
+        XCTAssertEqual(inspect(later).following?.status, .unverified)
+        XCTAssertTrue(wake.save([pair.0, unverified, pair.1, third]))
+        XCTAssertEqual(inspect(later).following?.status, .conflicting)
+        XCTAssertNil(adapter.prepareDaytimeReview(for: pair.0.day, at: later, calendar: calendar))
+    }
+
+    func testDateReviewShowsCorrectableNapWhenObservedEndIsUnresolved() throws {
+        let pair = try coveragePair()
+        let nap = SleepRecord(date: pair.0.wakeTime.addingTimeInterval(-60), duration: 0, isOngoing: true)
+        XCTAssertTrue(sleep.save([nap]))
+        let adapter = TrustedObservationAdapter(defaults: defaults)
+
+        let view = adapter.inspectDaytimeReview(for: pair.0.day, at: pair.1.wakeTime, calendar: calendar)
+        XCTAssertTrue(view.hasWakeWindow)
+        XCTAssertEqual(view.blocker, .unresolvedNap)
+        XCTAssertEqual(view.naps.map(\.id), [nap.id])
+        XCTAssertTrue(view.naps.first?.isOngoing == true)
+        XCTAssertNil(view.naps.first?.end)
+        XCTAssertNil(adapter.prepareDaytimeReview(for: pair.0.day, at: pair.1.wakeTime, calendar: calendar))
+    }
+
+    func testDateReviewWaitsForTheOriginalHistoricalWakeJournalToFinish() throws {
+        let morning = try trustedWake(at: now.addingTimeInterval(-4 * 3600))
+        let following = morning.wakeTime.addingTimeInterval(86_400)
+        let reference = following.addingTimeInterval(86_400)
+        let interrupted = DailyWakeRecordPersistence(defaults: defaults, writer: { data, key in
+            self.defaults.set(data, forKey: key)
+            let metadata = try? JSONDecoder().decode(ObservationProvenance.self, from: data)
+            return key != ObservationProvenance.key || metadata?.wakes.values.contains {
+                $0.historicalWakeCalendar != nil
+            } != true
+        })
+        let draft = HistoricalWakeDraft(day: following, calendar: calendar, persistence: interrupted)
+        let workflow = SleepWakeTimeWorkflow(selectedWakeTime: following, now: reference, calendar: calendar,
+            wakeRecords: [], sleepRecords: [], wakePersistence: interrupted, sleepPersistence: sleep)
+        XCTAssertEqual(workflow.recoverHistoricalWake(draft, confirmation: draft.confirmObservedWake(at: following)),
+                       .incomplete)
+
+        let reopened = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let adapter = TrustedObservationAdapter(defaults: reopened)
+        XCTAssertEqual(adapter.inspectDaytimeReview(for: morning.day, at: reference, calendar: calendar).following?.status,
+                       .pending)
+        XCTAssertNil(adapter.prepareDaytimeReview(for: morning.day, at: reference, calendar: calendar))
+        let resumed = SleepWakeTimeWorkflow.resumePending(now: reference, wakePersistence: .init(defaults: reopened),
+                                                          sleepPersistence: .init(defaults: reopened))
+        XCTAssertTrue(resumed?.evidencePublicationSucceeded == true)
+        XCTAssertNotNil(adapter.prepareDaytimeReview(for: morning.day, at: reference, calendar: calendar))
+        XCTAssertTrue(adapter.snapshot(calendar: calendar).daytime.isEmpty)
+    }
+
+    func testInvalidationSurvivesFailedSleepWriteAndReloadWithOldDraftRetired() throws {
+        let pair = try coveragePair()
+        let original = try attest(pair)
+        let oldData = defaults.data(forKey: "sleepRecords")
+        let failing = SleepRecordPersistence(defaults: defaults, writer: { data, key in
+            guard key != "sleepRecords" else { return false }
+            self.defaults.set(data, forKey: key)
+            return true
+        })
+        XCTAssertFalse(failing.save([try entered()]))
+        XCTAssertEqual(defaults.data(forKey: "sleepRecords"), oldData)
+        let reopened = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let adapter = TrustedObservationAdapter(defaults: reopened)
+        XCTAssertEqual(adapter.inspectDaytimeReview(for: pair.0.day, at: pair.1.wakeTime,
+                                                    calendar: calendar).status, .invalidated)
+        XCTAssertTrue(snapshot.daytime.isEmpty)
+        XCTAssertFalse(original.submit(.allNapsRecorded, at: pair.1.wakeTime, using: wake.storage, calendar: calendar))
+
+        let fresh = try XCTUnwrap(adapter.prepareDaytimeReview(for: pair.0.day, at: pair.1.wakeTime, calendar: calendar))
+        let newStorage = ObservationStorage(defaults: reopened)
+        XCTAssertTrue(fresh.draft.submit(.allNapsRecorded, at: pair.1.wakeTime, using: newStorage, calendar: calendar))
+        XCTAssertTrue(fresh.draft.withdraw(using: newStorage, calendar: calendar))
+        XCTAssertEqual(adapter.inspectDaytimeReview(for: pair.0.day, at: pair.1.wakeTime,
+                                                    calendar: calendar).status, .unknown)
+        XCTAssertNil(ObservationProvenance.load(reopened)?.invalidatedDaytimeReviews)
+    }
+
+    func testInvalidatedReviewRemainsVisibleAfterBoundaryReplacement() throws {
+        let pair = try coveragePair()
+        try attest(pair)
+        let adapter = TrustedObservationAdapter(defaults: defaults)
+        XCTAssertTrue(wake.save([pair.1]))
+        let missing = adapter.inspectDaytimeReview(for: pair.0.day, at: pair.1.wakeTime, calendar: calendar)
+        XCTAssertEqual(missing.status, .invalidated)
+        XCTAssertEqual(missing.morning?.status, .missing)
+
+        let replacedWake = try trustedWake(at: pair.0.wakeTime)
+        XCTAssertNotEqual(replacedWake.id, pair.0.id)
+        let review = try XCTUnwrap(adapter.prepareDaytimeReview(for: pair.0.day, at: pair.1.wakeTime, calendar: calendar))
+        XCTAssertEqual(review.savedCoverage, .unknown)
+        XCTAssertTrue(review.draft.submit(.notAllNapsRecorded, at: pair.1.wakeTime, using: wake.storage, calendar: calendar))
+        XCTAssertEqual(adapter.inspectDaytimeReview(for: pair.0.day, at: pair.1.wakeTime,
+                                                    calendar: calendar).status, .incomplete)
+        XCTAssertNil(ObservationProvenance.load(defaults)?.invalidatedDaytimeReviews)
+    }
+
+    func testCompetingReviewCannotWithdrawAReplacementAnswerWithTheSameValue() throws {
+        let pair = try coveragePair()
+        let original = try attest(pair)
+        let adapter = TrustedObservationAdapter(defaults: defaults)
+        let competing = try XCTUnwrap(adapter.prepareDaytimeReview(for: pair.0.day, at: pair.1.wakeTime, calendar: calendar))
+        XCTAssertTrue(original.submit(.notAllNapsRecorded, at: pair.1.wakeTime, using: wake.storage, calendar: calendar))
+        XCTAssertTrue(original.submit(.allNapsRecorded, at: pair.1.wakeTime, using: wake.storage, calendar: calendar))
+        XCTAssertEqual(competing.draft.withdrawAnswer(using: wake.storage, calendar: calendar), .stale)
+        XCTAssertEqual(competing.draft.saveAnswer(.notAllNapsRecorded, at: pair.1.wakeTime, using: wake.storage,
+                                                  calendar: calendar), .stale)
+        XCTAssertEqual(snapshot.daytime.first?.coverage, .confirmedComplete)
+    }
+
+    func testCoverageOperationsAcknowledgeOnlyTheirOwnPersistedReceipts() throws {
+        let pair = try coveragePair()
+        let adapter = TrustedObservationAdapter(defaults: defaults)
+        let review = try XCTUnwrap(adapter.prepareDaytimeReview(for: pair.0.day, at: pair.1.wakeTime, calendar: calendar))
+        let ambiguousStorage = ObservationStorage(defaults: defaults, writer: { data, key in
+            self.defaults.set(data, forKey: key)
+            return false
+        })
+        XCTAssertEqual(review.draft.saveAnswer(.allNapsRecorded, at: pair.1.wakeTime, using: ambiguousStorage,
+                                               calendar: calendar), .committed)
+        XCTAssertEqual(review.draft.withdrawAnswer(using: ambiguousStorage, calendar: calendar), .committed)
+        XCTAssertTrue(snapshot.daytime.isEmpty)
+    }
+
+    func testReviewModelDoesNotSubmitWithoutChoiceAndDeferralPreservesTheAnswer() throws {
+        let pair = try coveragePair()
+        try attest(pair)
+        let original = defaults.data(forKey: ObservationProvenance.key)
+        var model = DaytimeCoverageReviewModel(storage: wake.storage)
+        model.start(day: pair.0.day, at: pair.1.wakeTime, calendar: calendar)
+        XCTAssertFalse(model.canSave)
+        XCTAssertTrue(model.canWithdraw)
+        model.save(at: pair.1.wakeTime, calendar: calendar)
+        model.choose(.notAllNapsRecorded)
+        XCTAssertTrue(model.canSave)
+        model.deferReview()
+
+        XCTAssertFalse(model.canSave)
+        XCTAssertNil(model.selection)
+        XCTAssertEqual(defaults.data(forKey: ObservationProvenance.key), original)
+    }
+
+    func testReviewModelKeepsTheChoiceForRetryWhileEvidenceIsCurrent() throws {
+        let pair = try coveragePair()
+        var allowWrites = true
+        let storage = ObservationStorage(defaults: defaults, writer: { data, key in
+            guard allowWrites else { return false }
+            self.defaults.set(data, forKey: key)
+            return true
+        })
+        var model = DaytimeCoverageReviewModel(storage: storage)
+        model.start(day: pair.0.day, at: pair.1.wakeTime, calendar: calendar)
+        model.choose(.notAllNapsRecorded)
+        allowWrites = false
+        model.save(at: pair.1.wakeTime, calendar: calendar)
+        XCTAssertEqual(model.feedback, .saveFailed)
+        XCTAssertEqual(model.inspection?.status, .unknown)
+        XCTAssertTrue(model.canSave)
+        allowWrites = true
+        model.save(at: pair.1.wakeTime, calendar: calendar)
+        XCTAssertEqual(model.feedback, .saved)
+        XCTAssertEqual(model.inspection?.status, .incomplete)
+        XCTAssertNil(model.selection)
+        XCTAssertTrue(model.canWithdraw)
+        allowWrites = false
+        model.withdraw(at: pair.1.wakeTime, calendar: calendar)
+        XCTAssertEqual(model.feedback, .withdrawalFailed)
+        XCTAssertEqual(model.inspection?.status, .incomplete)
+        allowWrites = true
+        model.withdraw(at: pair.1.wakeTime, calendar: calendar)
+        XCTAssertEqual(model.feedback, .withdrawn)
+        XCTAssertEqual(model.inspection?.status, .unknown)
+    }
+
+    func testReviewModelDropsSelectionOnEditRevertAndCalendarChange() throws {
+        let pair = try coveragePair()
+        var model = DaytimeCoverageReviewModel(storage: wake.storage)
+        model.start(day: pair.0.day, at: pair.1.wakeTime, calendar: calendar)
+        model.choose(.allNapsRecorded)
+        XCTAssertTrue(sleep.save([try entered()]))
+        XCTAssertTrue(sleep.save([]))
+        model.save(at: pair.1.wakeTime, calendar: calendar)
+        XCTAssertEqual(model.feedback, .changed)
+        XCTAssertNil(model.selection)
+        XCTAssertTrue(snapshot.daytime.isEmpty)
+        model.startAgain(at: pair.1.wakeTime, calendar: calendar)
+        model.choose(.allNapsRecorded)
+
+        var shifted = calendar!
+        shifted.timeZone = TimeZone(secondsFromGMT: 3600)!
+        model.refresh(at: pair.1.wakeTime, calendar: shifted)
+        XCTAssertEqual(model.feedback, .calendarChanged)
+        XCTAssertNil(model.inspection)
+        model.refresh(at: pair.1.wakeTime, calendar: calendar)
+        XCTAssertFalse(model.canSave)
+    }
+
     @discardableResult
     private func attest(_ pair: (DailyWakeRecord, DailyWakeRecord), complete: Bool = true) throws -> DaytimeCoverageDraft {
         let draft = try XCTUnwrap(TrustedObservationAdapter(defaults: defaults).beginDaytimeConfirmation(

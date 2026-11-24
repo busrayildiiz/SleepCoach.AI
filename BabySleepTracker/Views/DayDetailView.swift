@@ -68,6 +68,7 @@ struct DayDetailView: View {
                         Button("Review Morning Wake") { showHistoricalWake = true }
                             .accessibilityIdentifier("history.wake.review")
                     }
+                    daytimeReviewLink
                     allCards
                 }
                 .padding(.horizontal, 16)
@@ -148,6 +149,22 @@ struct DayDetailView: View {
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in now = Date() }
         }
         .tint(Color(red: 0.45, green: 0.35, blue: 0.92))
+    }
+
+    private var daytimeReviewLink: some View {
+        let historical = cal.startOfDay(for: day) < cal.startOfDay(for: now)
+        let title: LocalizedStringKey = historical ? "Review daytime recording" : "Review a past day"
+        return NavigationLink {
+            DaytimeCoverageReviewView(initialDay: historical ? day : nil, initialCalendar: cal, onRecordSaved: onRecordUpsert)
+        } label: {
+            Label(title, systemImage: "checklist")
+                .font(.body.weight(.semibold))
+                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                .padding(.horizontal, 14)
+                .background(RecordingColor.surface, in: RoundedRectangle(cornerRadius: 14))
+        }
+        .foregroundStyle(RecordingColor.accent)
+        .accessibilityIdentifier("daytimeReview.open")
     }
 
     // MARK: - All Cards (kronolojik)
@@ -239,7 +256,7 @@ struct DayDetailView: View {
     }
 }
 
-private struct HistoricalWakeEditor: View {
+struct HistoricalWakeEditor: View {
     @Environment(\.dismiss) private var dismiss
     @State private var draft: HistoricalWakeDraft
     @State private var selected: Date
@@ -248,10 +265,12 @@ private struct HistoricalWakeEditor: View {
     @State private var cancellationBlocked = false
     @State private var message: String?
     @State private var confirmation: HistoricalWakeConfirmation?
+    let fixedDay: Bool
     let onSaved: (Date, Calendar) -> Void
     private let persistence = DailyWakeRecordPersistence()
 
-    init(day: Date, calendar: Calendar, onSaved: @escaping (Date, Calendar) -> Void) {
+    init(day: Date, calendar: Calendar, fixedDay: Bool = false, onSaved: @escaping (Date, Calendar) -> Void) {
+        self.fixedDay = fixedDay
         self.onSaved = onSaved
         let initial = HistoricalWakeDraft(day: day, calendar: calendar, persistence: .init())
         _draft = State(initialValue: initial)
@@ -266,12 +285,27 @@ private struct HistoricalWakeEditor: View {
         return draft.candidates.isEmpty ? "Record Morning Wake" : "Confirm or Correct Morning Wake"
     }
 
+    @ViewBuilder
+    private var wakePicker: some View {
+        if fixedDay, let interval = draft.calendar.dateInterval(of: .day, for: draft.day) {
+            let lastInstant = Date(timeIntervalSinceReferenceDate: interval.end.timeIntervalSinceReferenceDate.nextDown)
+            let style = Date.FormatStyle(date: .long, time: .omitted, calendar: draft.calendar, timeZone: draft.calendar.timeZone)
+            Text(draft.day, format: style)
+                .accessibilityAddTraits(.isHeader)
+            DatePicker("Observed wake time", selection: $selected, in: draft.day...lastInstant,
+                       displayedComponents: .hourAndMinute)
+                .accessibilityIdentifier("history.wake.dateTime")
+        } else {
+            DatePicker("Observed wake date and time", selection: $selected,
+                       in: ...draft.calendar.startOfDay(for: Date()).addingTimeInterval(-1))
+                .accessibilityIdentifier("history.wake.dateTime")
+        }
+    }
+
     var body: some View {
         NavigationStack {
             Form {
-                DatePicker("Observed wake date and time", selection: $selected,
-                           in: ...draft.calendar.startOfDay(for: Date()).addingTimeInterval(-1))
-                    .accessibilityIdentifier("history.wake.dateTime")
+                wakePicker
                     .disabled(cancellationBlocked || outcome?.blocksEditing == true)
                     .onChange(of: selected) { value in
                         confirmedSelection = nil
@@ -283,7 +317,8 @@ private struct HistoricalWakeEditor: View {
                                 return
                             }
                             confirmation = nil
-                            draft = HistoricalWakeDraft(day: value, calendar: draft.calendar, persistence: persistence)
+                            draft = HistoricalWakeDraft(day: fixedDay ? draft.day : value,
+                                                       calendar: draft.calendar, persistence: persistence)
                         }
                     }
 
@@ -345,7 +380,8 @@ private struct HistoricalWakeEditor: View {
                     message = "Cancellation could not be saved. Try again."
                     return
                 }
-                draft = HistoricalWakeDraft(day: selected, calendar: draft.calendar, persistence: persistence)
+                draft = HistoricalWakeDraft(day: fixedDay ? draft.day : selected,
+                                           calendar: draft.calendar, persistence: persistence)
                 confirmation = nil
                 confirmedSelection = nil
             }
