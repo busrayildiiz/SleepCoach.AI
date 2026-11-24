@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct InsightsView: View {
+    @Environment(\.isTabActive) private var isTabActive
     @Binding var sleepConfirmation: StillSleepingConfirmation?
 
     private enum CoachTab: String, CaseIterable {
@@ -26,43 +27,44 @@ struct InsightsView: View {
     @State private var manualActionOverrides: [String: Bool] = [:]
     @StateObject private var orchestrator = SleepCoachOrchestrator.shared
     
-    @AppStorage("babyName") private var babyName: String = "Baby"
+    @SecureStorage("babyName") private var babyName: String = "Baby"
 
     var body: some View {
-        NavigationStack {
-            ScrollView(showsIndicators: false) {
-                VStack(spacing: 12) {
-                    headerSection
-                    tabPicker
-                    sleepDaySummary
+        ScrollView(showsIndicators: false) {
+            VStack(spacing: 12) {
+                headerSection
+                tabPicker
+                sleepDaySummary
 
-                    if selectedTab == .overview {
-                        coachHeroCard
-                        if orchestrator.snapshot?.hasCurrentSleep != true {
-                            if actionTargetTime != nil { takeActionCard }
-                            watchForSignsCard
-                        }
-                        aiCoachNoteCard
-                        learningProgressOverviewCard
-                    } else {
-                        predictionLogicStack
+                if selectedTab == .overview {
+                    coachHeroCard
+                    if orchestrator.snapshot?.hasCurrentSleep != true {
+                        if actionTargetTime != nil { takeActionCard }
+                        watchForSignsCard
                     }
+                    aiCoachNoteCard
+                    learningProgressOverviewCard
+                } else {
+                    predictionLogicStack
                 }
-                
-                .padding(.horizontal, 16)
-                .padding(.top, 18)
-                .padding(.bottom, 112)
             }
-            .background(CoachColor.background)
-            .navigationBarHidden(true)
-            .onAppear {
-                orchestrator.loadCachedLLMResponse()
-                refresh()
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .sleepRecordsDidChange)) { _ in refresh() }
-            .onReceive(NotificationCenter.default.publisher(for: .dailyWakeRecordsDidChange)) { _ in refresh() }
-            .environment(\.locale, Locale(identifier: "en_US"))
+
+            .padding(.horizontal, 16)
+            .padding(.top, 18)
+            .padding(.bottom, 112)
+            .accessibilityElement(children: .contain)
+            .accessibilityHidden(!isTabActive)
         }
+        .background(CoachColor.background)
+        .onAppear {
+            orchestrator.loadCachedLLMResponse()
+            refresh()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .sleepRecordsDidChange)
+            .receive(on: RunLoop.main)) { _ in refresh() }
+        .onReceive(NotificationCenter.default.publisher(for: .dailyWakeRecordsDidChange)
+            .receive(on: RunLoop.main)) { _ in refresh() }
+        .environment(\.locale, Locale(identifier: "en_US"))
     }
 
     @ViewBuilder

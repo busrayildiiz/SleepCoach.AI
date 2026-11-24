@@ -26,6 +26,7 @@ struct LearningEligibilityEvaluator {
                 recentQualifyingDayCount: recentCount, latestQualifyingDayAge: latestAge,
                 evidenceIdentity: identity)
         }
+        guard evidence.storageIsReadable else { return result(.invalidEvidence, [.storageUnavailable]) }
         guard let policy else { return result(.unconfiguredPolicy, [.policyUnavailable]) }
         guard policy.isConfigured else { return result(.invalidPolicy, [.policyInvalid]) }
         // Calendar operations require finite timestamps. Reject malformed explicit input before
@@ -284,7 +285,7 @@ struct LearningEligibilityEvaluator {
              String($0.recentDayCount), String($0.minimumRecentQualifyingDays), String($0.maximumLatestDayAge),
              String($0.supportedAgeMonths.lowerBound), String($0.supportedAgeMonths.upperBound)]
         } ?? ["unconfigured"]
-        return pack(["learning-evidence-v2", date(birthDate), date(now), String(describing: calendar.identifier),
+        return pack([evidence.storageIsReadable ? "learning-evidence-v2" : "learning-evidence-unreadable-v1", date(birthDate), date(now), String(describing: calendar.identifier),
                      calendar.timeZone.identifier, calendar.locale?.identifier ?? "nil",
                      String(calendar.firstWeekday), String(calendar.minimumDaysInFirstWeek),
                      pack(policyParts), pack(sleeps), pack(wakes), pack(confirmations)])

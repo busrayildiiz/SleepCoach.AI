@@ -335,7 +335,7 @@ extension SleepAccountingRegressionTests {
     func testNextNapUsesExactObservedEndRatherThanNetSleep() {
         let nap = sleep("2026-09-01T10:00:15Z", "2026-09-01T11:30:42Z", kind: .dayNap)
         let wake = awake("2026-09-01T10:30:00Z", "2026-09-01T10:50:00Z", parent: nap)
-        let result = DefaultDaytimePredictionAgent(profileProvider: DefaultAgeBasedSleepProfileProvider(), calendar: calendar())
+        let result = DefaultDaytimePredictionAgent(profileProvider: DefaultAgeBasedSleepProfileProvider(), calendar: calendar(), defaults: TestPrivateDataStore())
             .predictNextNap(pattern: nil, todayRecords: [nap, wake], wakeRecords: [], ageMonths: 9,
                             trackedDays: 0, now: date("2026-09-01T12:00:00Z"))
         XCTAssertEqual(result.nextNapTime, date("2026-09-01T15:00:42Z"))

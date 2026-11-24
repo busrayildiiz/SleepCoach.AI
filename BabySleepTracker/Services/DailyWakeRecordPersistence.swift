@@ -1,17 +1,18 @@
 import Foundation
 
 struct DailyWakeRecordPersistence {
-    let defaults: UserDefaults
+    let defaults: any PrivateDataStore
     let storage: ObservationStorage
     private let key = "dailyWakeRecords_v1"
 
-    init(defaults: UserDefaults = .standard, writer: ((Data, String) -> Bool)? = nil) {
+    init(defaults: any PrivateDataStore = SecureDataStore.shared, writer: ((Data, String) -> Bool)? = nil) {
         self.defaults = defaults
         storage = ObservationStorage(defaults: defaults, writer: writer)
     }
 
     func load() -> [DailyWakeRecord]? {
-        guard let data = defaults.data(forKey: key) else { return nil }
+        let generation = defaults.generationToken
+        guard defaults.isAvailable, let data = defaults.data(forKey: key) else { return nil }
         guard var records = try? JSONDecoder().decode([DailyWakeRecord].self, from: data) else { return nil }
         let metadata = ObservationProvenance.load(defaults)
         for index in records.indices {
@@ -20,7 +21,7 @@ struct DailyWakeRecordPersistence {
                 records[index].persistedRevision = entry.revision
             }
         }
-        return records
+        return defaults.isAvailable && defaults.generationToken == generation ? records : nil
     }
 
     @discardableResult
@@ -29,7 +30,8 @@ struct DailyWakeRecordPersistence {
         ObservationStorage.lock.lock()
         defer { ObservationStorage.lock.unlock() }
         // Never replace unreadable user observations with an empty recovery snapshot.
-        guard defaults.data(forKey: key) == nil || load() != nil,
+        let generation = defaults.generationToken
+        guard defaults.isAvailable, defaults.data(forKey: key) == nil || load() != nil,
               Set(records.map(\.id)).count == records.count else { return false }
         let expectedData = defaults.data(forKey: key)
         let expectedMetadata = defaults.data(forKey: ObservationProvenance.key)
@@ -61,7 +63,7 @@ struct DailyWakeRecordPersistence {
         provenance.reconcile(wakes: records)
         var prepared = true
         if let beforeWrite { ObservationStorage.lock.withoutLock { prepared = beforeWrite(provenance) } }
-        guard prepared, defaults.data(forKey: key) == expectedData,
+        guard defaults.isAvailable, defaults.generationToken == generation, prepared, defaults.data(forKey: key) == expectedData,
               defaults.data(forKey: ObservationProvenance.key) == expectedMetadata,
               completionOperationID.map({ ObservationStorage.completionIsActive($0, defaults: defaults) }) ?? true else { return false }
         // Retain a cancellation tombstone through failed/interrupted replacement writes.
@@ -80,15 +82,18 @@ struct DailyWakeRecordPersistence {
         guard storage.save(records, key: key, provenance: provenance, expectedData: expectedData) else { return false }
         if let cancellation, ObservationCompletionPending.load(defaults)?.operationID == cancellation.operationID {
             defaults.removeObject(forKey: ObservationCompletionPending.key)
+            guard defaults.isAvailable, defaults.data(forKey: ObservationCompletionPending.key) == nil else { return false }
             guard storage.finishRetirementIfRequested(cancellation.operationID, reservation: cancellation.creation) else { return false }
         }
         if let standaloneCancellation, StandaloneWakePending.load(defaults)?.operationID == standaloneCancellation.operationID {
             defaults.removeObject(forKey: StandaloneWakePending.key)
+            guard defaults.isAvailable, defaults.data(forKey: StandaloneWakePending.key) == nil else { return false }
             guard storage.finishRetirementIfRequested(standaloneCancellation.operationID, reservation: standaloneCancellation.creation) else { return false }
         }
         if records.count < old.count { _ = storage.pruneRecoveryArchives(removingRaw: true) }
 
+        guard defaults.isAvailable else { return false }
         ObservationStorage.post(.dailyWakeRecordsDidChange)
-        return true
+        return defaults.isAvailable && defaults.generationToken == generation
     }
 }

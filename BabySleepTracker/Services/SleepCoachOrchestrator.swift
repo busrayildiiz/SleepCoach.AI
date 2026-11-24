@@ -114,6 +114,9 @@ final class SleepCoachOrchestrator: ObservableObject {
     private let llmAgent: SleepCoachLLMAgentProtocol
     private let ageCalculator: BabyAgeCalculating?
     private let calendar: Calendar
+    private let defaults: any PrivateDataStore
+    private let cloudAIPrivacy: CloudAIPrivacy?
+    private var privacyObserver: NSObjectProtocol?
     private var activeLLMTask: Task<Void, Never>?
     private var llmRequestToken = 0
     private var previousTriggerSleepMinutes: Int?
@@ -143,13 +146,14 @@ final class SleepCoachOrchestrator: ObservableObject {
            overtiredCalc:   OvertiredCalculator? = nil,
            profileProvider: AgeBasedSleepProfileProviding  = DefaultAgeBasedSleepProfileProvider(),
            ageCalculator: BabyAgeCalculating? = nil,
-           calendar: Calendar = .autoupdatingCurrent
+           calendar: Calendar = .autoupdatingCurrent,
+           defaults: any PrivateDataStore = SecureDataStore.shared
 
        ) {
            self.phaseAgent      = phaseAgent
            self.patternAgent    = patternAgent
-           self.daytimeAgent    = daytimeAgent ?? DefaultDaytimePredictionAgent(profileProvider: profileProvider, calendar: calendar)
-           self.nightAgent      = nightAgent ?? DefaultNightPredictionAgent(profileProvider: profileProvider, calendar: calendar)
+           self.daytimeAgent    = daytimeAgent ?? DefaultDaytimePredictionAgent(profileProvider: profileProvider, calendar: calendar, defaults: defaults)
+           self.nightAgent      = nightAgent ?? DefaultNightPredictionAgent(profileProvider: profileProvider, calendar: calendar, defaults: defaults)
            self.transitionAgent = transitionAgent
            self.insightAgent    = insightAgent
            self.llmAgent        = llmAgent
@@ -157,12 +161,33 @@ final class SleepCoachOrchestrator: ObservableObject {
            self.profileProvider = profileProvider
            self.ageCalculator = ageCalculator
            self.calendar = calendar
+           self.defaults = defaults
+           self.cloudAIPrivacy = (llmAgent as? DefaultSleepCoachLLMAgent)?.privacyController
+           if let cloudAIPrivacy {
+               privacyObserver = NotificationCenter.default.addObserver(
+                   forName: .cloudAIConsentDidChange, object: cloudAIPrivacy, queue: nil
+               ) { [weak self] _ in
+                   Task { @MainActor [weak self] in self?.clearCloudAIState() }
+               }
+           }
 
        }
+
+    deinit {
+        activeLLMTask?.cancel()
+        if let privacyObserver { NotificationCenter.default.removeObserver(privacyObserver) }
+    }
 
        // MARK: - Generate Snapshot
     func generate(now: Date = Date(), confirmation: StillSleepingConfirmation? = nil,
                   requestCoaching: Bool = true) {
+        let generation = defaults.generationToken
+        guard defaults.isAvailable,
+              defaults.data(forKey: "sleepRecords") == nil || SleepRecordPersistence(defaults: defaults).load() != nil,
+              defaults.data(forKey: "dailyWakeRecords_v1") == nil || DailyWakeRecordPersistence(defaults: defaults).load() != nil else {
+            clearPrivateState()
+            return
+        }
         isLoading = true
         defer { isLoading = false }
 
@@ -173,10 +198,7 @@ final class SleepCoachOrchestrator: ObservableObject {
         let babyName = loadBabyName()
 
         guard let birthDate = loadBabyBirthDate() else {
-            if requestCoaching { previousTriggerSleepMinutes = nil }
-            updateLLMSource(nil)
-            latestGeneratedRecords = []
-            snapshot = nil
+            clearPrivateState()
             return
         }
 
@@ -187,7 +209,7 @@ final class SleepCoachOrchestrator: ObservableObject {
         )
 
         // 2. Temel metrikler
-        let evaluation = SleepEvaluation(now: now, calendar: evaluationCalendar, routine: .load(defaults: .standard),
+        let evaluation = SleepEvaluation(now: now, calendar: evaluationCalendar, routine: .load(defaults: defaults),
                                          confirmation: confirmation, instant: ContinuousClock.now)
         let planning = SleepPredictionContext(records: records, wakes: wakeRecords, evaluation: evaluation)
         let accounting = planning.accounting
@@ -329,6 +351,7 @@ final class SleepCoachOrchestrator: ObservableObject {
             evaluationWake: planning.assessment.recordedWake?.wakeTime,
             sleepAssessment: planning.assessment
         )
+        guard defaults.isAvailable, defaults.generationToken == generation else { clearPrivateState(); return }
         latestGeneratedRecords = records
         updateLLMSource(llmSourceFingerprint(snapshot: result, records: records))
         self.snapshot = result
@@ -368,27 +391,27 @@ final class SleepCoachOrchestrator: ObservableObject {
             // MARK: - Data Loaders
 
             private func loadRecords() -> [SleepRecord] {
-                SleepRecordPersistence().load() ?? []
+                SleepRecordPersistence(defaults: defaults).load() ?? []
             }
             private func loadWakeRecords() -> [DailyWakeRecord] {
-                guard let data = UserDefaults.standard.data(forKey: "dailyWakeRecords_v1"),
+                guard let data = defaults.data(forKey: "dailyWakeRecords_v1"),
                       let decoded = try? JSONDecoder().decode([DailyWakeRecord].self, from: data)
                 else { return [] }
                 return decoded
             }
 
             private func loadBabyName() -> String {
-                let name = UserDefaults.standard.string(forKey: "babyName")?
+                let name = defaults.string(forKey: "babyName")?
                     .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 return name.isEmpty ? "Baby" : name
             }
 
     private func loadBabyBirthDate() -> Date? {
-        if let date = UserDefaults.standard.object(forKey: "babyBirthDate") as? Date {
+        if let date = defaults.object(forKey: "babyBirthDate") as? Date {
             return date
         }
 
-        if let timestamp = UserDefaults.standard.object(forKey: "babyBirthDate") as? Double {
+        if let timestamp = defaults.object(forKey: "babyBirthDate") as? Double {
             return Date(timeIntervalSince1970: timestamp)
         }
 
@@ -408,8 +431,8 @@ final class SleepCoachOrchestrator: ObservableObject {
             // MARK: - Cache
 
             private func cache(_ snapshot: OrchestratedSnapshot) {
-                // Sadece basit değerleri cache'le — Date'ler UserDefaults'a direkt gider
-                UserDefaults.standard.set(
+                // Cache metadata shares the same protected store as observations.
+                defaults.set(
                     snapshot.generatedAt.timeIntervalSince1970,
                     forKey: "orchestrator_lastGenerated"
                 )
@@ -700,6 +723,25 @@ final class SleepCoachOrchestrator: ObservableObject {
     }
     // MARK: - LLM
 
+    func clearCloudAIState() {
+        activeLLMTask?.cancel()
+        activeLLMTask = nil
+        llmRequestToken += 1
+        llmResponse = nil
+        isLLMLoading = false
+        llmCacheState = .expired
+        cachedLLMSourceFingerprint = nil
+    }
+
+    func clearPrivateState() {
+        clearCloudAIState()
+        previousTriggerSleepMinutes = nil
+        snapshot = nil
+        latestGeneratedRecords = []
+        currentLLMSourceFingerprint = nil
+        isLoading = false
+    }
+
     private func updateLLMSource(_ fingerprint: String?) {
         if currentLLMSourceFingerprint != fingerprint {
             currentLLMSourceFingerprint = fingerprint
@@ -718,18 +760,23 @@ final class SleepCoachOrchestrator: ObservableObject {
         records: [SleepRecord],
         trigger: LLMTrigger
     ) {
+        guard defaults.isAvailable else { clearPrivateState(); return }
+        guard cloudAIPrivacy?.hasConsent != false else { clearCloudAIState(); return }
         guard let sourceFingerprint = currentLLMSourceFingerprint else { return }
         activeLLMTask?.cancel()
         llmRequestToken += 1
         let requestToken = llmRequestToken
+        let storageGeneration = defaults.generationToken
         isLLMLoading = true
+
         activeLLMTask = Task { [weak self] in
             await self?.callLLM(
                 snapshot: snapshot,
                 records: records,
                 trigger: trigger,
                 sourceFingerprint: sourceFingerprint,
-                requestToken: requestToken
+                requestToken: requestToken,
+                storageGeneration: storageGeneration
             )
         }
     }
@@ -739,24 +786,56 @@ final class SleepCoachOrchestrator: ObservableObject {
         records:  [SleepRecord],
         trigger:  LLMTrigger,
         sourceFingerprint: String,
-        requestToken: Int
+        requestToken: Int,
+        storageGeneration: UUID?
     ) async {
+        guard requestToken == llmRequestToken, !Task.isCancelled else { return }
+        guard defaults.isAvailable, defaults.generationToken == storageGeneration else { clearPrivateState(); return }
+        let permission = cloudAIPrivacy?.permissionForRequest()
+        guard cloudAIPrivacy == nil || permission != nil else { clearCloudAIState(); return }
         let response = await llmAgent.generateInsight(
             snapshot: snapshot,
             records:  records,
             trigger:  trigger
         )
 
-        guard requestToken == llmRequestToken else { return }
+        guard requestToken == llmRequestToken, !Task.isCancelled else { return }
         defer {
-            isLLMLoading = false
-            activeLLMTask = nil
+            if requestToken == llmRequestToken {
+                isLLMLoading = false
+                activeLLMTask = nil
+            }
         }
         guard sourceFingerprint == currentLLMSourceFingerprint else { return }
+        guard defaults.isAvailable, defaults.generationToken == storageGeneration else { clearPrivateState(); return }
+        if let cloudAIPrivacy, let permission, !cloudAIPrivacy.stillAllows(permission) {
+            clearCloudAIState()
+            return
+        }
 
         if let response {
-            llmResponse = response
-            cacheLLMResponse(response, sourceFingerprint: sourceFingerprint)
+            let publish = { [self] in
+                guard requestToken == llmRequestToken, sourceFingerprint == currentLLMSourceFingerprint,
+                      cacheLLMResponse(response, sourceFingerprint: sourceFingerprint, generation: storageGeneration),
+                      defaults.isAvailable, defaults.generationToken == storageGeneration,
+                      requestToken == llmRequestToken else { return false }
+                llmResponse = response
+                updateLLMCacheState()
+                return true
+            }
+            let published: Bool
+            if let cloudAIPrivacy, let permission {
+                // Serialize receipt validation, cache commit and publication with
+                // revoke's cleanup so a late response cannot recreate that cache.
+                published = cloudAIPrivacy.performIfAllowed(permission, action: publish)
+            } else {
+                published = publish()
+            }
+            guard published else {
+                if defaults.isAvailable, defaults.generationToken == storageGeneration { clearCloudAIState() }
+                else { clearPrivateState() }
+                return
+            }
         }
 
     }
@@ -811,57 +890,112 @@ final class SleepCoachOrchestrator: ObservableObject {
 
     // MARK: - LLM Cache
 
-    private func cacheLLMResponse(_ response: LLMCoachResponse, sourceFingerprint: String) {
-        UserDefaults.standard.set(
-            response.generatedAt.timeIntervalSince1970,
-            forKey: "llm_lastGenerated"
-        )
-        // Mesajları da sakla
-        UserDefaults.standard.set(response.coachMessage,   forKey: "llm_coachMessage")
-        UserDefaults.standard.set(response.patternInsight, forKey: "llm_patternInsight")
-        UserDefaults.standard.set(response.confidenceNote, forKey: "llm_confidenceNote")
-        UserDefaults.standard.set(sourceFingerprint, forKey: "llm_sourceFingerprint")
-        cachedLLMSourceFingerprint = sourceFingerprint
-        if let alert = response.alert {
-            UserDefaults.standard.set(alert, forKey: "llm_alert")
-        } else {
-            UserDefaults.standard.removeObject(forKey: "llm_alert")
+    private func cacheLLMResponse(_ response: LLMCoachResponse, sourceFingerprint: String, generation: UUID?) -> Bool {
+        guard defaults.isAvailable, defaults.generationToken == generation else { return false }
+        if let protectedStore = defaults as? SecureDataStore {
+            var values: [String: Any] = [
+                "llm_lastGenerated": response.generatedAt.timeIntervalSince1970,
+                "llm_coachMessage": response.coachMessage,
+                "llm_patternInsight": response.patternInsight,
+                "llm_confidenceNote": response.confidenceNote,
+                "llm_sourceFingerprint": sourceFingerprint
+            ]
+            if let alert = response.alert { values["llm_alert"] = alert }
+            do {
+                try protectedStore.write(values, removing: response.alert == nil ? ["llm_alert"] : [], ifGeneration: generation)
+            } catch { return false }
+            guard defaults.isAvailable, defaults.generationToken == generation,
+                  defaults.string(forKey: "llm_sourceFingerprint") == sourceFingerprint,
+                  defaults.string(forKey: "llm_coachMessage") == response.coachMessage else { return false }
+            cachedLLMSourceFingerprint = sourceFingerprint
+            updateLLMCacheState()
+            return true
         }
+        // The timestamp is the completion marker. An interrupted cache write
+        // must not be loaded later as a complete response.
+        defaults.removeObject(forKey: "llm_lastGenerated")
+        guard defaults.isAvailable, defaults.object(forKey: "llm_lastGenerated") == nil else { return false }
+        defaults.set(response.coachMessage,   forKey: "llm_coachMessage")
+        defaults.set(response.patternInsight, forKey: "llm_patternInsight")
+        defaults.set(response.confidenceNote, forKey: "llm_confidenceNote")
+        defaults.set(sourceFingerprint, forKey: "llm_sourceFingerprint")
+        if let alert = response.alert {
+            defaults.set(alert, forKey: "llm_alert")
+        } else {
+            defaults.removeObject(forKey: "llm_alert")
+        }
+        guard defaults.isAvailable, defaults.generationToken == generation,
+              defaults.string(forKey: "llm_coachMessage") == response.coachMessage,
+              defaults.string(forKey: "llm_patternInsight") == response.patternInsight,
+              defaults.string(forKey: "llm_confidenceNote") == response.confidenceNote,
+              defaults.string(forKey: "llm_sourceFingerprint") == sourceFingerprint,
+              defaults.string(forKey: "llm_alert") == response.alert else { return false }
+        let timestamp = response.generatedAt.timeIntervalSince1970
+        defaults.set(timestamp, forKey: "llm_lastGenerated")
+        guard defaults.isAvailable, defaults.generationToken == generation,
+              defaults.object(forKey: "llm_lastGenerated") as? Double == timestamp else { return false }
+        cachedLLMSourceFingerprint = sourceFingerprint
         updateLLMCacheState()
+        return true
     }
 
     private func loadLastLLMDate() -> Date? {
-        let ts = UserDefaults.standard.double(forKey: "llm_lastGenerated")
+        let ts = defaults.double(forKey: "llm_lastGenerated")
         guard ts > 0 else { return nil }
         return Date(timeIntervalSince1970: ts)
     }
 
     // Uygulama açılışında cached LLM response'u yükle
     func loadCachedLLMResponse() {
-        guard let coachMessage = UserDefaults.standard.string(forKey: "llm_coachMessage"),
+        let generation = defaults.generationToken
+        guard defaults.isAvailable else { clearPrivateState(); return }
+        let permission = cloudAIPrivacy?.permissionForRequest()
+        guard cloudAIPrivacy == nil || permission != nil else { clearCloudAIState(); return }
+        guard let coachMessage = defaults.string(forKey: "llm_coachMessage"),
               !coachMessage.isEmpty,
               let lastDate = loadLastLLMDate()
         else {
+            llmResponse = nil
+            cachedLLMSourceFingerprint = nil
             llmCacheState = .expired
             return
         }
 
         // 24 saatten eski cache'i yükleme
         guard Date().timeIntervalSince(lastDate) < 86400 else {
+            llmResponse = nil
+            cachedLLMSourceFingerprint = nil
             llmCacheState = .expired
             return
         }
 
-        cachedLLMSourceFingerprint = UserDefaults.standard.string(forKey: "llm_sourceFingerprint")
+        let fingerprint = defaults.string(forKey: "llm_sourceFingerprint")
 
-        llmResponse = LLMCoachResponse(
-            patternInsight: UserDefaults.standard.string(forKey: "llm_patternInsight") ?? "",
+        let response = LLMCoachResponse(
+            patternInsight: defaults.string(forKey: "llm_patternInsight") ?? "",
             coachMessage:   coachMessage,
-            alert:          UserDefaults.standard.string(forKey: "llm_alert"),
-            confidenceNote: UserDefaults.standard.string(forKey: "llm_confidenceNote") ?? "",
+            alert:          defaults.string(forKey: "llm_alert"),
+            confidenceNote: defaults.string(forKey: "llm_confidenceNote") ?? "",
             generatedAt:    lastDate
         )
-        updateLLMCacheState()
+        guard defaults.isAvailable, defaults.generationToken == generation else { clearPrivateState(); return }
+        let publish = { [self] in
+            guard defaults.isAvailable, defaults.generationToken == generation else { return false }
+            cachedLLMSourceFingerprint = fingerprint
+            llmResponse = response
+            updateLLMCacheState()
+            return true
+        }
+        let published: Bool
+        if let cloudAIPrivacy, let permission {
+            published = cloudAIPrivacy.performIfAllowed(permission, action: publish)
+        } else {
+            published = publish()
+        }
+        if !published {
+            if defaults.isAvailable, defaults.generationToken == generation { clearCloudAIState() }
+            else { clearPrivateState() }
+        }
     }
 
     private func updateLLMCacheState() {
@@ -887,8 +1021,8 @@ final class SleepCoachOrchestrator: ObservableObject {
             source += "\(record.id.uuidString),\(record.date.timeIntervalSince1970),\(record.duration),\(String(reflecting: record.kind)),\(record.parentNapID?.uuidString ?? "nil"),\(record.isOngoing),\(record.createdAt.timeIntervalSince1970),\(record.endDate.map { String($0.timeIntervalSince1970) } ?? "legacy");"
         }
         source += "|profile:"
-        source += UserDefaults.standard.string(forKey: "babyName") ?? ""
-        source += "|birthDate:\(UserDefaults.standard.object(forKey: "babyBirthDate") as? Date ?? Date.distantPast)"
+        source += defaults.string(forKey: "babyName") ?? ""
+        source += "|birthDate:\(defaults.object(forKey: "babyBirthDate") as? Date ?? Date.distantPast)"
         if let routine = snapshot.evaluationRoutine {
             let calendar = snapshot.evaluationCalendar
             let day = snapshot.generatedAt
@@ -941,7 +1075,7 @@ final class SleepCoachOrchestrator: ObservableObject {
 
     // Manuel refresh — kullanıcı istediğinde
     func refreshLLM() {
-        guard let current = snapshot else { return }
+        guard defaults.isAvailable, let current = snapshot else { return }
 
         startLLMRequest(
             snapshot: current,

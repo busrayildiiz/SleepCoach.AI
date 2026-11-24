@@ -14,6 +14,7 @@ final class SleepCoachOrchestratorTests: XCTestCase {
     private var llmAgent: MockLLMAgent!
     private var profileProvider: MockSleepProfileProvider!
     private var orchestrator: SleepCoachOrchestrator!
+    private var defaults: TestPrivateDataStore!
 
     private let now: Date = {
         var calendar = Calendar(identifier: .gregorian)
@@ -32,7 +33,7 @@ final class SleepCoachOrchestratorTests: XCTestCase {
     
     override func setUp() {
         super.setUp()
-
+        defaults = TestPrivateDataStore()
         clearOrchestratorDefaults()
 
         phaseAgent = MockPhaseAgent()
@@ -55,15 +56,16 @@ final class SleepCoachOrchestratorTests: XCTestCase {
             overtiredCalc: OvertiredCalculator(
                 profileProvider: profileProvider
             ),
-            profileProvider: profileProvider
+            profileProvider: profileProvider,
+            defaults: defaults
         )
 
-        UserDefaults.standard.set(
+        defaults.set(
             "Test Baby",
             forKey: "babyName"
         )
 
-        UserDefaults.standard.set(
+        defaults.set(
             Calendar.current.date(
                 byAdding: .month,
                 value: -9,
@@ -142,14 +144,14 @@ final class SleepCoachOrchestratorTests: XCTestCase {
         let night = SleepRecord(date: today.addingTimeInterval(-4 * 3600), duration: 660, kind: .nightSleep)
         let nap = SleepRecord(date: today.addingTimeInterval(8 * 3600), duration: 60)
         saveRecords([night, nap])
-        let before = UserDefaults.standard.data(forKey: "sleepRecords")
+        let before = defaults.data(forKey: "sleepRecords")
         orchestrator.generate(now: now)
         let result = try XCTUnwrap(orchestrator.snapshot)
         XCTAssertEqual(result.todayTotalMinutes, 60)
         XCTAssertEqual(result.rolling24hMinutes, 720)
         XCTAssertEqual(result.daytimeMinutes, 60)
         XCTAssertTrue(result.sleepDayIsProvisional)
-        XCTAssertEqual(UserDefaults.standard.data(forKey: "sleepRecords"), before)
+        XCTAssertEqual(defaults.data(forKey: "sleepRecords"), before)
     }
 
     func testConflictingClassificationsProduceQualityWarning() throws {
@@ -376,12 +378,12 @@ final class SleepCoachOrchestratorTests: XCTestCase {
 
         saveRecords([record])
 
-        UserDefaults.standard.set(
+        defaults.set(
             7.0,
             forKey: "typicalWakeHour"
         )
 
-        UserDefaults.standard.set(
+        defaults.set(
             0.0,
             forKey: "typicalWakeMinute"
         )
@@ -468,10 +470,10 @@ final class SleepCoachOrchestratorTests: XCTestCase {
         let raw = pairs.map { $0.0 } + [unresolved, nap]
         saveRecords(raw)
         saveWakeRecords(pairs.map { $0.1 })
-        UserDefaults.standard.set(day.addingTimeInterval(-270 * 86400), forKey: "babyBirthDate")
-        let before = UserDefaults.standard.data(forKey: "sleepRecords")
-        let beforeWake = UserDefaults.standard.data(forKey: "dailyWakeRecords_v1")
-        let real = SleepCoachOrchestrator(llmAgent: llmAgent, calendar: calendar)
+        defaults.set(day.addingTimeInterval(-270 * 86400), forKey: "babyBirthDate")
+        let before = defaults.data(forKey: "sleepRecords")
+        let beforeWake = defaults.data(forKey: "dailyWakeRecords_v1")
+        let real = SleepCoachOrchestrator(llmAgent: llmAgent, calendar: calendar, defaults: defaults)
         real.generate(now: evaluation, requestCoaching: false)
 
         let snapshot = try XCTUnwrap(real.snapshot)
@@ -491,8 +493,8 @@ final class SleepCoachOrchestratorTests: XCTestCase {
         XCTAssertEqual(snapshot.sleepAssessment?.anchor?.date, nap.observedEnd)
         XCTAssertNil(snapshot.pattern?.averageWakeWindowMinutes)
         XCTAssertTrue(llmAgent.receivedTriggers.isEmpty)
-        XCTAssertEqual(UserDefaults.standard.data(forKey: "sleepRecords"), before)
-        XCTAssertEqual(UserDefaults.standard.data(forKey: "dailyWakeRecords_v1"), beforeWake)
+        XCTAssertEqual(defaults.data(forKey: "sleepRecords"), before)
+        XCTAssertEqual(defaults.data(forKey: "dailyWakeRecords_v1"), beforeWake)
 
         let builder = DefaultSleepCoachLLMAgent()
         let prompt = builder.buildPrompt(snapshot: snapshot, records: raw, trigger: .manualRefresh)
@@ -513,7 +515,7 @@ final class SleepCoachOrchestratorTests: XCTestCase {
 
     func testPromptLeavesClockTimesUnavailableWithoutAnAnchorAndLabelsSavedRoutine() throws {
         let calendar = Calendar.current
-        let local = SleepCoachOrchestrator(llmAgent: llmAgent, calendar: calendar)
+        let local = SleepCoachOrchestrator(llmAgent: llmAgent, calendar: calendar, defaults: defaults)
         let builder = DefaultSleepCoachLLMAgent()
         local.generate(now: now, requestCoaching: false)
         let missing = try XCTUnwrap(local.snapshot)
@@ -526,9 +528,9 @@ final class SleepCoachOrchestratorTests: XCTestCase {
         XCTAssertTrue(agePrompt.contains("Rolling 24h completed-recorded subtotal: Unknown"))
         XCTAssertTrue(agePrompt.contains("Prediction confidence: Unavailable"))
 
-        UserDefaults.standard.set(7.0, forKey: "typicalWakeHour")
-        UserDefaults.standard.set(19.0, forKey: "typicalBedHour")
-        defer { UserDefaults.standard.removeObject(forKey: "typicalBedHour") }
+        defaults.set(7.0, forKey: "typicalWakeHour")
+        defaults.set(19.0, forKey: "typicalBedHour")
+        defer { defaults.removeObject(forKey: "typicalBedHour") }
         local.generate(now: now, requestCoaching: false)
         let routine = try XCTUnwrap(local.snapshot)
         let routinePrompt = builder.buildPrompt(snapshot: routine, records: [], trigger: .manualRefresh)
@@ -536,7 +538,7 @@ final class SleepCoachOrchestratorTests: XCTestCase {
         XCTAssertTrue(routinePrompt.contains("Bedtime planning source: Routine-based guidance"))
         XCTAssertTrue(routinePrompt.contains("Bedtime planning limitation: Missing observations"))
         XCTAssertNil(routine.evaluationWake)
-        XCTAssertNil(UserDefaults.standard.data(forKey: "dailyWakeRecords_v1"))
+        XCTAssertNil(defaults.data(forKey: "dailyWakeRecords_v1"))
         XCTAssertTrue(llmAgent.receivedTriggers.isEmpty)
     }
 
@@ -601,7 +603,7 @@ final class SleepCoachOrchestratorTests: XCTestCase {
                 triggerReceived.fulfill()
             }
         }
-        UserDefaults.standard.set(currentDay.timeIntervalSince1970, forKey: "llm_lastGenerated")
+        defaults.set(currentDay.timeIntervalSince1970, forKey: "llm_lastGenerated")
 
         orchestrator.generate(now: currentDay)
         XCTAssertNil(orchestrator.snapshot?.todayTotalMinutes)
@@ -620,7 +622,7 @@ final class SleepCoachOrchestratorTests: XCTestCase {
 
     func testElapsedUnconfirmedSleepDoesNotTriggerCoaching() async {
         let currentDay = now
-        UserDefaults.standard.set(currentDay.timeIntervalSince1970, forKey: "llm_lastGenerated")
+        defaults.set(currentDay.timeIntervalSince1970, forKey: "llm_lastGenerated")
         orchestrator.generate(now: currentDay)
         saveRecords([
             SleepRecord(date: currentDay.addingTimeInterval(-2 * 3600), duration: 0,
@@ -649,8 +651,8 @@ final class SleepCoachOrchestratorTests: XCTestCase {
         saveRecords(records)
         saveWakeRecords(wakes)
         let birth = planningCalendar.date(byAdding: .month, value: -9, to: planningTime(0))!
-        UserDefaults.standard.set(birth, forKey: "babyBirthDate")
-        let real = SleepCoachOrchestrator(llmAgent: llmAgent, calendar: planningCalendar)
+        defaults.set(birth, forKey: "babyBirthDate")
+        let real = SleepCoachOrchestrator(llmAgent: llmAgent, calendar: planningCalendar, defaults: defaults)
         real.generate(now: time, requestCoaching: false)
         return try XCTUnwrap(real.snapshot)
     }
@@ -660,7 +662,7 @@ final class SleepCoachOrchestratorTests: XCTestCase {
     ) {
         let data = try! JSONEncoder().encode(records)
 
-        UserDefaults.standard.set(
+        defaults.set(
             data,
             forKey: "sleepRecords"
         )
@@ -671,14 +673,14 @@ final class SleepCoachOrchestratorTests: XCTestCase {
     ) {
         let data = try! JSONEncoder().encode(records)
 
-        UserDefaults.standard.set(
+        defaults.set(
             data,
             forKey: "dailyWakeRecords_v1"
         )
     }
 
     private func loadStoredRecords() throws -> [SleepRecord] {
-        guard let data = UserDefaults.standard.data(
+        guard let data = defaults.data(
             forKey: "sleepRecords"
         ) else {
             return []
@@ -706,7 +708,7 @@ final class SleepCoachOrchestratorTests: XCTestCase {
         ]
 
         keys.forEach {
-            UserDefaults.standard.removeObject(
+            defaults.removeObject(
                 forKey: $0
             )
         }
@@ -958,6 +960,108 @@ final class SleepGenerationCoalescerTests: XCTestCase {
 
 @MainActor
 final class SleepCoachOrchestratorLLMLifecycleTests: XCTestCase {
+    func testStoreResetWhileRequestRunsCannotPublishIntoNewProfile() async {
+        let started = expectation(description: "Request started before reset")
+        let completed = expectation(description: "Response returned after reset")
+        llmAgent.onRequest = { _ in started.fulfill() }
+        llmAgent.onCompletion = { _ in completed.fulfill() }
+        orchestrator.generate(now: now)
+        await fulfillment(of: [started], timeout: 1)
+        defaults.generationToken = UUID()
+        defaults.set("New profile", forKey: "babyName")
+        let attempts = defaults.writeAttempts
+
+        llmAgent.release(0, with: response("old profile"))
+        await fulfillment(of: [completed], timeout: 1)
+
+        XCTAssertNil(orchestrator.snapshot)
+        XCTAssertNil(orchestrator.llmResponse)
+        XCTAssertFalse(orchestrator.isLLMLoading)
+        XCTAssertEqual(defaults.string(forKey: "babyName"), "New profile")
+        XCTAssertEqual(defaults.writeAttempts, attempts)
+        XCTAssertNil(defaults.string(forKey: "llm_coachMessage"))
+    }
+
+    func testClearingPrivateStateRejectsAnAlreadyRunningResponseAndCacheWrite() async {
+        let started = expectation(description: "Private request started")
+        let completed = expectation(description: "Cancelled response returned")
+        llmAgent.onRequest = { _ in started.fulfill() }
+        llmAgent.onCompletion = { _ in completed.fulfill() }
+        orchestrator.generate(now: now)
+        await fulfillment(of: [started], timeout: 1)
+        XCTAssertNotNil(orchestrator.snapshot)
+
+        orchestrator.clearPrivateState()
+        llmAgent.release(0, with: response("must be discarded"))
+        await fulfillment(of: [completed], timeout: 1)
+
+        XCTAssertNil(orchestrator.snapshot)
+        XCTAssertNil(orchestrator.llmResponse)
+        XCTAssertFalse(orchestrator.isLLMLoading)
+        XCTAssertEqual(orchestrator.llmCacheState, .expired)
+        XCTAssertNil(defaults.string(forKey: "llm_coachMessage"))
+        XCTAssertNil(defaults.object(forKey: "llm_lastGenerated"))
+    }
+
+    func testStorageBecomingUnavailableRejectsInFlightResponseWithoutWrites() async {
+        let started = expectation(description: "Request started before lock")
+        let completed = expectation(description: "Response returned after lock")
+        llmAgent.onRequest = { _ in started.fulfill() }
+        llmAgent.onCompletion = { _ in completed.fulfill() }
+        orchestrator.generate(now: now)
+        await fulfillment(of: [started], timeout: 1)
+        let attempts = defaults.writeAttempts
+        defaults.isAvailable = false
+
+        llmAgent.release(0, with: response("locked"))
+        await fulfillment(of: [completed], timeout: 1)
+
+        XCTAssertNil(orchestrator.snapshot)
+        XCTAssertNil(orchestrator.llmResponse)
+        XCTAssertFalse(orchestrator.isLLMLoading)
+        XCTAssertEqual(defaults.writeAttempts, attempts)
+        XCTAssertNil(defaults.values["llm_coachMessage"])
+    }
+
+    func testCacheWriteFailureClearsPrivateStateAndDoesNotClaimCurrentCache() async {
+        let started = expectation(description: "Request started before cache failure")
+        let completed = expectation(description: "Response cache failed")
+        llmAgent.onRequest = { _ in started.fulfill() }
+        llmAgent.onCompletion = { _ in completed.fulfill() }
+        orchestrator.generate(now: now)
+        await fulfillment(of: [started], timeout: 1)
+        defaults.failWrites = true
+
+        llmAgent.release(0, with: response("unsaved"))
+        await fulfillment(of: [completed], timeout: 1)
+
+        XCTAssertFalse(defaults.isAvailable)
+        XCTAssertNil(orchestrator.snapshot)
+        XCTAssertNil(orchestrator.llmResponse)
+        XCTAssertEqual(orchestrator.llmCacheState, .expired)
+        XCTAssertNil(defaults.values["llm_lastGenerated"])
+    }
+
+    func testClearingCloudAIStateKeepsLocalGuidanceAndRejectsLateResponse() async {
+        let started = expectation(description: "Cloud request started")
+        let completed = expectation(description: "Cloud response returned after revoke")
+        llmAgent.onRequest = { _ in started.fulfill() }
+        llmAgent.onCompletion = { _ in completed.fulfill() }
+        orchestrator.generate(now: now)
+        await fulfillment(of: [started], timeout: 1)
+        let localName = orchestrator.snapshot?.babyName
+
+        orchestrator.clearCloudAIState()
+        llmAgent.release(0, with: response("revoked"))
+        await fulfillment(of: [completed], timeout: 1)
+
+        XCTAssertNotNil(orchestrator.snapshot)
+        XCTAssertEqual(orchestrator.snapshot?.babyName, localName)
+        XCTAssertNil(orchestrator.llmResponse)
+        XCTAssertFalse(orchestrator.isLLMLoading)
+        XCTAssertNil(defaults.string(forKey: "llm_coachMessage"))
+    }
+
     private let now: Date = {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = .current
@@ -966,9 +1070,11 @@ final class SleepCoachOrchestratorLLMLifecycleTests: XCTestCase {
 
     private var llmAgent: ControlledLLMAgent!
     private var orchestrator: SleepCoachOrchestrator!
+    private var defaults: TestPrivateDataStore!
 
     override func setUp() {
         super.setUp()
+        defaults = TestPrivateDataStore()
         clearDefaults()
         llmAgent = ControlledLLMAgent()
         orchestrator = SleepCoachOrchestrator(
@@ -980,10 +1086,11 @@ final class SleepCoachOrchestratorLLMLifecycleTests: XCTestCase {
             insightAgent: MockInsightAgent(),
             llmAgent: llmAgent,
             overtiredCalc: OvertiredCalculator(profileProvider: MockSleepProfileProvider()),
-            profileProvider: MockSleepProfileProvider()
+            profileProvider: MockSleepProfileProvider(),
+            defaults: defaults
         )
-        UserDefaults.standard.set("Test Baby", forKey: "babyName")
-        UserDefaults.standard.set(Calendar.current.date(byAdding: .month, value: -9, to: now)!, forKey: "babyBirthDate")
+        defaults.set("Test Baby", forKey: "babyName")
+        defaults.set(Calendar.current.date(byAdding: .month, value: -9, to: now)!, forKey: "babyBirthDate")
     }
 
     override func tearDown() {
@@ -1005,7 +1112,7 @@ final class SleepCoachOrchestratorLLMLifecycleTests: XCTestCase {
         await fulfillment(of: [requestCompleted], timeout: 1)
 
         XCTAssertEqual(orchestrator.llmResponse?.coachMessage, "normal")
-        XCTAssertEqual(UserDefaults.standard.string(forKey: "llm_coachMessage"), "normal")
+        XCTAssertEqual(defaults.string(forKey: "llm_coachMessage"), "normal")
         XCTAssertFalse(orchestrator.isLLMLoading)
     }
 
@@ -1024,7 +1131,7 @@ final class SleepCoachOrchestratorLLMLifecycleTests: XCTestCase {
         await fulfillment(of: [alertRequestStarted], timeout: 1)
         llmAgent.release(0, with: alertResponse)
         await fulfillment(of: [alertRequestCompleted], timeout: 1)
-        XCTAssertEqual(UserDefaults.standard.string(forKey: "llm_alert"), "Take care")
+        XCTAssertEqual(defaults.string(forKey: "llm_alert"), "Take care")
 
         let clearAlertRequestStarted = expectation(description: "Alert-free response request started")
         let clearAlertRequestCompleted = expectation(description: "Alert-free response request completed")
@@ -1040,7 +1147,7 @@ final class SleepCoachOrchestratorLLMLifecycleTests: XCTestCase {
         llmAgent.release(1, with: response("without alert"))
         await fulfillment(of: [clearAlertRequestCompleted], timeout: 1)
 
-        XCTAssertNil(UserDefaults.standard.string(forKey: "llm_alert"))
+        XCTAssertNil(defaults.string(forKey: "llm_alert"))
         orchestrator.loadCachedLLMResponse()
         XCTAssertNil(orchestrator.llmResponse?.alert)
     }
@@ -1098,15 +1205,15 @@ final class SleepCoachOrchestratorLLMLifecycleTests: XCTestCase {
         llmAgent.release(0, with: response("initial"))
         await fulfillment(of: [completed], timeout: 1)
 
-        UserDefaults.standard.set(8.0, forKey: "typicalWakeHour")
+        defaults.set(8.0, forKey: "typicalWakeHour")
         orchestrator.generate(now: testNow)
         XCTAssertEqual(orchestrator.llmCacheState, .stale)
     }
 
     func testExpiredCacheRemainsExpiredRegardlessOfFingerprint() {
-        UserDefaults.standard.set(Date.distantPast.timeIntervalSince1970, forKey: "llm_lastGenerated")
-        UserDefaults.standard.set("cached", forKey: "llm_coachMessage")
-        UserDefaults.standard.set("arbitrary", forKey: "llm_sourceFingerprint")
+        defaults.set(Date.distantPast.timeIntervalSince1970, forKey: "llm_lastGenerated")
+        defaults.set("cached", forKey: "llm_coachMessage")
+        defaults.set("arbitrary", forKey: "llm_sourceFingerprint")
 
         orchestrator.loadCachedLLMResponse()
 
@@ -1140,7 +1247,7 @@ final class SleepCoachOrchestratorLLMLifecycleTests: XCTestCase {
         await fulfillment(of: [olderCompleted], timeout: 1)
 
         XCTAssertEqual(orchestrator.llmResponse?.coachMessage, "newer")
-        XCTAssertEqual(UserDefaults.standard.string(forKey: "llm_coachMessage"), "newer")
+        XCTAssertEqual(defaults.string(forKey: "llm_coachMessage"), "newer")
     }
 
     func testResponseAfterConfirmationExpiryCannotBecomeCurrentWithoutANewRequest() async throws {
@@ -1149,8 +1256,8 @@ final class SleepCoachOrchestratorLLMLifecycleTests: XCTestCase {
                                    kind: .nightSleep, isOngoing: true)
         let nap = SleepRecord(date: day.addingTimeInterval(8 * 3600), duration: 60)
         saveRecords([oldNight, nap])
-        let persisted = try XCTUnwrap(SleepRecordPersistence().load()?.first { $0.id == oldNight.id })
-        let source = UserDefaults.standard.data(forKey: "sleepRecords")
+        let persisted = try XCTUnwrap(SleepRecordPersistence(defaults: defaults).load()?.first { $0.id == oldNight.id })
+        let source = defaults.data(forKey: "sleepRecords")
         let confirmation = StillSleepingConfirmation(record: persisted, date: now)
         let started = expectation(description: "Snapshot A request started")
         let completed = expectation(description: "Cancelled request A still returned")
@@ -1172,7 +1279,7 @@ final class SleepCoachOrchestratorLLMLifecycleTests: XCTestCase {
         XCTAssertNil(orchestrator.snapshot?.currentSleepKind)
         XCTAssertEqual(orchestrator.snapshot?.sleepAssessment?.reviewRecord?.id, oldNight.id)
         XCTAssertEqual(orchestrator.snapshot?.recordedSleepDay, .incomplete(60, reason: .incomplete))
-        XCTAssertEqual(UserDefaults.standard.data(forKey: "sleepRecords"), source)
+        XCTAssertEqual(defaults.data(forKey: "sleepRecords"), source)
 
         llmAgent.release(0, with: response("Snapshot A"))
         await fulfillment(of: [completed], timeout: 1)
@@ -1181,8 +1288,8 @@ final class SleepCoachOrchestratorLLMLifecycleTests: XCTestCase {
         XCTAssertNil(orchestrator.llmResponse)
         XCTAssertEqual(orchestrator.llmCacheState, .expired)
         XCTAssertFalse(orchestrator.isLLMLoading)
-        XCTAssertNil(UserDefaults.standard.string(forKey: "llm_coachMessage"))
-        XCTAssertNil(UserDefaults.standard.string(forKey: "llm_sourceFingerprint"))
+        XCTAssertNil(defaults.string(forKey: "llm_coachMessage"))
+        XCTAssertNil(defaults.string(forKey: "llm_sourceFingerprint"))
     }
 
     func testStaleCompletionDoesNotClearLoadingForNewerRequest() async throws {
@@ -1236,7 +1343,7 @@ final class SleepCoachOrchestratorLLMLifecycleTests: XCTestCase {
         await fulfillment(of: [automaticCompleted], timeout: 1)
 
         XCTAssertEqual(orchestrator.llmResponse?.coachMessage, "refresh")
-        XCTAssertEqual(UserDefaults.standard.string(forKey: "llm_coachMessage"), "refresh")
+        XCTAssertEqual(defaults.string(forKey: "llm_coachMessage"), "refresh")
     }
 
     func testManualRefreshUsesRecordsMatchedToPublishedSnapshot() async {
@@ -1246,7 +1353,7 @@ final class SleepCoachOrchestratorLLMLifecycleTests: XCTestCase {
         llmAgent.onRequest = { _ in requestStarted.fulfill() }
         llmAgent.onCompletion = { _ in requestCompleted.fulfill() }
 
-        UserDefaults.standard.set(currentDay.timeIntervalSince1970, forKey: "llm_lastGenerated")
+        defaults.set(currentDay.timeIntervalSince1970, forKey: "llm_lastGenerated")
         orchestrator.generate(now: currentDay)
         let stateBRecord = SleepRecord(date: currentDay, duration: 30, kind: .dayNap)
         saveRecords([stateBRecord])
@@ -1276,7 +1383,7 @@ final class SleepCoachOrchestratorLLMLifecycleTests: XCTestCase {
         llmAgent.onRequest = { _ in requestStarted.fulfill() }
         llmAgent.onCompletion = { _ in requestCompleted.fulfill() }
 
-        UserDefaults.standard.set(currentDay.timeIntervalSince1970, forKey: "llm_lastGenerated")
+        defaults.set(currentDay.timeIntervalSince1970, forKey: "llm_lastGenerated")
         orchestrator.generate(now: currentDay)
         // Keep the completed session entirely before the injected calculation time.
         let stateBRecord = SleepRecord(date: currentDay.addingTimeInterval(-30 * 60), duration: 30,
@@ -1309,12 +1416,12 @@ final class SleepCoachOrchestratorLLMLifecycleTests: XCTestCase {
     }
 
     private func saveRecords(_ records: [SleepRecord]) {
-        UserDefaults.standard.set(try! JSONEncoder().encode(records), forKey: "sleepRecords")
+        defaults.set(try! JSONEncoder().encode(records), forKey: "sleepRecords")
     }
 
     private func clearDefaults() {
         ["sleepRecords", "dailyWakeRecords_v1", "babyName", "babyBirthDate", "typicalWakeHour", "typicalWakeMinute", "llm_lastGenerated", "llm_coachMessage", "llm_patternInsight", "llm_confidenceNote", "llm_alert", "llm_sourceFingerprint"].forEach {
-            UserDefaults.standard.removeObject(forKey: $0)
+            defaults.removeObject(forKey: $0)
         }
     }
 }

@@ -3,6 +3,31 @@ import XCTest
 @testable import BabySleepTracker
 
 final class SleepStoreTests: XCTestCase {
+    func testUnavailableProtectedStoreThrowsInsteadOfReturningEmptyHistory() {
+        let privateStore = TestPrivateDataStore()
+        privateStore.isAvailable = false
+        let store = SleepStore(defaults: privateStore)
+
+        XCTAssertThrowsError(try store.load()) { error in
+            guard case SleepStoreError.storageUnavailable = error else { return XCTFail("Unexpected error: \(error)") }
+        }
+        XCTAssertThrowsError(try store.save([]))
+        XCTAssertEqual(privateStore.writeAttempts, 0)
+    }
+
+    func testFailedProtectedWriteThrowsAndPreservesPreviousRecords() throws {
+        let privateStore = TestPrivateDataStore()
+        let store = SleepStore(defaults: privateStore)
+        try store.save([SleepRecord(date: Date(timeIntervalSince1970: 100), duration: 60)])
+        let original = try XCTUnwrap(privateStore.data(forKey: "sleep_records_v1"))
+        privateStore.failWrites = true
+
+        XCTAssertThrowsError(try store.save([])) { error in
+            guard case SleepStoreError.writeFailed = error else { return XCTFail("Unexpected error: \(error)") }
+        }
+        XCTAssertEqual(privateStore.values["sleep_records_v1"] as? Data, original)
+    }
+
 
     private var defaults: UserDefaults!
     private var store: SleepStore!

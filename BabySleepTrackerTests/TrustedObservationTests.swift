@@ -2,6 +2,38 @@ import XCTest
 @testable import BabySleepTracker
 
 final class TrustedObservationTests: XCTestCase {
+    func testPreviouslyBoundCreationCannotResumeAfterPrivateStoreReset() {
+        let store = TestPrivateDataStore()
+        let storage = ObservationStorage(defaults: store)
+        let intent = ObservationCreationIntent(recordID: UUID())
+        XCTAssertTrue(storage.bind(intent))
+        store.generationToken = UUID()
+
+        XCTAssertFalse(storage.bind(intent))
+        XCTAssertNil(storage.reserveCreation(intent, collection: "sleepRecords",
+                                             content: ObservationProvenance.digest("old draft")))
+        XCTAssertEqual(store.writeAttempts, 0)
+    }
+
+    func testUnavailableStorageIsExplicitlyUnreadableAndCannotCreateReviewEvidence() {
+        let store = TestPrivateDataStore()
+        store.isAvailable = false
+        let adapter = TrustedObservationAdapter(defaults: store)
+        let evidence = adapter.snapshot()
+
+        XCTAssertFalse(evidence.storageIsReadable)
+        XCTAssertTrue(evidence.sleeps.isEmpty)
+        XCTAssertTrue(evidence.wakes.isEmpty)
+        XCTAssertTrue(evidence.daytime.isEmpty)
+        XCTAssertNil(adapter.prepareDaytimeReview(morningWakeID: UUID(), followingWakeID: UUID()))
+        XCTAssertFalse(ObservationStorage(defaults: store).pruneRecoveryArchives())
+        XCTAssertFalse(ObservationStorage(defaults: store).retireInvalidForwardCompletion(now: now))
+        XCTAssertEqual(store.writeAttempts, 0)
+
+        store.isAvailable = true
+        XCTAssertTrue(adapter.snapshot().storageIsReadable)
+    }
+
     private var defaults: UserDefaults!
     private var suite: String!
     private var calendar: Calendar!

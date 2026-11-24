@@ -183,12 +183,15 @@ enum HeroUITestFixture {
     static func prepare() {
         guard ProcessInfo.processInfo.environment["SLEEP_HERO_RESET"] != "0" else { return }
         let defaults = UserDefaults.standard
+        do { try SecureDataStore.shared.eraseAll() }
+        catch { return }
         if let domain = Bundle.main.bundleIdentifier { defaults.removePersistentDomain(forName: domain) }
         defaults.set(ProcessInfo.processInfo.environment["SLEEP_HERO_DARK"] == "1" ? "dark" : "light", forKey: "appAppearance")
         defaults.set(true, forKey: "authComplete")
         defaults.set(true, forKey: "onboardingComplete")
-        defaults.set("Alex", forKey: "parentName")
-        defaults.set("Baby", forKey: "babyName")
+        SecureDataStore.shared.set(true, forKey: "profileSetupComplete_v1")
+        SecureDataStore.shared.set("Alex", forKey: "parentName")
+        SecureDataStore.shared.set("Baby", forKey: "babyName")
         let cal = Calendar.current
         let yesterday = cal.date(byAdding: .day, value: -1, to: now)!
         let usesLiveNight = scenario == "nightActive" && ProcessInfo.processInfo.environment["SLEEP_HERO_LIVE_CLOCK"] == "1"
@@ -211,8 +214,8 @@ enum HeroUITestFixture {
         case "staleNight":
             let start = date(from: "SLEEP_HERO_HISTORICAL_NIGHT_START") ?? now.addingTimeInterval(-121 * 3600)
             records = [SleepRecord(id: parentID, date: start, duration: 0, kind: .nightSleep, isOngoing: true, createdAt: start)]
-            defaults.set(cal.date(byAdding: .month, value: -9, to: now), forKey: "babyBirthDate")
-            defaults.set(Double(cal.component(.hour, from: now)), forKey: "typicalBedHour")
+            SecureDataStore.shared.set(cal.date(byAdding: .month, value: -9, to: now), forKey: "babyBirthDate")
+            SecureDataStore.shared.set(Double(cal.component(.hour, from: now)), forKey: "typicalBedHour")
         case "nightActive", "morningUnconfirmed":
             records = [SleepRecord(id: parentID, date: nightStart, duration: 0, kind: .nightSleep, isOngoing: true, createdAt: nightStart)]
         case "morningConfirmed":

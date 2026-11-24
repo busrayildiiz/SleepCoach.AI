@@ -2,6 +2,64 @@ import XCTest
 @testable import BabySleepTracker
 
 final class SleepRecordPersistenceTests: XCTestCase {
+    func testResetDuringFirstSaveCannotWriteOldDraftIntoNewStore() {
+        let store = TestPrivateDataStore()
+        let persistence = SleepRecordPersistence(defaults: store)
+        let record = SleepRecord(date: Date(timeIntervalSince1970: 100), duration: 60)
+
+        XCTAssertFalse(persistence.save([record], beforeWrite: { _ in
+            store.generationToken = UUID()
+            return true
+        }))
+        XCTAssertNil(store.data(forKey: "sleepRecords"))
+        XCTAssertNil(store.data(forKey: ObservationProvenance.key))
+    }
+
+    func testUnavailableProtectedStorageNeverLooksLikeWritableEmptyHistory() throws {
+        let store = TestPrivateDataStore()
+        let existing = [SleepRecord(date: Date(timeIntervalSince1970: 100), duration: 60)]
+        let original = try JSONEncoder().encode(existing)
+        store.set(original, forKey: "sleepRecords")
+        let attempts = store.writeAttempts
+        store.isAvailable = false
+        let persistence = SleepRecordPersistence(defaults: store)
+
+        XCTAssertNil(persistence.load())
+        XCTAssertFalse(persistence.save([]))
+        XCTAssertFalse(persistence.saveRecording(existing[0]))
+        XCTAssertFalse(persistence.delete(ids: Set(existing.map(\.id))))
+        XCTAssertEqual(store.writeAttempts, attempts)
+        XCTAssertEqual(store.values["sleepRecords"] as? Data, original)
+    }
+
+    func testProtectedWriteFailureKeepsExistingSleepBytesAndReportsFailure() throws {
+        let store = TestPrivateDataStore()
+        let persistence = SleepRecordPersistence(defaults: store)
+        let existing = SleepRecord(date: Date(timeIntervalSince1970: 100), duration: 60)
+        XCTAssertTrue(persistence.save([existing]))
+        let original = try XCTUnwrap(store.data(forKey: "sleepRecords"))
+        store.failWrites = true
+
+        XCTAssertFalse(persistence.save([]))
+        XCTAssertEqual(store.values["sleepRecords"] as? Data, original)
+        XCTAssertFalse(store.isAvailable)
+    }
+
+    func testStorageLockDuringReceiptCallbackPreventsCommit() throws {
+        let store = TestPrivateDataStore()
+        let persistence = SleepRecordPersistence(defaults: store)
+        let existing = SleepRecord(date: Date(timeIntervalSince1970: 100), duration: 60)
+        XCTAssertTrue(persistence.save([existing]))
+        let original = try XCTUnwrap(store.data(forKey: "sleepRecords"))
+        let replacement = SleepRecord(date: Date(timeIntervalSince1970: 200), duration: 30)
+
+        XCTAssertFalse(persistence.save([existing, replacement], beforeWrite: { _ in
+            store.isAvailable = false
+            return true
+        }))
+        XCTAssertEqual(store.values["sleepRecords"] as? Data, original)
+    }
+
     private var defaults: UserDefaults!
     private var persistence: SleepRecordPersistence!
 

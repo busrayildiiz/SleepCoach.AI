@@ -1,5 +1,16 @@
 import SwiftUI
 
+private struct TabActiveKey: EnvironmentKey {
+    static let defaultValue = true
+}
+
+extension EnvironmentValues {
+    var isTabActive: Bool {
+        get { self[TabActiveKey.self] }
+        set { self[TabActiveKey.self] = newValue }
+    }
+}
+
 struct ContentView: View {
 
     @State private var selectedTab: Tab = .home
@@ -8,40 +19,26 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     private let tabAccent = Color(red: 0.40, green: 0.29, blue: 0.90)
+    private let addButtonLift: CGFloat = 14
 
     enum Tab {
         case home, history, insights, settings
     }
 
     var body: some View {
-        ZStack(alignment: .bottom) {
-
-            // ── Tab content — hepsi yüklenmiş, sadece görünürlük değişiyor ──
+        VStack(spacing: 0) {
+            // Keep all four tabs mounted. Presented screens own their navigation stacks.
             ZStack {
-                SleepListView(sleepConfirmation: $sleepConfirmation)
-                    .opacity(selectedTab == .home ? 1 : 0)
-                    .allowsHitTesting(selectedTab == .home)
-
-                HistoryView()
-                    .opacity(selectedTab == .history ? 1 : 0)
-                    .allowsHitTesting(selectedTab == .history)
-
-                InsightsView(sleepConfirmation: $sleepConfirmation)
-                    .opacity(selectedTab == .insights ? 1 : 0)
-                    .allowsHitTesting(selectedTab == .insights)
-
-                SettingsView()
-                    .opacity(selectedTab == .settings ? 1 : 0)
-                    .allowsHitTesting(selectedTab == .settings)
+                tabContent(SleepListView(sleepConfirmation: $sleepConfirmation), for: .home)
+                tabContent(HistoryView(), for: .history)
+                tabContent(InsightsView(sleepConfirmation: $sleepConfirmation), for: .insights)
+                tabContent(SettingsView(), for: .settings)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .ignoresSafeArea()
-            .safeAreaInset(edge: .bottom) {
-                Color.clear.frame(height: 72)
-            }
 
-            // ── Custom Tab Bar ────────────────────────────────
+            // Keep the raised Add Sleep button outside the scroll viewport.
             customTabBar
+                .padding(.top, addButtonLift)
         }
         .ignoresSafeArea(edges: .bottom)
         .onReceive(NotificationCenter.default.publisher(for: .sleepStillSleepingConfirmed)) { event in
@@ -71,6 +68,15 @@ struct ContentView: View {
                 }
             )
         }
+    }
+
+    private func tabContent<Content: View>(_ content: Content, for tab: Tab) -> some View {
+        let isSelected = selectedTab == tab
+        return content
+            .environment(\.isTabActive, isSelected)
+            .opacity(isSelected ? 1 : 0)
+            .allowsHitTesting(isSelected)
+            .zIndex(isSelected ? 1 : 0)
     }
 
     private func saveRecordFromTabBar(_ newRecord: SleepRecord) -> Bool {
@@ -105,7 +111,7 @@ struct ContentView: View {
                 }
             }
             .frame(maxWidth: .infinity)
-            .offset(y: -14)
+            .offset(y: -addButtonLift)
             .accessibilityLabel("Add Sleep")
             .accessibilityIdentifier("recording.addSleep")
 

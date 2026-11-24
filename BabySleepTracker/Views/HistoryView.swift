@@ -2,6 +2,7 @@ import SwiftUI
 import Charts
 
 struct HistoryView: View {
+    @Environment(\.isTabActive) private var isTabActive
     
     // MARK: - Range Picker (tüm sayfayı filtreleyecek)
 
@@ -22,7 +23,7 @@ struct HistoryView: View {
     
     @State private var selectedTimelineRecord: SleepRecord? = nil
 
-    @AppStorage("babyName") private var babyName: String = "Baby"
+    @SecureStorage("babyName") private var babyName: String = "Baby"
 
     private let calendar = Calendar.current
     private let nowTimer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
@@ -445,80 +446,80 @@ struct HistoryView: View {
     // MARK: - Body
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
 
-                    // ── Header ─────────────────────────────
-                    headerSection
-                    rangePicker
+                // ── Header ─────────────────────────────
+                headerSection
+                rangePicker
 
-                                      switch selectedRange {
-                                      case .day:
-                                          sleepTimelineCard
-                                      case .week, .month, .overview:
-                                          comingSoonPlaceholder
-                                      }
-                    // ── Calendar strip ─────────────────────
-                    calendarStrip
-
-                    // ── Selected day card ──────────────────
-                    selectedDayCard
-
-                    // ── Stats row ──────────────────────────
-                    statsRow
-
-                    // ── Today's naps ───────────────────────
-                    if !selectedDayNaps.isEmpty {
-                        napsSection
-                    }
-
-                    // ── Comparison banner ──────────────────
-                    if let delta = recordedDeltaFromYesterday {
-                        comparisonBanner(delta: delta)
-                    }
-
-                    // ── Week overview chart ────────────────
-                    weekChartCard
-
-                    // ── Tip ────────────────────────────────
-                    tipCard
+                switch selectedRange {
+                case .day:
+                    sleepTimelineCard
+                case .week, .month, .overview:
+                    comingSoonPlaceholder
                 }
-                .padding(.horizontal, 16)
-                .padding(.top, 16)
-                .padding(.bottom, 32)
+                // ── Calendar strip ─────────────────────
+                calendarStrip
+
+                // ── Selected day card ──────────────────
+                selectedDayCard
+
+                // ── Stats row ──────────────────────────
+                statsRow
+
+                // ── Today's naps ───────────────────────
+                if !selectedDayNaps.isEmpty {
+                    napsSection
+                }
+
+                // ── Comparison banner ──────────────────
+                if let delta = recordedDeltaFromYesterday {
+                    comparisonBanner(delta: delta)
+                }
+
+                // ── Week overview chart ────────────────
+                weekChartCard
+
+                // ── Tip ────────────────────────────────
+                tipCard
             }
-            .background(HistoryColor.background)
-            .navigationBarHidden(true)
-            .onAppear { calculationDate = Date(); loadRecords() }
-            .onReceive(nowTimer) { calculationDate = $0 }
-            .onReceive(NotificationCenter.default.publisher(for: UIApplication.significantTimeChangeNotification)) { _ in calculationDate = Date() }
-            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in calculationDate = Date() }
-            .onReceive(NotificationCenter.default.publisher(for: .sleepRecordsDidChange)) { _ in
-                loadRecords()
-            }
-            .sheet(item: $selectedTimelineRecord) { record in
-                if record.kind == .break {
-                    if let parent = records.first(where: { $0.id == record.parentNapID && $0.kind != .break }) {
-                        AddBreakView(parent: parent, editingBreak: record,
-                                     existingBreaks: records.filter { $0.parentNapID == parent.id && $0.kind == .break },
-                                     records: records,
-                                     onSave: upsertRecord)
-                    } else {
-                        NavigationStack {
-                            Text("The original sleep session is no longer available.")
-                                .padding()
-                                .toolbar {
-                                    ToolbarItem(placement: .cancellationAction) {
-                                        Button("Cancel") { selectedTimelineRecord = nil }
-                                    }
-                                }
-                        }
-                    }
+            .padding(.horizontal, 16)
+            .padding(.top, 16)
+            .padding(.bottom, 32)
+            .accessibilityElement(children: .contain)
+            .accessibilityHidden(!isTabActive)
+        }
+        .background(HistoryColor.background)
+        .onAppear { calculationDate = Date(); loadRecords() }
+        .onReceive(nowTimer) { calculationDate = $0 }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.significantTimeChangeNotification)) { _ in calculationDate = Date() }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in calculationDate = Date() }
+        .onReceive(NotificationCenter.default.publisher(for: .sleepRecordsDidChange)
+            .receive(on: RunLoop.main)) { _ in
+            loadRecords()
+        }
+        .sheet(item: $selectedTimelineRecord) { record in
+            if record.kind == .break {
+                if let parent = records.first(where: { $0.id == record.parentNapID && $0.kind != .break }) {
+                    AddBreakView(parent: parent, editingBreak: record,
+                                 existingBreaks: records.filter { $0.parentNapID == parent.id && $0.kind == .break },
+                                 records: records,
+                                 onSave: upsertRecord)
                 } else {
-                    AddRecordView(defaultDate: record.date, editingRecord: record,
-                                  vm: AddRecordViewModel(), onSave: upsertRecord)
+                    NavigationStack {
+                        Text("The original sleep session is no longer available.")
+                            .padding()
+                            .toolbar {
+                                ToolbarItem(placement: .cancellationAction) {
+                                    Button("Cancel") { selectedTimelineRecord = nil }
+                                }
+                            }
+                    }
                 }
+            } else {
+                AddRecordView(defaultDate: record.date, editingRecord: record,
+                              vm: AddRecordViewModel(), onSave: upsertRecord)
             }
         }
     }

@@ -27,6 +27,7 @@ final class SleepGenerationCoalescer: ObservableObject {
 }
 
 struct SleepListView: View {
+    @Environment(\.isTabActive) private var isTabActive
 
     // MARK: - Sheet routing
 
@@ -79,8 +80,8 @@ struct SleepListView: View {
     private let sleepRecordPersistence = SleepRecordPersistence()
     private let dailyWakeRecordPersistence = DailyWakeRecordPersistence()
 
-    @AppStorage("babyName")   private var babyName:   String = "Baby"
-    @AppStorage("parentName") private var parentName: String = ""
+    @SecureStorage("babyName")   private var babyName:   String = "Baby"
+    @SecureStorage("parentName") private var parentName: String = ""
 
     @State private var heroShowsPlan = false
     @Binding var sleepConfirmation: StillSleepingConfirmation?
@@ -177,8 +178,8 @@ struct SleepListView: View {
     }
 
     private var hasPassedTypicalWakeTime: Bool {
-        let wakeHour = UserDefaults.standard.object(forKey: "typicalWakeHour") as? Double ?? 7.0
-        let wakeMinute = UserDefaults.standard.object(forKey: "typicalWakeMinute") as? Double ?? 0.0
+        let wakeHour = SecureDataStore.shared.object(forKey: "typicalWakeHour") as? Double ?? 7.0
+        let wakeMinute = SecureDataStore.shared.object(forKey: "typicalWakeMinute") as? Double ?? 0.0
         let today = Calendar.current.startOfDay(for: Date())
         let typicalWake = Calendar.current.date(
             bySettingHour: Int(wakeHour),
@@ -310,7 +311,7 @@ struct SleepListView: View {
     private func planPresentation(at actual: Date) -> TodayPlanPresentation {
         let now = planNow(actual)
         let calendar = Calendar.current
-        let routine = SleepRoutine.load(defaults: .standard)
+        let routine = SleepRoutine.load(defaults: SecureDataStore.shared)
         let hero = sleepHero(at: now, calendar: calendar, routine: routine)
         #if DEBUG && targetEnvironment(simulator)
         if TodayPlanUITestFixture.enabled {
@@ -357,8 +358,7 @@ struct SleepListView: View {
     // MARK: - Body
 
     var body: some View {
-        NavigationStack {
-            ScrollViewReader { proxy in
+        ScrollViewReader { proxy in
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 12) {
                     #if DEBUG && targetEnvironment(simulator)
@@ -375,9 +375,11 @@ struct SleepListView: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 12)
                 .padding(.bottom, 112)
+                // UIKit exposes each scroll view's content through its own accessibility container.
+                .accessibilityElement(children: .contain)
+                .accessibilityHidden(!isTabActive)
             }
             .background(Color(.systemGroupedBackground))
-            .navigationBarHidden(true)
             .onAppear {
                 _ = sleepRecordPersistence.storage.pruneRecoveryArchives()
                 _ = SleepWakeTimeWorkflow.resumePending(now: Date(), wakePersistence: dailyWakeRecordPersistence,
@@ -387,11 +389,13 @@ struct SleepListView: View {
                 orchestrator.loadCachedLLMResponse()
                 orchestrator.generate(confirmation: sleepConfirmation)
             }
-            .onReceive(NotificationCenter.default.publisher(for: .sleepRecordsDidChange)) { _ in
+            .onReceive(NotificationCenter.default.publisher(for: .sleepRecordsDidChange)
+                .receive(on: RunLoop.main)) { _ in
                 loadRecords()
                 generationCoalescer.request { orchestrator.generate(confirmation: sleepConfirmation) }
             }
-            .onReceive(NotificationCenter.default.publisher(for: .dailyWakeRecordsDidChange)) { _ in
+            .onReceive(NotificationCenter.default.publisher(for: .dailyWakeRecordsDidChange)
+                .receive(on: RunLoop.main)) { _ in
                 loadWakeRecords()
                 generationCoalescer.request { orchestrator.generate(confirmation: sleepConfirmation) }
             }
@@ -405,7 +409,8 @@ struct SleepListView: View {
                 loadWakeRecords()
                 orchestrator.generate(confirmation: sleepConfirmation, requestCoaching: false)
             }
-            .onReceive(NotificationCenter.default.publisher(for: .babyProfileDidChange)) { _ in
+            .onReceive(NotificationCenter.default.publisher(for: .babyProfileDidChange)
+                .receive(on: RunLoop.main)) { _ in
                 generationCoalescer.request { orchestrator.generate(confirmation: sleepConfirmation) }
             }
             .environment(\.locale, Locale(identifier: "en_US"))
@@ -414,7 +419,6 @@ struct SleepListView: View {
                     withAnimation { proxy.scrollTo("home.todayPlan", anchor: .top) }
                     heroShowsPlan = false
                 }
-            }
             }
         }
         .sheet(item: presentationSheet(recording: false), content: sheetContent)
@@ -872,10 +876,10 @@ struct SleepListView: View {
             records: records,
             now: Date(),
             calendar: .current,
-            typicalWakeHour: Int(UserDefaults.standard.object(forKey: "typicalWakeHour") as? Double ?? 7.0),
-            typicalWakeMinute: Int(UserDefaults.standard.object(forKey: "typicalWakeMinute") as? Double ?? 0.0),
-            typicalBedHour: Int(UserDefaults.standard.object(forKey: "typicalBedHour") as? Double ?? 19.0),
-            typicalBedMinute: Int(UserDefaults.standard.object(forKey: "typicalBedMinute") as? Double ?? 30.0),
+            typicalWakeHour: Int(SecureDataStore.shared.object(forKey: "typicalWakeHour") as? Double ?? 7.0),
+            typicalWakeMinute: Int(SecureDataStore.shared.object(forKey: "typicalWakeMinute") as? Double ?? 0.0),
+            typicalBedHour: Int(SecureDataStore.shared.object(forKey: "typicalBedHour") as? Double ?? 19.0),
+            typicalBedMinute: Int(SecureDataStore.shared.object(forKey: "typicalBedMinute") as? Double ?? 30.0),
             averageNapDurationMinutes: orchestrator.snapshot?.pattern?.averageNapDurationMinutes,
             predictedNextNapTime: orchestrator.snapshot?.daytime.nextNapTime,
             recommendedWakeWindowMinutes: recommendedWakeWindowMinutes
@@ -916,12 +920,12 @@ struct SleepListView: View {
     }
 
     private func sleepHero(at now: Date, calendar: Calendar = .current,
-                           routine: SleepRoutine? = .load(defaults: .standard)) -> TodaySleepHeroModel {
+                           routine: SleepRoutine? = .load(defaults: SecureDataStore.shared)) -> TodaySleepHeroModel {
         #if DEBUG && targetEnvironment(simulator)
         if TodayPlanUITestFixture.enabled {
             return TodaySleepHeroModel.make(records: records, wakeRecords: wakeRecords,
                 now: TodayPlanUITestFixture.now, calendar: .current,
-                routine: TodaySleepHeroModel.Routine.load(defaults: .standard),
+                routine: TodaySleepHeroModel.Routine.load(defaults: SecureDataStore.shared),
                 displayName: displayedParentName, babyName: babyName,
                 proposals: TodayPlanUITestFixture.wakePredictions(records: records))
         }

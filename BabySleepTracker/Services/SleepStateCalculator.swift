@@ -89,7 +89,8 @@ struct SleepRoutine {
     var bedMinute: Int = 0
     var graceMinutes: Int = 30
 
-    static func load(defaults: UserDefaults) -> Self? {
+    static func load(defaults: any PrivateDataStore) -> Self? {
+        guard defaults.isAvailable else { return nil }
         func component(_ key: String, maximum: Double) -> Int? {
             guard let value = defaults.object(forKey: key) as? Double,
                   value.isFinite, value >= 0, value <= maximum, value.rounded() == value else { return nil }
@@ -201,7 +202,7 @@ struct SleepEvaluation {
     var instant: ContinuousClock.Instant? = nil
 
     static func current(confirmation: StillSleepingConfirmation? = nil) -> Self {
-        Self(now: Date(), calendar: .current, routine: .load(defaults: .standard),
+        Self(now: Date(), calendar: .current, routine: .load(defaults: SecureDataStore.shared),
              confirmation: confirmation, instant: ContinuousClock.now)
     }
 }

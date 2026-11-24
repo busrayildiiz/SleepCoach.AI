@@ -279,17 +279,20 @@ enum HomeCardTestFixture {
     static func prepare() {
         let defaults = UserDefaults.standard
         guard ProcessInfo.processInfo.environment["HOME_CARD_RESET"] == "1" else { return }
+        do { try SecureDataStore.shared.eraseAll() }
+        catch { return }
         if let domain = Bundle.main.bundleIdentifier { defaults.removePersistentDomain(forName: domain) }
         defaults.set("light", forKey: "appAppearance")
         defaults.set(true, forKey: "authComplete")
         defaults.set(true, forKey: "onboardingComplete")
-        defaults.set(23.0, forKey: "typicalBedHour")
-        defaults.set(0.0, forKey: "typicalWakeHour")
+        SecureDataStore.shared.set(true, forKey: "profileSetupComplete_v1")
+        SecureDataStore.shared.set(23.0, forKey: "typicalBedHour")
+        SecureDataStore.shared.set(0.0, forKey: "typicalWakeHour")
         let records: [SleepRecord] = (scenario == "confirmed" || scenario == "confirmed-nap") ? [
             SleepRecord(date: now.addingTimeInterval(-3600), duration: 0, kind: scenario == "confirmed-nap" ? .dayNap : .nightSleep, isOngoing: true)
         ] : []
         SleepRecordPersistence().save(records)
-        defaults.removeObject(forKey: "dailyWakeRecords_v1")
+        SecureDataStore.shared.removeObject(forKey: "dailyWakeRecords_v1")
     }
 }
 #endif

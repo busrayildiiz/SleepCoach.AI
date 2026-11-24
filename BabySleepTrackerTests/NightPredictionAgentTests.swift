@@ -43,7 +43,8 @@ final class NightPredictionAgentTests: XCTestCase {
         agent = DefaultNightPredictionAgent(
             profileProvider: profileProvider,
             overtiredCalculator: overtiredCalculator,
-            calendar: calendar
+            calendar: calendar,
+            defaults: TestPrivateDataStore()
         )
     }
 

@@ -7,6 +7,15 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		49589A1EE7D57F81334A0323 /* SecureDataStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2CF8BC51E27366D7A6A5BC5A; };
+		CD93C024511D97FD9EF5AB32 /* SecureStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC439D86CDFC8AAAC2F57627; };
+		C746E9A5695B45EA89BA17BC /* CloudAIPrivacy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84A44DCFD013E541D6B1D4EA; };
+		EE7F0BB60C1A9BAE9A194382 /* PrivateDataStoreTestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = C937CED919964A80A743D279; };
+		8AB381F274FFE7F8DFEE0485 /* SecureDataStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E032ADFC54602DE55ABF0E3C; };
+		095832EC0E27118207B7F356 /* SecureDataStoreNativeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65DFD9E6A5E7958E3E5BC5F8; };
+		3A459B232E1FAAA144E5B6EA /* CloudAIPrivacyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E37C806C243A40C737759465; };
+		63F6243DDDDB32A34A4A3E75 /* CloudAITransportPrivacyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4808BEA548CA5ADC770B011B; };
+		7DAEEE20630537EB2D1F7990 /* PrivacyUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B6563BD0BD8EE5CB1D84BBA; };
 		B20000000000000000000022 /* TrustedObservationCorrectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000021; };
 		B20000000000000000000012 /* TrustedObservationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000011; };
 		B20000000000000000000002 /* ObservationProvenance.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000001; };
@@ -127,6 +136,15 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		2CF8BC51E27366D7A6A5BC5A /* SecureDataStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecureDataStore.swift; sourceTree = "<group>"; };
+		AC439D86CDFC8AAAC2F57627 /* SecureStorage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecureStorage.swift; sourceTree = "<group>"; };
+		84A44DCFD013E541D6B1D4EA /* CloudAIPrivacy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudAIPrivacy.swift; sourceTree = "<group>"; };
+		C937CED919964A80A743D279 /* PrivateDataStoreTestSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivateDataStoreTestSupport.swift; sourceTree = "<group>"; };
+		E032ADFC54602DE55ABF0E3C /* SecureDataStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecureDataStoreTests.swift; sourceTree = "<group>"; };
+		65DFD9E6A5E7958E3E5BC5F8 /* SecureDataStoreNativeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecureDataStoreNativeTests.swift; sourceTree = "<group>"; };
+		E37C806C243A40C737759465 /* CloudAIPrivacyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudAIPrivacyTests.swift; sourceTree = "<group>"; };
+		4808BEA548CA5ADC770B011B /* CloudAITransportPrivacyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudAITransportPrivacyTests.swift; sourceTree = "<group>"; };
+		8B6563BD0BD8EE5CB1D84BBA /* PrivacyUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivacyUITests.swift; sourceTree = "<group>"; };
 		B20000000000000000000021 /* TrustedObservationCorrectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrustedObservationCorrectionTests.swift; sourceTree = "<group>"; };
 		B20000000000000000000011 /* TrustedObservationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrustedObservationTests.swift; sourceTree = "<group>"; };
 		B20000000000000000000001 /* ObservationProvenance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObservationProvenance.swift; sourceTree = "<group>"; };
@@ -261,6 +279,11 @@
 		FA5488D12FAEB964002BC18B /* BabySleepTrackerTests */ = {
 			isa = PBXGroup;
 			children = (
+				C937CED919964A80A743D279 /* PrivateDataStoreTestSupport.swift */,
+				E032ADFC54602DE55ABF0E3C /* SecureDataStoreTests.swift */,
+				65DFD9E6A5E7958E3E5BC5F8 /* SecureDataStoreNativeTests.swift */,
+				E37C806C243A40C737759465 /* CloudAIPrivacyTests.swift */,
+				4808BEA548CA5ADC770B011B /* CloudAITransportPrivacyTests.swift */,
 				B10000000000000000000005 /* LearningEligibilityEvaluatorTests.swift */,
 				AD2000000000000000000005 /* RecordingIntervalPresentationTests.swift */,
 				AC1000000000000000000005 /* SleepRecordingFlowTests.swift */,
@@ -455,6 +478,9 @@
 		FAEF10612F4E26CE00E76FD4 /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				2CF8BC51E27366D7A6A5BC5A /* SecureDataStore.swift */,
+				AC439D86CDFC8AAAC2F57627 /* SecureStorage.swift */,
+				84A44DCFD013E541D6B1D4EA /* CloudAIPrivacy.swift */,
 				B10000000000000000000003 /* LearningEligibilityEvaluator.swift */,
 				AC1000000000000000000001 /* SleepRecordingFlow.swift */,
 				FA2947243046678A00BE2E20 /* SleepWakeTimeWorkflow.swift */,
@@ -482,7 +508,7 @@
 			path = Utils;
 			sourceTree = "<group>";
 		};
-		AC100000000000000000000D /* BabySleepTrackerUITests */ = {isa = PBXGroup; children = (AC100000000000000000000A, AC3000000000000000000001, AE4000000000000000000001, AF3000000000000000000001,); path = BabySleepTrackerUITests; sourceTree = "<group>"; };
+		AC100000000000000000000D /* BabySleepTrackerUITests */ = {isa = PBXGroup; children = (8B6563BD0BD8EE5CB1D84BBA /* PrivacyUITests.swift */, AC100000000000000000000A, AC3000000000000000000001, AE4000000000000000000001, AF3000000000000000000001,); path = BabySleepTrackerUITests; sourceTree = "<group>"; };
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -605,6 +631,11 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				EE7F0BB60C1A9BAE9A194382 /* PrivateDataStoreTestSupport.swift in Sources */,
+				8AB381F274FFE7F8DFEE0485 /* SecureDataStoreTests.swift in Sources */,
+				095832EC0E27118207B7F356 /* SecureDataStoreNativeTests.swift in Sources */,
+				3A459B232E1FAAA144E5B6EA /* CloudAIPrivacyTests.swift in Sources */,
+				63F6243DDDDB32A34A4A3E75 /* CloudAITransportPrivacyTests.swift in Sources */,
 				B10000000000000000000006 /* LearningEligibilityEvaluatorTests.swift in Sources */,
 				AD2000000000000000000006 /* RecordingIntervalPresentationTests.swift in Sources */,
 				AC1000000000000000000006 /* SleepRecordingFlowTests.swift in Sources */,
@@ -647,6 +678,9 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				49589A1EE7D57F81334A0323 /* SecureDataStore.swift in Sources */,
+				CD93C024511D97FD9EF5AB32 /* SecureStorage.swift in Sources */,
+				C746E9A5695B45EA89BA17BC /* CloudAIPrivacy.swift in Sources */,
 				B10000000000000000000004 /* LearningEligibilityEvaluator.swift in Sources */,
 				B10000000000000000000002 /* LearningEligibility.swift in Sources */,
 				AF1000000000000000000002 /* TodayPlanPresentation.swift in Sources */,
@@ -712,7 +746,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		AC100000000000000000000F /* UI Test Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (AC100000000000000000000B, AC3000000000000000000002, AE4000000000000000000002, AF3000000000000000000002,); runOnlyForDeploymentPostprocessing = 0; };
+		AC100000000000000000000F /* UI Test Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (7DAEEE20630537EB2D1F7990 /* PrivacyUITests.swift in Sources */, AC100000000000000000000B, AC3000000000000000000002, AE4000000000000000000002, AF3000000000000000000002,); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */

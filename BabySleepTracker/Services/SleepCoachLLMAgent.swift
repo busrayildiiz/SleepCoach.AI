@@ -43,15 +43,23 @@ protocol SleepCoachLLMAgentProtocol {
 
 final class DefaultSleepCoachLLMAgent: SleepCoachLLMAgentProtocol {
 
-    private let model: GenerativeModel
+    typealias GenerateText = (_ prompt: String, _ developmentKey: String) async throws -> String?
 
-    init() {
-        // Ücretsiz ve hızlı olan gemini-1.5-flash modelini kullanıyoruz.
-        // Key, APIConfig.swift üzerinden okunuyor.
-        self.model = GenerativeModel(
-            name: "gemini-2.5-flash",
-            apiKey: APIConfig.geminiKey
-        )
+    private let privacy: CloudAIPrivacy
+    private let developmentKey: () -> String?
+    private let generateText: GenerateText
+
+    var privacyController: CloudAIPrivacy { privacy }
+
+    init(privacy: CloudAIPrivacy = .shared,
+         developmentKey: @escaping () -> String? = { APIConfig.geminiKey },
+         generateText: @escaping GenerateText = { prompt, key in
+             let model = GenerativeModel(name: "gemini-2.5-flash", apiKey: key)
+             return try await model.generateContent(prompt).text
+         }) {
+        self.privacy = privacy
+        self.developmentKey = developmentKey
+        self.generateText = generateText
     }
 
     // MARK: - Generate Insight
@@ -62,27 +70,26 @@ final class DefaultSleepCoachLLMAgent: SleepCoachLLMAgentProtocol {
         trigger:  LLMTrigger
     ) async -> LLMCoachResponse? {
 
-        // Key hâlâ placeholder ise çağrı yapmadan çık — gereksiz hata/log önler
-        guard APIConfig.geminiKey != "BURAYA_KENDI_GEMINI_API_KEYINI_YAPISTIR",
-              !APIConfig.geminiKey.isEmpty else {
-            print("⚠️ Gemini API key tanımlı değil. APIConfig.swift dosyasını kontrol et.")
-            return nil
-        }
+        // This compile-time release gate also covers injected test transports.
+        // A preferences toggle alone can never authorize third-party sharing.
+        guard APIConfig.allowsDirectGeminiRequests,
+              !Task.isCancelled,
+              let permission = privacy.permissionForRequest(),
+              let key = developmentKey(), !key.isEmpty else { return nil }
 
         let prompt = buildPrompt(snapshot: snapshot, records: records, trigger: trigger)
 
         do {
-            let response = try await model.generateContent(prompt)
-
-            guard let responseText = response.text else {
-                print("LLM Error: Boş yanıt döndü.")
-                return nil
-            }
-
-            return parseResponse(responseText)
-
+            guard !Task.isCancelled, privacy.stillAllows(permission) else { return nil }
+            let responseText = try await generateText(prompt, key)
+            guard !Task.isCancelled, privacy.stillAllows(permission),
+                  let responseText else { return nil }
+            let parsed = parseResponse(responseText)
+            guard !Task.isCancelled, privacy.stillAllows(permission) else { return nil }
+            return parsed
         } catch {
-            print("Gemini API Error: \(error.localizedDescription)")
+            // SDK errors can contain request URLs, credentials, or response data.
+            // The existing local coach remains available without logging them.
             return nil
         }
     }
@@ -126,7 +133,7 @@ final class DefaultSleepCoachLLMAgent: SleepCoachLLMAgentProtocol {
         You are an expert baby sleep coach AI. Analyze the data below and respond ONLY with a JSON object.
 
         BABY PROFILE:
-        - Name: \(snapshot.babyName)
+        - Refer to the child as "your baby"; no identifying profile information is provided.
         - Age: \(snapshot.ageMonths) months
         - Current sleep state: \(activeSleep)
 
@@ -145,7 +152,7 @@ final class DefaultSleepCoachLLMAgent: SleepCoachLLMAgentProtocol {
         - Rolling 24h completed-recorded subtotal: \(snapshot.recordedRolling24h.display)
         - Daily sleep status: \(snapshot.recordedRolling24h.isIncomplete ? "Unavailable" : snapshot.sleepStatus?.label ?? "Unavailable")
         Use general guidance. Distinguish observations, estimates, and saved routine references. Withhold daily deficit, surplus, bedtime compensation, personalized claims, and confidence when the evidence is incomplete. While current sleep is reported, avoid wake deadlines and bedtime preparation instructions.
-        - Nap transition: \(snapshot.transition.recommendation)
+        - Nap transition: \(transitionSummary(snapshot.transition))
 
         DATA QUALITY REPORT:
         \(buildDataQualitySection(snapshot.dataQualityReport))
@@ -174,19 +181,38 @@ final class DefaultSleepCoachLLMAgent: SleepCoachLLMAgentProtocol {
         var lines = [
             "- Recent days with recorded observations: \(report.trackedDays) of 14",
             "- Sleep Days with confirmed recording coverage: \(report.completeDays)",
-            "- Planning context: \(report.confidenceNote)",
+            "- Planning context: Recording coverage is unconfirmed. Guidance uses recorded boundaries, saved routines, or general age ranges.",
             "- Logging freshness: \(loggingFreshnessSummary(for: report))"
         ]
+        // Summarize structured counts only. Notes may eventually contain profile
+        // details, so arbitrary recommendation and quality strings stay on-device.
         if !report.contextSignals.isEmpty {
-            lines.append("- Recorded context: \(report.contextSignals.joined(separator: ", "))")
+            lines.append("- Available context signal count: \(report.contextSignals.count)")
         }
         if !report.missingCriticalFields.isEmpty {
-            lines.append("- Missing or unresolved observations: \(report.missingCriticalFields.joined(separator: ", "))")
+            lines.append("- Missing or unresolved observation count: \(report.missingCriticalFields.count)")
+        }
+        if !report.missingContextSignals.isEmpty {
+            lines.append("- Missing context signal count: \(report.missingContextSignals.count)")
         }
         if !report.warnings.isEmpty {
-            lines.append("- Warnings: \(report.warnings.joined(separator: " | "))")
+            lines.append("- Additional data-quality warnings: \(report.warnings.count). Keep guidance cautious and avoid certainty.")
+        }
+        if !report.plausibilityWarnings.isEmpty {
+            lines.append("- Plausibility warning count: \(report.plausibilityWarnings.count). Ask the parent to review unusual records.")
         }
         return lines.joined(separator: "\n")
+    }
+
+    private func transitionSummary(_ assessment: NapTransitionAssessment) -> String {
+        guard assessment.isReadyToTransit else {
+            switch assessment.signalStrength {
+            case .none: return "No transition signals. No nap transition is recommended."
+            case .insufficient, .weak, .moderate, .strong:
+                return "There is insufficient evidence to recommend a nap transition. Recording coverage and readiness must be confirmed."
+            }
+        }
+        return "The rule engine reports readiness for an age-appropriate nap transition. Discuss a gradual adjustment cautiously."
     }
 
     private func loggingFreshnessSummary(for report: DataQualityReport) -> String {
@@ -221,17 +247,12 @@ final class DefaultSleepCoachLLMAgent: SleepCoachLLMAgentProtocol {
     func buildLast7DaysSummary(records: [SleepRecord], now: Date, calendar: Calendar) -> String {
         let accounting = SleepAccounting(records: records, now: now, calendar: calendar)
         let today = calendar.startOfDay(for: now)
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = calendar.timeZone
-        formatter.dateFormat = "EEE MMM d"
-
         return (0..<7).compactMap { offset in
             guard let day = calendar.date(byAdding: .day, value: -offset, to: today) else { return nil }
             let naps = records.filter {
                 $0.kind == .dayNap && $0.date <= now && calendar.isDate($0.date, inSameDayAs: day)
             }
-            let label = formatter.string(from: day)
+            let label = offset == 0 ? "Today" : "\(offset) day(s) ago"
             guard !naps.isEmpty else { return "- \(label): No naps logged. Nap coverage is unknown." }
             let count = naps.filter { $0.completedEnd(at: now) != nil }.count
             let subtotal = accounting.completedSubtotal(on: day, kind: .dayNap)
@@ -256,7 +277,6 @@ final class DefaultSleepCoachLLMAgent: SleepCoachLLMAgentProtocol {
             let data   = cleaned.data(using: .utf8),
             let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else {
-            print("Parsing Error: LLM'den gelen metin JSON'a çevrilemedi -> \(text)")
             return nil
         }
 

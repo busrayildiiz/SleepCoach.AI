@@ -86,7 +86,38 @@ jobs:
             2>&1 | tee "$RUNNER_TEMP/CIArtifacts/packages.log"
           echo "Package resolution: $((SECONDS-started)) seconds" | tee -a "$GITHUB_STEP_SUMMARY"
           git diff --exit-code -- BabySleepTracker.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
+      - name: Verify application startup
+        id: startup
+        if: inputs.tier != 'fast'
+        timeout-minutes: 11
+        env:
+          SIMULATOR_UDID: ${{ steps.simulator.outputs.udid }}
+        run: |
+          # Detect a shared launch failure before repeating it throughout the UI suite.
+          # The full/focused selection below still has to pass after this preflight.
+          coverage=NO
+          if [[ "$TIER" == full ]]; then coverage=YES; fi
+          exec python3 .github/scripts/ios-validation.py run --phase startup \
+            --timeout-seconds 600 --grace-seconds 20 -- \
+            xcodebuild test -project BabySleepTracker.xcodeproj -scheme BabySleepTracker \
+            -configuration Debug -sdk iphonesimulator \
+            -parallel-testing-enabled NO \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            -clonedSourcePackagesDirPath "$RUNNER_TEMP/SourcePackages" \
+            -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile \
+            -enableCodeCoverage "$coverage" \
+            -resultBundlePath "$RUNNER_TEMP/startup/TestResults.xcresult" \
+            -only-testing:BabySleepTrackerUITests/PrivacyUITests/testLaunchShowsHome \
+            CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- CODE_SIGNING_ALLOWED=YES \
+            CODE_SIGNING_REQUIRED=NO AD_HOC_CODE_SIGNING_ALLOWED=YES \
+            DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER=
+      - name: Export startup evidence
+        timeout-minutes: 5
+        if: always() && steps.startup.outcome != 'skipped'
+        run: python3 .github/scripts/ios-validation.py collect --phase startup
       - name: Build and test selected coverage
+        id: validation
         timeout-minutes: ${{ inputs.tier == 'full' && 50 || 35 }}
         env:
           SIMULATOR_UDID: ${{ steps.simulator.outputs.udid }}
@@ -121,7 +152,7 @@ jobs:
             DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER=
       - name: Export results and screenshots
         timeout-minutes: 5
-        if: always()
+        if: always() && steps.validation.outcome != 'skipped'
         run: python3 .github/scripts/ios-validation.py collect
       - name: Upload test evidence
         if: always()

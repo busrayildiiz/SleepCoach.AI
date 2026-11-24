@@ -55,14 +55,17 @@ extension NightPredictionAgentProtocol {
 final class DefaultNightPredictionAgent: NightPredictionAgentProtocol {
 
     private let calendar:            Calendar
+    private let defaults: any PrivateDataStore
     private let profileProvider:     AgeBasedSleepProfileProviding
     private let overtiredCalculator: OvertiredCalculator
 
     init(
         profileProvider:     AgeBasedSleepProfileProviding = DefaultAgeBasedSleepProfileProvider(),
         overtiredCalculator: OvertiredCalculator? = nil,
-        calendar:            Calendar = .current
+        calendar:            Calendar = .current,
+        defaults: any PrivateDataStore = SecureDataStore.shared
     ) {
+        self.defaults = defaults
         self.profileProvider     = profileProvider
         self.overtiredCalculator = overtiredCalculator ?? OvertiredCalculator(profileProvider: profileProvider, calendar: calendar)
         self.calendar            = calendar
@@ -80,7 +83,7 @@ final class DefaultNightPredictionAgent: NightPredictionAgentProtocol {
         planning:     SleepPredictionContext?
     ) -> NightPredictionAgent {
         let context = planning ?? SleepPredictionContext(records: todayRecords, wakes: wakeRecords,
-            evaluation: .init(now: now, calendar: calendar, routine: .load(defaults: .standard)))
+            evaluation: .init(now: now, calendar: calendar, routine: .load(defaults: defaults)))
         let evaluation = context.evaluation
         let profile = profileProvider.profile(forAgeMonths: ageMonths)
         let totalDaytime = context.accounting.completedSubtotal(on: evaluation.now, kind: .dayNap)

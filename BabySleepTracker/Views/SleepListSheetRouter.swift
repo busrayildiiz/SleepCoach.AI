@@ -74,7 +74,7 @@ struct SleepListSheetRouter: View {
             let wakes = DailyWakeRecordPersistence().load() ?? []
             let existing = DailyWakeRecord.uniqueObservation(in: wakes, on: morning,
                 at: max(Date(), todayWakeTime ?? .distantPast), calendar: calendar)
-            let routineWake = association.flatMap { SleepRoutine.load(defaults: .standard)?.wake(on: $0.morning, calendar: $0.calendar) }
+            let routineWake = association.flatMap { SleepRoutine.load(defaults: SecureDataStore.shared)?.wake(on: $0.morning, calendar: $0.calendar) }
             let suggestion = existing?.wakeTime ?? routineWake ?? todayWakeTime ?? defaultWakeTime
             let time = RecordingEndpointSelection.combine(day: morning, time: suggestion,
                 preserving: suggestion, calendar: calendar) ?? morning
