@@ -8,7 +8,7 @@ import subprocess
 import sys
 
 ALL = ['HomeDashboardCardUITests', 'TodaySleepHeroUITests',
-       'RecordingNavigationTests', 'TodayPlanUITests', 'PrivacyUITests']
+       'RecordingNavigationTests', 'TodayPlanUITests', 'PrivacyUITests', 'DaytimeCoverageReviewUITests']
 HOME_HERO = {'HomeDashboardCardUITests', 'TodaySleepHeroUITests'}
 PLAN = {'TodayPlanUITests'}
 MAPPINGS = {

@@ -359,15 +359,46 @@ extension TodaySleepHeroUITests {
         XCTAssertEqual(XCTWaiter.wait(for: [selected], timeout: 5), .completed)
         let save = app.buttons["recording.save"]
         reveal(save, app: app); XCTAssertTrue(save.isEnabled); save.tap()
-        dismissed(editor)
-        let summary = app.descendants(matching: .any).matching(identifier: "home.sleep.summary").firstMatch
-        let confirmed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "Night sleep in progress"), object: summary)
-        XCTAssertEqual(XCTWaiter.wait(for: [confirmed], timeout: 5), .completed)
-        XCTAssertTrue(app.buttons["hero.endSleep"].exists)
-        let recordedWake = app.descendants(matching: .any).matching(NSPredicate(
-            format: "identifier BEGINSWITH %@ AND label CONTAINS[c] %@", "home.plan.event.record:", "wake")).firstMatch
-        XCTAssertFalse(recordedWake.exists)
+
+        let home = app.scrollViews.containing(.staticText, identifier: "TEST FIXTURE — NOT A PREDICTION").firstMatch
+        let summary = home.descendants(matching: .any).matching(identifier: "home.sleep.summary").firstMatch
+        var actualLabel: String?
+        func fail(_ reason: String, file: StaticString = #filePath, line: UInt = #line) {
+            let image = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+            image.name = "Still Sleeping failure screen"
+            image.lifetime = .keepAlways
+            add(image)
+            let label = actualLabel ?? (summary.exists ? summary.label : "<unavailable>")
+            let hierarchy = XCTAttachment(string: "Home summary label: \(label)\n\n\(app.debugDescription)")
+            hierarchy.name = "Still Sleeping failure accessibility hierarchy"
+            hierarchy.lifetime = .keepAlways
+            add(hierarchy)
+            XCTFail("\(reason) Home summary label: \(label)", file: file, line: line)
+        }
+
+        let closed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: editor)
+        guard XCTWaiter.wait(for: [closed], timeout: 5) == .completed,
+              app.wait(for: .runningForeground, timeout: 5),
+              home.waitForExistence(timeout: 10), summary.waitForExistence(timeout: 5) else {
+            fail("The Home summary did not become accessible after closing the night editor.")
+            return
+        }
+        let label = summary.label
+        actualLabel = label
+        guard label.contains("Night sleep in progress"), home.buttons["hero.endSleep"].exists else {
+            fail("Expected an ongoing night and the End Sleep action on Home.")
+            return
+        }
         capture("night-still-sleeping-no-wake-large", app: app)
+
+        // The overnight plan can omit recorded wakes while a night is active.
+        // Today's records show the missing-wake card only when there is no recorded wake.
+        tapHomeButton("sleep.todayRecords", app: app)
+        guard app.navigationBars["Today"].waitForExistence(timeout: 5),
+              app.staticTexts["Add today's wake-up time for better predictions"].waitForExistence(timeout: 5) else {
+            fail("Expected today's sleep records to show that the wake was not recorded.")
+            return
+        }
     }
 }
 

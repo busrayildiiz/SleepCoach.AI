@@ -18,6 +18,9 @@
 		7DAEEE20630537EB2D1F7990 /* PrivacyUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B6563BD0BD8EE5CB1D84BBA; };
 		B20000000000000000000022 /* TrustedObservationCorrectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000021; };
 		B20000000000000000000012 /* TrustedObservationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000011; };
+		B23000000000000000000002 /* DaytimeCoverageReviewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B23000000000000000000001; };
+		B23000000000000000000004 /* DaytimeCoverageReviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B23000000000000000000003; };
+		B23000000000000000000006 /* DaytimeCoverageReviewUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B23000000000000000000005; };
 		B20000000000000000000002 /* ObservationProvenance.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000001; };
 		B10000000000000000000006 /* LearningEligibilityEvaluatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000005 /* LearningEligibilityEvaluatorTests.swift */; };
 		B10000000000000000000004 /* LearningEligibilityEvaluator.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000003 /* LearningEligibilityEvaluator.swift */; };
@@ -147,6 +150,9 @@
 		8B6563BD0BD8EE5CB1D84BBA /* PrivacyUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivacyUITests.swift; sourceTree = "<group>"; };
 		B20000000000000000000021 /* TrustedObservationCorrectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrustedObservationCorrectionTests.swift; sourceTree = "<group>"; };
 		B20000000000000000000011 /* TrustedObservationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrustedObservationTests.swift; sourceTree = "<group>"; };
+		B23000000000000000000001 /* DaytimeCoverageReviewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaytimeCoverageReviewModel.swift; sourceTree = "<group>"; };
+		B23000000000000000000003 /* DaytimeCoverageReviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaytimeCoverageReviewView.swift; sourceTree = "<group>"; };
+		B23000000000000000000005 /* DaytimeCoverageReviewUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaytimeCoverageReviewUITests.swift; sourceTree = "<group>"; };
 		B20000000000000000000001 /* ObservationProvenance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObservationProvenance.swift; sourceTree = "<group>"; };
 		B10000000000000000000005 /* LearningEligibilityEvaluatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LearningEligibilityEvaluatorTests.swift; sourceTree = "<group>"; };
 		B10000000000000000000003 /* LearningEligibilityEvaluator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LearningEligibilityEvaluator.swift; sourceTree = "<group>"; };
@@ -454,6 +460,7 @@
 				FAEF10712F536DB200E76FD4 /* NapPickerView.swift */,
 				FAEF106D2F53066D00E76FD4 /* AddBreakView.swift */,
 				FAEF10562F4E20BC00E76FD4 /* DayDetailView.swift */,
+				B23000000000000000000003 /* DaytimeCoverageReviewView.swift */,
 				FAEF10582F4E20D600E76FD4 /* AddRecordView.swift */,
 				FAE100012FF9000100ABCDEF /* Components/CurrentSleepSessionCard.swift */,
                 AF2000000000000000000001,
@@ -469,6 +476,7 @@
 			isa = PBXGroup;
 			children = (
 				FAEF10692F4E5D0100E76FD4 /* DayDetailViewModel.swift */,
+				B23000000000000000000001 /* DaytimeCoverageReviewModel.swift */,
 				FAEF10652F4E5A1E00E76FD4 /* SleepListViewModel.swift */,
 				FAEF10672F4E5A7200E76FD4 /* AddRecordViewModel.swift */,
 			);
@@ -508,7 +516,7 @@
 			path = Utils;
 			sourceTree = "<group>";
 		};
-		AC100000000000000000000D /* BabySleepTrackerUITests */ = {isa = PBXGroup; children = (8B6563BD0BD8EE5CB1D84BBA /* PrivacyUITests.swift */, AC100000000000000000000A, AC3000000000000000000001, AE4000000000000000000001, AF3000000000000000000001,); path = BabySleepTrackerUITests; sourceTree = "<group>"; };
+		AC100000000000000000000D /* BabySleepTrackerUITests */ = {isa = PBXGroup; children = (8B6563BD0BD8EE5CB1D84BBA /* PrivacyUITests.swift */, AC100000000000000000000A, AC3000000000000000000001, AE4000000000000000000001, AF3000000000000000000001, B23000000000000000000005 /* DaytimeCoverageReviewUITests.swift */,); path = BabySleepTrackerUITests; sourceTree = "<group>"; };
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -690,6 +698,7 @@
 				AC1000000000000000000004 /* RecordingFormComponents.swift in Sources */,
 				AC1000000000000000000002 /* SleepRecordingFlow.swift in Sources */,
 				FAEF106A2F4E5D0100E76FD4 /* DayDetailViewModel.swift in Sources */,
+				B23000000000000000000002 /* DaytimeCoverageReviewModel.swift in Sources */,
 				FA7232EA2FDD8F2B00647487 /* APIConfig.swift in Sources */,
 				FA9DB0A52FD49E91000B9211 /* LandingView.swift in Sources */,
 				FA41DF64303396B4005F63A3 /* BabyAgeCalculator.swift in Sources */,
@@ -712,6 +721,7 @@
 				FAEF106E2F53066D00E76FD4 /* AddBreakView.swift in Sources */,
 				FA9DB0A92FD49ED4000B9211 /* CreateAccountView.swift in Sources */,
 				FAEF10572F4E20BC00E76FD4 /* DayDetailView.swift in Sources */,
+				B23000000000000000000004 /* DaytimeCoverageReviewView.swift in Sources */,
 				FAEF104D2F4E208000E76FD4 /* SleepStore.swift in Sources */,
 				FAEF10742F530D3100E76FD4 /* SleepTimelineCalculator.swift in Sources */,
 				FAEF10762F530D3100E76FD4 /* SleepRecordPersistence.swift in Sources */,
@@ -746,7 +756,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		AC100000000000000000000F /* UI Test Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (7DAEEE20630537EB2D1F7990 /* PrivacyUITests.swift in Sources */, AC100000000000000000000B, AC3000000000000000000002, AE4000000000000000000002, AF3000000000000000000002,); runOnlyForDeploymentPostprocessing = 0; };
+		AC100000000000000000000F /* UI Test Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (7DAEEE20630537EB2D1F7990 /* PrivacyUITests.swift in Sources */, AC100000000000000000000B, AC3000000000000000000002, AE4000000000000000000002, AF3000000000000000000002, B23000000000000000000006 /* DaytimeCoverageReviewUITests.swift in Sources */,); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */

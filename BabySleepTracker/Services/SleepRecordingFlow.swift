@@ -7,13 +7,27 @@ extension Notification.Name {
 
 /// Transient form state; the persisted SleepRecord format is unchanged.
 struct SleepRecordingDraft {
-    var start: Date
+    var start: Date {
+        didSet { if start != oldValue { hasConfirmedNapTimes = false } }
+    }
     var end: Date {
-        didSet { if end != oldValue { confirmedEnd = nil } }
+        didSet {
+            if end != oldValue {
+                confirmedEnd = nil
+                hasConfirmedNapTimes = false
+            }
+        }
     }
     var isOngoing: Bool {
-        didSet { if isOngoing { confirmedEnd = nil } }
+        didSet {
+            if isOngoing {
+                confirmedEnd = nil
+                hasConfirmedNapTimes = false
+            }
+        }
     }
+    let requiresNapTimeConfirmation: Bool
+    private(set) var hasConfirmedNapTimes = false
     private let observationID: UUID
     private let creationIntent: ObservationCreationIntent?
     private let initialStart: Date
@@ -23,9 +37,14 @@ struct SleepRecordingDraft {
     private(set) var completionCalendar: Calendar?
     private(set) var requiresEndConfirmation = false
     var hasConfirmedEnd: Bool { confirmedEnd == end }
-    var isReadyToSubmit: Bool { isOngoing || !requiresEndConfirmation || hasConfirmedEnd }
+    var isReadyToSubmit: Bool {
+        if requiresNapTimeConfirmation && !hasConfirmedNapTimes { return false }
+        return isOngoing || !requiresEndConfirmation || hasConfirmedEnd
+    }
 
-    init(defaultDate: Date, editing: SleepRecord? = nil, now: Date = Date()) {
+    init(defaultDate: Date, editing: SleepRecord? = nil, now: Date = Date(),
+         requiresNapTimeConfirmation: Bool = false) {
+        self.requiresNapTimeConfirmation = requiresNapTimeConfirmation
         observationID = editing?.id ?? UUID()
         creationIntent = ObservationCreationIntent(recordID: observationID)
         start = editing?.date ?? min(defaultDate, now.addingTimeInterval(-3600))
@@ -48,6 +67,12 @@ struct SleepRecordingDraft {
     mutating func confirmObservedEnd(now: Date) {
         guard nightCompletionIntent != nil, !isOngoing, validationMessage(now: now) == nil else { return }
         confirmedEnd = end
+    }
+
+    /// Acknowledges the displayed interval for saving. Timestamp provenance follows the capture rules.
+    mutating func confirmObservedNapTimes(now: Date) {
+        guard requiresNapTimeConfirmation, !isOngoing, validationMessage(now: now) == nil else { return }
+        hasConfirmedNapTimes = true
     }
 
     mutating func applyEndSelection(_ selection: RecordingEndpointSelection) {

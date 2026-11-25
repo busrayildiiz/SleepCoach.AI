@@ -39,6 +39,7 @@ files = [
     'Services/ObservationProvenance.swift', 'Services/SleepRecordPersistence.swift',
     'Services/DailyWakeRecordPersistence.swift', 'Services/SleepRecordingFlow.swift',
     'Services/SleepWakeTimeWorkflow.swift', 'Services/LearningEligibilityEvaluator.swift',
+    'ViewModels/DaytimeCoverageReviewModel.swift',
     'Services/SleepOverviewCalculator.swift', 'Services/SleepTimelineCalculator.swift',
     'Services/SleepStateCalculator.swift', 'Services/SleepStore.swift',
     'Agents/Implements/PatternAgent.swift', 'Agents/Protocols/PatternAgentProtocol.swift',

@@ -84,21 +84,80 @@ final class PrivacyUITests: XCTestCase {
 
     func testBackgroundRoundTripRestoresUsablePrivateScreens() {
         let app = launchFixture()
-        XCUIDevice.shared.press(.home)
-        let backgrounded = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-            app.state == .runningBackground || app.state == .runningBackgroundSuspended
-        }, object: app)
-        XCTAssertEqual(XCTWaiter.wait(for: [backgrounded], timeout: 5), .completed)
-        app.activate()
-        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 5))
         let addSleep = app.buttons["recording.addSleep"]
-        XCTAssertTrue(addSleep.waitForExistence(timeout: 5))
-        XCTAssertTrue(addSleep.isHittable)
-        XCTAssertFalse(app.otherElements["privacy.windowCover"].exists)
+        let clock = ContinuousClock()
+        let started = clock.now
+        var observations: [String] = []
+
+        func observeState(_ phase: String) -> XCUIApplication.State {
+            let state = app.state
+            observations.append("+\(started.duration(to: clock.now)) \(phase): \(state)")
+            return state
+        }
+
+        func fail(_ reason: String, file: StaticString = #filePath, line: UInt = #line) {
+            let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+            screenshot.name = "Privacy round-trip failure screen"
+            screenshot.lifetime = .keepAlways
+            add(screenshot)
+
+            let state = observeState("at failure")
+            let report = "\(reason) Elapsed \(started.duration(to: clock.now)).\n" + observations.joined(separator: "\n")
+            let trace = XCTAttachment(string: report)
+            trace.name = "Privacy round-trip application states"
+            trace.lifetime = .keepAlways
+            add(trace)
+            if state == .runningForeground {
+                let hierarchy = XCTAttachment(string: app.debugDescription)
+                hierarchy.name = "Privacy round-trip accessibility hierarchy"
+                hierarchy.lifetime = .keepAlways
+                add(hierarchy)
+            }
+            XCTFail(report, file: file, line: line)
+        }
+
+        guard app.wait(for: .runningForeground, timeout: 5), addSleep.exists, addSleep.isHittable,
+              observeState("before Home") == .runningForeground else {
+            fail("Expected the app in the foreground with a hittable Add Sleep control before pressing Home.")
+            return
+        }
+        XCUIDevice.shared.press(.home)
+        let backgroundWaitStarted = clock.now
+        let deadline = backgroundWaitStarted.advanced(by: .seconds(10))
+        let backgroundStates: [XCUIApplication.State] = [.runningBackground, .runningBackgroundSuspended]
+        var state = observeState("after Home")
+        while !backgroundStates.contains(state) && clock.now < deadline {
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+            state = observeState("after Home")
+        }
+        guard backgroundStates.contains(state) else {
+            fail("No background state observed in \(backgroundWaitStarted.duration(to: clock.now)) after pressing Home.")
+            return
+        }
+
+        app.activate()
+        guard app.wait(for: .runningForeground, timeout: 5) else {
+            fail("Expected the app to return to the foreground after activation.")
+            return
+        }
+        _ = observeState("after activation")
+        guard addSleep.waitForExistence(timeout: 5), addSleep.isHittable else {
+            fail("Expected a hittable Add Sleep control after activation.")
+            return
+        }
+        guard !app.otherElements["privacy.windowCover"].exists else {
+            fail("The privacy cover is still present after activation.")
+            return
+        }
         addSleep.tap()
-        XCTAssertTrue(app.navigationBars["Add Nap"].waitForExistence(timeout: 5))
+        guard app.navigationBars["Add Nap"].waitForExistence(timeout: 5) else {
+            fail("Expected Add Sleep to open Add Nap after activation.")
+            return
+        }
         app.buttons["recording.cancel"].tap()
-        XCTAssertTrue(addSleep.waitForExistence(timeout: 5))
+        if !addSleep.waitForExistence(timeout: 5) {
+            fail("Expected Add Sleep to return after canceling Add Nap.")
+        }
     }
 
     func testDataHandlingExplanationIsReachableFromSettings() {

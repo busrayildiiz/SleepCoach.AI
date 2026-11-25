@@ -151,6 +151,31 @@ final class TrustedObservationCorrectionTests: XCTestCase {
         XCTAssertEqual(sleeps.load()?.first?.date, original.date.addingTimeInterval(-60))
         XCTAssertNil(snapshot.wakes.first?.completedNightID)
     }
+
+    func testReentrantNapInsertionRetiresTheDaytimeAnswerBeforeAcknowledgement() throws {
+        let boundaries = try pair()
+        let nap = SleepRecord(date: at(-1, 10), duration: 40)
+        var model = DaytimeCoverageReviewModel(storage: wakes.storage)
+        model.start(day: boundaries.0.day, at: now, calendar: calendar)
+        model.choose(.allNapsRecorded)
+        let changed = ObserverGate()
+        let observer = NotificationCenter.default.addObserver(forName: .observationProvenanceDidChange,
+                                                               object: nil, queue: nil) { _ in
+            guard changed.claim() else { return }
+            XCTAssertTrue(self.sleeps.save([nap]))
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+
+        model.save(at: now, calendar: calendar)
+
+        XCTAssertTrue(changed.wasEntered)
+        XCTAssertEqual(model.feedback, .changed)
+        XCTAssertEqual(model.inspection?.status, .invalidated)
+        XCTAssertEqual(model.inspection?.naps.map(\.id), [nap.id])
+        XCTAssertFalse(model.canSave)
+        XCTAssertTrue(adapter.snapshot(calendar: calendar).daytime.isEmpty)
+    }
+
     func testZeroNapInsertDeleteCannotResurrectConfirmation() throws {
         let boundaries = try pair(); try confirm(boundaries)
         let nap = try sleep(start: at(-1, 10), end: at(-1, 11), kind: .dayNap)
