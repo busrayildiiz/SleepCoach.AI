@@ -199,7 +199,7 @@ struct TodayPlanCard: View {
                     .frame(width: artworkWidth, height: artworkHeight)
                     .clipped()
                     .padding(.trailing, -6)
-                    .opacity(colorScheme == .dark ? 0.55 : 0.9)
+                    .opacity(colorScheme == .dark ? 1 : 0.9)
                     .accessibilityHidden(true)
                     .allowsHitTesting(false)
             }
