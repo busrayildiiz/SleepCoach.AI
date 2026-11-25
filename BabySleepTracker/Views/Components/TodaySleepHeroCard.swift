@@ -71,7 +71,7 @@ struct TodaySleepHeroCard: View {
                 cardShape.fill(Color(.systemBackground))
                 if model.mode == .ready && colorScheme == .light {
                     cardShape.fill(.clear)
-                        .overlay { Image("TodaySleepHeroCardBackground").resizable().scaledToFill() }
+                        .overlay { Image(decorative: "TodaySleepHeroCardBackground").resizable().scaledToFill() }
                         .clipShape(cardShape)
                         .accessibilityHidden(true)
                         .allowsHitTesting(false)
@@ -134,7 +134,7 @@ struct TodaySleepHeroCard: View {
     private func readySummary(artworkWidth: CGFloat) -> some View {
         HStack(alignment: .top, spacing: 10) {
             // Center the visible bed within the supplied PNG's transparent margins.
-            Image("TodaySleepBed").resizable().scaledToFit()
+            Image(decorative: "TodaySleepBed").resizable().scaledToFit()
                 .frame(width: 78, height: 78)
                 .offset(x: -5, y: -1)
                 .frame(width: 48, height: 50)
@@ -148,10 +148,10 @@ struct TodaySleepHeroCard: View {
         .padding(.trailing, artworkWidth > 0 ? artworkWidth + 4 : 0)
         .background(alignment: .bottomTrailing) {
             if artworkWidth > 0 {
-                Image("TodaySleepZzzCloud").resizable().scaledToFit()
+                Image(decorative: "TodaySleepZzzCloud").resizable().scaledToFit()
                     .frame(width: artworkWidth, alignment: .trailing)
                     .padding(.trailing, -5)
-                    .opacity(colorScheme == .dark ? 0.55 : 0.9)
+                    .opacity(colorScheme == .dark ? 0.75 : 0.9)
                     .accessibilityHidden(true)
                     .allowsHitTesting(false)
             }

@@ -74,6 +74,21 @@ final class TodayPlanUITests: XCTestCase {
         app.descendants(matching: .any).matching(identifier: "home.plan.event.\(id)").firstMatch
     }
 
+    private func exposedArtwork(_ names: [String], app: XCUIApplication) -> [String] {
+        let matches = names.filter { name in
+            app.images.matching(identifier: name).firstMatch.exists ||
+                app.descendants(matching: .any)
+                    .matching(NSPredicate(format: "label CONTAINS[c] %@", name)).firstMatch.exists
+        }
+        if !matches.isEmpty {
+            let hierarchy = XCTAttachment(string: app.debugDescription)
+            hierarchy.name = "Accessibility hierarchy for \(matches.joined(separator: ", "))"
+            hierarchy.lifetime = .keepAlways
+            add(hierarchy)
+        }
+        return matches
+    }
+
     func testEmptyPlanDoesNotFabricateWakeOrFutureSchedule() {
         let app = launch("empty", revealPlan: false)
         let summary = app.descendants(matching: .any).matching(identifier: "home.sleep.summary").firstMatch
@@ -85,11 +100,14 @@ final class TodayPlanUITests: XCTestCase {
         XCTAssertTrue(addNap.isHittable)
         XCTAssertGreaterThan(addNap.frame.width, app.windows.firstMatch.frame.width * 0.8)
         capture("empty-home-and-ready-hero", app: app, revealContent: false)
+        var exposed = exposedArtwork(["TodaySleepBed", "TodaySleepZzzCloud", "TodaySleepHeroCardBackground"], app: app)
 
         let details = app.buttons["home.plan.details"]
         reveal(details, app: app)
+        exposed += exposedArtwork(["TodayPlanCalendar"], app: app)
         let guidance = app.staticTexts["home.plan.empty.guidance"]
         reveal(guidance, app: app)
+        exposed += exposedArtwork(["TodayPlanSleepyBunny"], app: app)
         let progress = app.descendants(matching: .any).matching(identifier: "home.plan.progress").firstMatch
         XCTAssertFalse(progress.exists)
         XCTAssertTrue(app.staticTexts["No sleep recorded yet"].exists)
@@ -97,14 +115,11 @@ final class TodayPlanUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["home.plan.unavailable"].exists)
         let events = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "home.plan.event."))
         XCTAssertEqual(events.count, 0, "Unavailable predictions must not appear as scheduled nodes.")
-        for name in ["TodaySleepBed", "TodaySleepZzzCloud", "TodayPlanCalendar", "TodayPlanSleepyBunny"] {
-            XCTAssertFalse(app.images[name].exists, "Decorative artwork should be hidden from accessibility.")
-        }
-
         XCTAssertEqual(guidance.label, "Record a wake time or nap to start today's timeline.")
         let title = app.staticTexts["home.plan.title"]
         XCTAssertLessThanOrEqual(guidance.frame.maxY - title.frame.minY + 28, 215)
         capture("empty-plan", app: app, revealContent: false)
+        XCTAssertTrue(exposed.isEmpty, "Decorative artwork appeared in the UI hierarchy: \(exposed.joined(separator: ", ")).")
 
         reveal(details, app: app)
         XCTAssertEqual(details.label, "View full plan")
@@ -128,6 +143,9 @@ final class TodayPlanUITests: XCTestCase {
             let details = app.buttons["home.plan.details"]
             reveal(details, app: app)
             XCTAssertEqual(details.label, "View full plan")
+            if variant.category != nil {
+                capture("empty-plan-header-\(variant.name)", app: app, revealContent: false)
+            }
             reveal(app.staticTexts["home.plan.empty.guidance"], app: app)
             capture("empty-plan-\(variant.name)", app: app, revealContent: false)
             app.terminate()

@@ -141,7 +141,7 @@ struct TodayPlanCard: View {
     private var emptyHeading: some View {
         HStack(spacing: 8) {
             // The visible calendar occupies the center of its transparent canvas.
-            Image("TodayPlanCalendar").resizable().scaledToFit()
+            Image(decorative: "TodayPlanCalendar").resizable().scaledToFit()
                 .frame(width: 58, height: 58)
                 .offset(x: 3, y: -3)
                 .frame(width: 32, height: 32)
@@ -193,7 +193,7 @@ struct TodayPlanCard: View {
         .padding(.trailing, artworkWidth > 0 ? artworkWidth + 6 : 0)
         .background(alignment: .bottomTrailing) {
             if artworkWidth > 0 {
-                Image("TodayPlanSleepyBunny").resizable().scaledToFit()
+                Image(decorative: "TodayPlanSleepyBunny").resizable().scaledToFit()
                     .frame(width: artworkWidth, height: artworkWidth)
                     .offset(y: -artworkWidth * 0.03)
                     .frame(width: artworkWidth, height: artworkHeight)

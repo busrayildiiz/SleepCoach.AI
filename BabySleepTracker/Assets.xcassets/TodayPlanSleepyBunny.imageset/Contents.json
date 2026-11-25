@@ -3,6 +3,16 @@
     {
       "filename": "TodayPlanSleepyBunny.png",
       "idiom": "universal"
+    },
+    {
+      "appearances": [
+        {
+          "appearance": "luminosity",
+          "value": "dark"
+        }
+      ],
+      "filename": "TodayPlanSleepyBunny-Dark.png",
+      "idiom": "universal"
     }
   ],
   "info": {
