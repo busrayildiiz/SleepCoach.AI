@@ -17,26 +17,30 @@ struct TodayPlanPresentation {
     let routineWake: Date?
     let routineBedtime: Date?
     let currentConfirmation: Date?
+    let showsNoRecordsEmptyState: Bool
     /// Presentation wording follows the existing Hero, never a new wake-time rule.
     let overnightEndUnconfirmed: Bool
 
     init(items: [SleepTimelineItem], isOvernight: Bool = false, morningWake: MorningWake? = nil,
          overnightEndUnconfirmed: Bool = false, routineWake: Date? = nil, routineBedtime: Date? = nil,
-         currentConfirmation: Date? = nil) {
+         currentConfirmation: Date? = nil, hasSleepOrWakeContext: Bool = false) {
         // Unavailable/default predictions are an indicator, never a scheduled node.
-        self.items = items.filter { item in
+        let visibleItems = items.filter { item in
             switch item.source {
             case .recorded: return true
             case .estimate: return item.isFuture
             default: return false
             }
         }
+        self.items = visibleItems
         self.isOvernight = isOvernight
         self.morningWake = morningWake
         self.overnightEndUnconfirmed = overnightEndUnconfirmed
         self.routineWake = routineWake
         self.routineBedtime = routineBedtime
         self.currentConfirmation = currentConfirmation
+        showsNoRecordsEmptyState = visibleItems.isEmpty && !hasSleepOrWakeContext && !isOvernight &&
+            morningWake == nil && routineWake == nil && routineBedtime == nil && currentConfirmation == nil
         predictionsUnavailable = !isOvernight && items.contains {
             $0.kind == .plan || $0.source == .defaultValue || $0.source == .guidance ||
                 ($0.source == .estimate && $0.visualState == .unavailable)
@@ -105,10 +109,15 @@ struct TodayPlanPresentation {
             return left == right ? $0.id < $1.id : left < right
         }
         let useRoutine = assessment.anchor == nil && assessment.active == nil
+        // The assessment can still have context when no event projects into today's row.
+        let hasSleepOrWakeContext: Bool
+        if case .missing = assessment.state { hasSleepOrWakeContext = false }
+        else { hasSleepOrWakeContext = true }
         return Self(items: events,
                     routineWake: useRoutine ? routine?.wake(on: now, calendar: calendar) : nil,
                     routineBedtime: useRoutine ? routine?.bedtime(on: now, calendar: calendar) : nil,
-                    currentConfirmation: assessment.active.flatMap { $0.elapsed == nil ? $0.confirmation : nil })
+                    currentConfirmation: assessment.active.flatMap { $0.elapsed == nil ? $0.confirmation : nil },
+                    hasSleepOrWakeContext: hasSleepOrWakeContext)
     }
 
     /// Unconfirmed routine references and unavailable entries never inflate progress.

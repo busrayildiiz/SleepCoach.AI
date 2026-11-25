@@ -447,11 +447,32 @@ final class SleepTimelineCalculatorTests: XCTestCase {
         let empty = TodayPlanPresentation(items: calculate())
         XCTAssertTrue(empty.items.isEmpty)
         XCTAssertTrue(empty.predictionsUnavailable)
+        XCTAssertTrue(empty.showsNoRecordsEmptyState)
         let done = SleepRecord(date: at(8), duration: 30)
         let display = TodayPlanPresentation(items: calculate(records: [done]))
         XCTAssertEqual(display.items.map(\.source), [.recorded(done.id)])
         XCTAssertTrue(display.predictionsUnavailable)
         XCTAssertEqual(display.availableEventCount, 1)
+        XCTAssertFalse(display.showsNoRecordsEmptyState)
+    }
+
+    func testHomePlanArtworkRequiresNoSleepWakeOrPlanningContext() {
+        let now = at(12)
+        XCTAssertTrue(homePlan([], now: now).showsNoRecordsEmptyState)
+
+        let wake = DailyWakeRecord(day: day, wakeTime: at(7))
+        XCTAssertFalse(homePlan([], wakes: [wake], now: now).showsNoRecordsEmptyState)
+        XCTAssertFalse(homePlan([], now: now, routine: .init(wakeHour: 7)).showsNoRecordsEmptyState)
+        XCTAssertFalse(homePlan([], now: at(20), routine: .init(wakeHour: nil, bedHour: 19)).showsNoRecordsEmptyState)
+        XCTAssertFalse(homePlan([night()], now: overnightNow).showsNoRecordsEmptyState)
+
+        let estimate = TodayPlanPresentation(items: calculate(proposals: [proposal("next", hour: 14)], verified: true))
+        XCTAssertFalse(estimate.showsNoRecordsEmptyState)
+
+        let competingWake = DailyWakeRecord(day: day, wakeTime: at(8))
+        let ambiguous = homePlan([], wakes: [wake, competingWake], now: now)
+        XCTAssertTrue(ambiguous.items.isEmpty)
+        XCTAssertFalse(ambiguous.showsNoRecordsEmptyState, "Conflicting observations still provide record context.")
     }
 
     func testOvernightRoutineKeepsOriginalIDDayAndElapsedWithoutInventedEnd() throws {

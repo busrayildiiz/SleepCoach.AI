@@ -12,10 +12,12 @@ struct TodaySleepHeroCard: View {
     let confirmWake: () -> Void
     @Environment(\.dynamicTypeSize) private var dynamicType
     @Environment(\.colorScheme) private var colorScheme
+    @ScaledMetric(relativeTo: .body) private var readyCopyWidth: CGFloat = 162
     @State private var explainsEstimates = false
 
     private var warm: Bool { model.mode == .morningConfirmed || model.mode == .morningUnconfirmed }
     private var accent: Color { RecordingColor.accent }
+    private var cardShape: RoundedRectangle { RoundedRectangle(cornerRadius: 20, style: .continuous) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -34,24 +36,9 @@ struct TodaySleepHeroCard: View {
                         .accessibilityLabel("Live, confirmed ongoing night sleep")
                 }
             }
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: symbol)
-                    .recordingFont(25, weight: .semibold)
-                    .foregroundStyle(warm ? CoachColor.sun : accent)
-                    .frame(width: 42, height: 42)
-                    .background((warm ? CoachColor.sun : CoachColor.purple).opacity(0.10), in: Circle())
-                    .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(model.title).recordingFont(21, weight: .bold, rounded: true)
-                    summary.recordingFont(12, weight: .medium)
-                        .foregroundStyle(RecordingColor.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.trailing, dynamicType.isAccessibilitySize ? 0 : 30)
-            }
-            .accessibilityElement(children: .combine)
-            .accessibilityIdentifier("home.sleep.summary")
+            summaryRow
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("home.sleep.summary")
 
             information
             actions
@@ -81,25 +68,94 @@ struct TodaySleepHeroCard: View {
         .padding(16)
         .background {
             ZStack(alignment: .topTrailing) {
-                RoundedRectangle(cornerRadius: 20, style: .continuous).fill(Color(.systemBackground))
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .fill(LinearGradient(colors: [CoachColor.purple.opacity(0.025),
+                cardShape.fill(Color(.systemBackground))
+                if model.mode == .ready && colorScheme == .light {
+                    cardShape.fill(.clear)
+                        .overlay { Image("TodaySleepHeroCardBackground").resizable().scaledToFill() }
+                        .clipShape(cardShape)
+                        .accessibilityHidden(true)
+                        .allowsHitTesting(false)
+                } else {
+                    cardShape.fill(LinearGradient(colors: [CoachColor.purple.opacity(0.025),
                         (warm ? CoachColor.sun : CoachColor.purple).opacity(model.mode == .nightActive ? 0.19 : 0.11)],
                         startPoint: .leading, endPoint: .topTrailing))
-                if !dynamicType.isAccessibilitySize {
+                }
+                if model.mode != .ready && !dynamicType.isAccessibilitySize {
                     HeroSky(warm: warm, sleeping: model.mode == .napActive)
                         .frame(width: 116, height: 105).opacity(colorScheme == .dark ? 0.35 : 0.75)
                         .padding(.top, 28).accessibilityHidden(true).allowsHitTesting(false)
                 }
             }
         }
-        .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(CoachColor.purple.opacity(0.15), lineWidth: 1))
+        .overlay(cardShape.stroke(CoachColor.purple.opacity(0.15), lineWidth: 1))
         .shadow(color: CoachColor.purpleDeep.opacity(0.09), radius: 9, x: 0, y: 4)
         .alert("About estimates", isPresented: $explainsEstimates, actions: {
             Button("OK", role: .cancel) {}
         }, message: {
             Text("Estimates are guidance, not recorded sleep. Estimates may be unavailable until enough reliable sleep data is available. Routine times never confirm a wake or end a sleep session.")
         })
+    }
+
+    @ViewBuilder private var summaryRow: some View {
+        if model.mode == .ready {
+            if dynamicType.isAccessibilitySize {
+                readySummary(artworkWidth: 0)
+            } else {
+                ViewThatFits(in: .horizontal) {
+                    readySummary(artworkWidth: 108)
+                    readySummary(artworkWidth: 84)
+                    readySummary(artworkWidth: 0)
+                }
+            }
+        } else {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: symbol)
+                    .recordingFont(25, weight: .semibold)
+                    .foregroundStyle(warm ? CoachColor.sun : accent)
+                    .frame(width: 42, height: 42)
+                    .background((warm ? CoachColor.sun : CoachColor.purple).opacity(0.10), in: Circle())
+                    .accessibilityHidden(true)
+                summaryCopy
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.trailing, dynamicType.isAccessibilitySize ? 0 : 30)
+            }
+        }
+    }
+
+    private var summaryCopy: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(model.title).recordingFont(21, weight: .bold, rounded: true)
+            summary.recordingFont(12, weight: .medium)
+                .foregroundStyle(RecordingColor.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func readySummary(artworkWidth: CGFloat) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            // Center the visible bed within the supplied PNG's transparent margins.
+            Image("TodaySleepBed").resizable().scaledToFit()
+                .frame(width: 78, height: 78)
+                .offset(x: -5, y: -1)
+                .frame(width: 48, height: 50)
+                .clipped()
+                .accessibilityHidden(true)
+                .allowsHitTesting(false)
+            summaryCopy
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(idealWidth: readyCopyWidth, maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.trailing, artworkWidth > 0 ? artworkWidth + 4 : 0)
+        .background(alignment: .bottomTrailing) {
+            if artworkWidth > 0 {
+                Image("TodaySleepZzzCloud").resizable().scaledToFit()
+                    .frame(width: artworkWidth, alignment: .trailing)
+                    .padding(.trailing, -5)
+                    .opacity(colorScheme == .dark ? 0.55 : 0.9)
+                    .accessibilityHidden(true)
+                    .allowsHitTesting(false)
+            }
+        }
     }
 
     private var symbol: String {
@@ -248,13 +304,14 @@ struct TodaySleepHeroCard: View {
         }
     }
     private func action(_ title: LocalizedStringKey, symbol: String, id: String, primary: Bool, _ perform: @escaping () -> Void) -> some View {
-        Button(action: perform) {
+        let primaryStart = model.mode == .ready ? CoachColor.purpleDeep : CoachColor.purple
+        return Button(action: perform) {
             Label(title, systemImage: symbol).recordingFont(13, weight: .semibold)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, minHeight: 44).padding(.horizontal, 10)
                 .foregroundStyle(primary ? Color.white : RecordingColor.ink)
                 .background {
-                    Capsule().fill(LinearGradient(colors: primary ? [CoachColor.purple, RecordingColor.actionFill] :
+                    Capsule().fill(LinearGradient(colors: primary ? [primaryStart, RecordingColor.actionFill] :
                         [(warm ? CoachColor.sun : CoachColor.purple).opacity(0.08), CoachColor.purple.opacity(0.035)], startPoint: .top, endPoint: .bottom))
                 }
                 .overlay(Capsule().stroke(CoachColor.purple.opacity(primary ? 0 : 0.2), lineWidth: 1))

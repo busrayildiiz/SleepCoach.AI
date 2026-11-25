@@ -33,7 +33,7 @@ final class TodaySleepHeroUITests: XCTestCase {
             let bottom = tab.exists && tab.isHittable ? tab.frame.minY : window.maxY
             let visible = CGRect(x: window.minX, y: window.minY + 44, width: window.width,
                                  height: max(0, bottom - window.minY - 44))
-            if element.exists && element.isHittable && visible.contains(CGPoint(x: element.frame.midX, y: element.frame.midY)) { return }
+            if element.exists && visible.contains(CGPoint(x: element.frame.midX, y: element.frame.midY)) && element.isHittable { return }
             // Keep large-type hero actions reachable on SE without overshooting them.
             let distance = element.exists ? element.frame.midY - visible.midY : visible.height
             let step = min(abs(distance), visible.height * 0.4)
@@ -180,6 +180,28 @@ final class TodaySleepHeroUITests: XCTestCase {
         reveal(large.buttons["hero.endSleep"], app: large)
         XCTAssertTrue(large.buttons["hero.endSleep"].isHittable)
         capture("nap-active-large-type", app: large)
+    }
+    func testReadyHeroOpensAddNapAndSavingReplacesTheIllustratedEmptyPlan() {
+        let app = launch("ready", live: true)
+        let guidance = app.staticTexts["home.plan.empty.guidance"]
+        reveal(guidance, app: app)
+
+        tapHomeButton("hero.addNap", app: app)
+        let editor = app.navigationBars["Add Nap"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        let save = app.buttons["recording.save"]
+        reveal(save, app: app)
+        XCTAssertTrue(save.isEnabled)
+        save.tap()
+        dismissed(editor)
+
+        let summary = app.descendants(matching: .any).matching(identifier: "home.sleep.summary").firstMatch
+        let completed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "Nap completed"), object: summary)
+        XCTAssertEqual(XCTWaiter.wait(for: [completed], timeout: 5), .completed)
+        XCTAssertFalse(guidance.exists)
+        capture("home-after-recording-a-nap", app: app)
+        reveal(app.buttons["home.plan.details"], app: app)
+        capture("plan-after-recording-a-nap", app: app)
     }
     func testNapEndRequiresSaveAndBreakKeepsParentRoute() {
         let app = launch("napActive", live: true)
