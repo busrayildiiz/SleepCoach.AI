@@ -42,6 +42,7 @@ struct TodayPlanCard: View {
     @ScaledMetric(relativeTo: .body) private var overnightNodeDiameter: CGFloat = 44
     @ScaledMetric(relativeTo: .body) private var overnightCaptionSpacing: CGFloat = 14
     @ScaledMetric(relativeTo: .body) private var compactOvernightCaptionSpacing: CGFloat = 4
+    @ScaledMetric(relativeTo: .body) private var emptyCopyWidth: CGFloat = 210
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dynamicTypeSize) private var dynamicType
     private var items: [SleepTimelineItem] { presentation.items }
@@ -63,13 +64,17 @@ struct TodayPlanCard: View {
         VStack(alignment: .leading, spacing: 12) {
             if presentation.isOvernight {
                 overnightHeader
+            } else if presentation.showsNoRecordsEmptyState {
+                emptyHeader
             } else {
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: 8) { heading; Spacer(minLength: 4); detailsButton }
                     VStack(alignment: .leading, spacing: 4) { heading; detailsButton }
                 }
             }
-            if items.isEmpty && presentation.morningWake == nil && presentation.currentConfirmation == nil {
+            if presentation.showsNoRecordsEmptyState {
+                emptyState
+            } else if items.isEmpty && presentation.morningWake == nil && presentation.currentConfirmation == nil {
                 Text("No sleep recorded yet")
                     .recordingFont(12, weight: .medium).foregroundStyle(RecordingColor.secondary)
             } else if let night = overnightNight {
@@ -99,10 +104,8 @@ struct TodayPlanCard: View {
                 Text("Usual bedtime (routine) · \(bedtime, format: .dateTime.hour().minute())")
                     .recordingFont(12).foregroundStyle(RecordingColor.secondary)
             }
-            if presentation.predictionsUnavailable && items.isEmpty {
-                Text("Predictions unavailable")
-                    .recordingFont(10, weight: .medium).foregroundStyle(RecordingColor.secondary)
-                    .accessibilityIdentifier("home.plan.unavailable")
+            if presentation.predictionsUnavailable && items.isEmpty && !presentation.showsNoRecordsEmptyState {
+                unavailableNotice
             }
         }
         .foregroundStyle(RecordingColor.ink)
@@ -119,6 +122,94 @@ struct TodayPlanCard: View {
         .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous)
             .stroke(CoachColor.purple.opacity(0.15), lineWidth: 1))
         .shadow(color: CoachColor.purpleDeep.opacity(0.08), radius: 12, x: 0, y: 5)
+    }
+
+    private var emptyHeader: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                emptyHeading.fixedSize(horizontal: true, vertical: false)
+                Spacer(minLength: 4)
+                detailsButton.fixedSize(horizontal: true, vertical: false)
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                emptyHeading
+                detailsButton
+            }
+        }
+    }
+
+    private var emptyHeading: some View {
+        HStack(spacing: 8) {
+            // The visible calendar occupies the center of its transparent canvas.
+            Image(decorative: "TodayPlanCalendar").resizable().scaledToFit()
+                .frame(width: 58, height: 58)
+                .offset(x: 3, y: -3)
+                .frame(width: 32, height: 32)
+                .clipped()
+                .accessibilityHidden(true)
+                .allowsHitTesting(false)
+            title
+        }
+    }
+
+    private var emptyState: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if dynamicType.isAccessibilitySize {
+                emptyIntroduction(artworkWidth: 0)
+            } else {
+                ViewThatFits(in: .horizontal) {
+                    emptyIntroduction(artworkWidth: 120)
+                    emptyIntroduction(artworkWidth: 98)
+                    emptyIntroduction(artworkWidth: 0)
+                }
+            }
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Image(systemName: "calendar")
+                    .recordingFont(12, weight: .semibold).foregroundStyle(accent)
+                    .accessibilityHidden(true).allowsHitTesting(false)
+                Text("Record a wake time or nap to start today's timeline.")
+                    .recordingFont(11, weight: .medium).foregroundStyle(RecordingColor.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("home.plan.empty.guidance")
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(RecordingColor.inset, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
+    }
+
+    private func emptyIntroduction(artworkWidth: CGFloat) -> some View {
+        // The bunny's visible artwork occupies about two thirds of the square PNG's height.
+        let artworkHeight = artworkWidth * 0.65
+        return VStack(alignment: .leading, spacing: 4) {
+            Text("No sleep recorded yet").recordingFont(16, weight: .bold, rounded: true)
+            Text("Your sleep timeline will take shape as you add records.")
+                .recordingFont(12, weight: .medium).foregroundStyle(RecordingColor.secondary)
+            if presentation.predictionsUnavailable { unavailableNotice }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(idealWidth: emptyCopyWidth, maxWidth: .infinity, minHeight: artworkHeight, alignment: .leading)
+        .padding(.trailing, artworkWidth > 0 ? artworkWidth + 6 : 0)
+        .background(alignment: .bottomTrailing) {
+            if artworkWidth > 0 {
+                Image(decorative: "TodayPlanSleepyBunny").resizable().scaledToFit()
+                    .frame(width: artworkWidth, height: artworkWidth)
+                    .offset(y: -artworkWidth * 0.03)
+                    .frame(width: artworkWidth, height: artworkHeight)
+                    .clipped()
+                    .padding(.trailing, -6)
+                    .opacity(colorScheme == .dark ? 1 : 0.9)
+                    .accessibilityHidden(true)
+                    .allowsHitTesting(false)
+            }
+        }
+    }
+
+    private var unavailableNotice: some View {
+        Text("Predictions unavailable")
+            .recordingFont(10, weight: .medium).foregroundStyle(RecordingColor.secondary)
+            .accessibilityIdentifier("home.plan.unavailable")
     }
 
     private var overnightHeader: some View {

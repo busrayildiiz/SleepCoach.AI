@@ -70,11 +70,21 @@ final class HomeDashboardCardUITests: XCTestCase {
         disappears(app.navigationBars["Today's Wake-up"])
         disappears(app.buttons["home.wake.add"])
         screenshot("wake-hidden-after-save", app: app)
+        reveal(app.buttons["home.plan.details"], app: app)
+        let wake = app.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "home.plan.event.record:", "Wake up"
+        )).firstMatch
+        XCTAssertTrue(wake.waitForExistence(timeout: 5))
+        XCTAssertTrue(wake.label.contains("Done"), wake.label)
+        XCTAssertFalse(app.staticTexts["home.plan.empty.guidance"].exists)
+        screenshot("plan-after-recording-a-wake", app: app)
         app.terminate()
         app.launchEnvironment["HOME_CARD_RESET"] = "0"
         app.launch()
         XCTAssertTrue(app.staticTexts["TEST FIXTURE — NOT A PREDICTION"].waitForExistence(timeout: 10))
         XCTAssertFalse(app.buttons["home.wake.add"].exists)
+        reveal(app.buttons["home.plan.details"], app: app)
+        XCTAssertTrue(wake.waitForExistence(timeout: 5))
     }
     func testFailedSaveKeepsEditorAndWakeCard() {
         let app = launch(failure: true)
