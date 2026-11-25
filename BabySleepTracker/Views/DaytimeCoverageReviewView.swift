@@ -136,7 +136,7 @@ struct DaytimeCoverageReviewView: View {
         switch inspection.status {
         case .unknown: return "Awaiting review"
         case .incomplete: return "Recording marked incomplete"
-        case .confirmed: return inspection.naps.isEmpty ? "Zero naps confirmed" : "Daytime nap coverage complete"
+        case .confirmed: return inspection.naps.isEmpty ? "Zero naps confirmed" : "You confirmed all naps were recorded"
         case .invalidated: return "Needs review again"
         }
     }
