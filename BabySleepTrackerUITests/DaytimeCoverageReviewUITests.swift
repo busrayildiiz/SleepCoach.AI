@@ -18,28 +18,37 @@ final class DaytimeCoverageReviewUITests: XCTestCase {
     }
 
     private func reveal(_ element: XCUIElement, in app: XCUIApplication, towardTop: Bool = false,
-                        requireHittable: Bool = true, reviewForm: XCUIElement? = nil) {
+                        requireHittable: Bool = true, inReview: Bool = false) {
         let window = app.windows.firstMatch
-        let container = reviewForm ?? window
         let navigation = app.navigationBars["Daytime recording"]
-        let indicator = reviewForm?.otherElements.matching(NSPredicate(
-            format: "label BEGINSWITH %@", "Vertical scroll bar")).firstMatch
-        let firstCell = reviewForm?.cells.firstMatch
         let moveLimit = 12
-        var lastPosition: String?
+        var lastTargetY: CGFloat?
         var stalledMoves = 0
         var moves = 0
         var viewport = CGRect.null
 
         for move in 0...moveLimit {
+            let form = inReview ? app.collectionViews.firstMatch : nil
+            if let form {
+                guard window.exists || window.waitForExistence(timeout: 5),
+                      navigation.exists || navigation.waitForExistence(timeout: 5),
+                      form.exists || form.waitForExistence(timeout: 5) else {
+                    captureReview("scroll-review-unavailable")
+                    XCTFail("Daytime recording was unavailable after \(moves) scroll moves. " +
+                            "App state \(app.state), window \(window.exists), navigation \(navigation.exists), " +
+                            "form \(form.exists).\n\(app.debugDescription)")
+                    return
+                }
+            }
             let screen = window.frame
-            let bounds = container.frame
-            if reviewForm != nil {
-                let form = bounds.intersection(screen)
-                guard !form.isEmpty else { break }
-                let top = max(form.minY, navigation.frame.maxY)
-                viewport = CGRect(x: form.minX, y: top, width: form.width,
-                                  height: max(0, form.maxY - top)).insetBy(dx: 6, dy: 6)
+            if inReview {
+                // The review fills the sheet below its navigation bar. Use window
+                // coordinates so gestures do not resolve the Form during animation.
+                let navigationFrame = navigation.frame
+                guard !navigationFrame.isEmpty, screen.intersects(navigationFrame) else { break }
+                let top = max(screen.minY, navigationFrame.maxY)
+                viewport = CGRect(x: screen.minX, y: top, width: screen.width,
+                                  height: max(0, screen.maxY - top)).insetBy(dx: 6, dy: 6)
             } else {
                 let tab = app.buttons["recording.addSleep"]
                 let bottom = tab.exists && tab.isHittable ? tab.frame.minY : screen.maxY
@@ -55,34 +64,34 @@ final class DaytimeCoverageReviewUITests: XCTestCase {
                 return
             }
 
-            // The Form virtualizes rows. Its scroll indicator or first live cell measures
-            // progress while the target row is still absent from the accessibility tree.
-            let position: String?
-            if let indicator, indicator.exists, let value = indicator.value as? String {
-                position = value
-            } else if let firstCell, firstCell.exists {
-                position = String(describing: firstCell.frame)
+            // Measure movement from the app-scoped target once its row resolves.
+            // The move limit bounds scrolling while the row is virtualized.
+            let currentTargetY = inReview && hasFrame ? frame.midY : nil
+            if let currentTargetY, let lastTargetY, abs(currentTargetY - lastTargetY) < 1 {
+                stalledMoves += 1
             } else {
-                position = nil
+                stalledMoves = 0
             }
-            stalledMoves = position != nil && position == lastPosition ? stalledMoves + 1 : 0
-            lastPosition = position
+            lastTargetY = currentTargetY
             guard move < moveLimit, stalledMoves < 2 else { break }
 
-            let distance = hasFrame ? frame.midY - viewport.midY : (towardTop ? -viewport.height : viewport.height)
+            let targetY = inReview && frame.midY < viewport.minY ? viewport.minY + 24 : viewport.midY
+            let distance = hasFrame ? frame.midY - targetY : (towardTop ? -viewport.height : viewport.height)
             let scrollingUp = distance < 0
-            let stride: CGFloat = reviewForm == nil ? 0.4 : 0.75
+            let stride: CGFloat = inReview ? 0.75 : 0.4
             let step = min(max(30, abs(distance)), viewport.height * stride)
-            let startY = reviewForm == nil ? viewport.midY :
+            let startY = !inReview ? viewport.midY :
                 viewport.minY + viewport.height * (scrollingUp ? 0.12 : 0.88)
-            let start = container.coordinate(withNormalizedOffset: .zero)
-                .withOffset(CGVector(dx: viewport.midX - bounds.minX, dy: startY - bounds.minY))
+            let start = window.coordinate(withNormalizedOffset: .zero)
+                .withOffset(CGVector(dx: viewport.midX - screen.minX, dy: startY - screen.minY))
             let end = start.withOffset(CGVector(dx: 0, dy: scrollingUp ? step : -step))
             start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.1)
             moves += 1
         }
+        if inReview { captureReview("scroll-target-unreachable") }
         XCTFail("Review control was unreachable after \(moves) moves (\(stalledMoves) without progress). " +
-                "Viewport \(viewport), last position \(lastPosition ?? "unavailable"): \(element)\n\(app.debugDescription)")
+                "Viewport \(viewport), last target y \(lastTargetY.map { "\($0)" } ?? "unavailable"): " +
+                "\(element)\n\(app.debugDescription)")
     }
 
     private func openFromToday(_ app: XCUIApplication) {
@@ -102,10 +111,8 @@ final class DaytimeCoverageReviewUITests: XCTestCase {
     }
 
     private func expectStatus(_ label: String, app: XCUIApplication) {
-        let form = app.collectionViews.firstMatch
-        XCTAssertTrue(form.waitForExistence(timeout: 5))
-        let status = form.staticTexts["daytimeReview.status"]
-        reveal(status, in: app, towardTop: true, reviewForm: form)
+        let status = app.staticTexts["daytimeReview.status"]
+        reveal(status, in: app, towardTop: true, inReview: true)
         let predicate = NSPredicate(format: "label == %@", label)
         expectation(for: predicate, evaluatedWith: status)
         waitForExpectations(timeout: 5)
