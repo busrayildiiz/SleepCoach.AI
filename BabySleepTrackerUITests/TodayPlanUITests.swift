@@ -170,6 +170,255 @@ final class TodayPlanUITests: XCTestCase {
         XCTAssertTrue(app.buttons["sleep.addBreak.\(parentID)"].waitForExistence(timeout: 5))
     }
 
+    func testStandaloneMorningWakeEditPrefillsCancelsAndSavesRecordedAndVerifiedWake() {
+        for scenario in ["morning-wake-recorded", "morning-wake-verified"] {
+            let app = launch(scenario)
+            let dayLabel = openDayDetailForWakeCorrection(app)
+            let wake = app.descendants(matching: .any).matching(identifier: "history.day.wake").firstMatch
+            XCTAssertTrue(wake.label.contains(scenario == "morning-wake-recorded" ? "Recorded" : "Verified"), wake.label)
+            captureMorningWake("\(scenario)-edit-entry", app: app)
+
+            openWakeCorrection(app)
+            assertWakeSelection("8:20", app: app)
+            XCTAssertFalse(app.staticTexts["home.wake.linkedExplanation"].exists)
+            captureMorningWake("\(scenario)-persisted-prefill", app: app)
+            selectWakeMinute("35", app: app)
+            app.buttons["home.wake.cancel"].tap()
+            waitForWakeEditorDismissal(app)
+            XCTAssertEqual(app.staticTexts["history.day.date"].label, dayLabel)
+            XCTAssertTrue(wake.label.contains("8:20"), "Cancel must retain the persisted wake: \(wake.label)")
+
+            openWakeCorrection(app)
+            assertWakeSelection("8:20", app: app)
+            selectWakeMinute("35", app: app)
+            app.buttons["home.wake.save"].tap()
+            waitForWakeEditorDismissal(app)
+            assertCorrectedDayAndPlan(dayLabel, linked: false, app: app)
+            app.terminate()
+        }
+    }
+
+    func testLinkedMorningWakeRequiresUpdateBothConsentAndRefreshesTheSameDay() {
+        let app = launch("morning-wake-linked")
+        let dayLabel = openDayDetailForWakeCorrection(app)
+        captureMorningWake("linked-edit-entry", app: app)
+        openWakeCorrection(app)
+        assertWakeSelection("8:20", app: app)
+        XCTAssertTrue(app.staticTexts["home.wake.linkedExplanation"].exists)
+        captureMorningWake("linked-persisted-prefill", app: app)
+
+        selectWakeMinute("35", app: app)
+        app.buttons["home.wake.save"].tap()
+        let updateBoth = app.buttons["home.wake.updateBoth"]
+        XCTAssertTrue(updateBoth.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "8:35")).count > 0)
+        captureMorningWake("linked-explicit-update-both", app: app)
+        app.buttons["home.wake.updateBoth.cancel"].tap()
+        app.buttons["home.wake.cancel"].tap()
+        waitForWakeEditorDismissal(app)
+        let wake = app.descendants(matching: .any).matching(identifier: "history.day.wake").firstMatch
+        XCTAssertTrue(wake.label.contains("8:20"), "Cancelling consent must not write the correction: \(wake.label)")
+        XCTAssertEqual(app.staticTexts["history.day.date"].label, dayLabel)
+
+        // A reopened editor must still use persisted time, not the cancelled proposal.
+        openWakeCorrection(app)
+        assertWakeSelection("8:20", app: app)
+        selectWakeMinute("35", app: app)
+        app.buttons["home.wake.save"].tap()
+        XCTAssertTrue(updateBoth.waitForExistence(timeout: 5))
+        updateBoth.tap()
+        waitForWakeEditorDismissal(app)
+        assertCorrectedDayAndPlan(dayLabel, linked: true, app: app)
+    }
+
+    func testLinkedMorningWakeEditAndConsentRemainReachableInDarkAccessibilitySize() {
+        let app = launch("morning-wake-linked", dark: true, large: true)
+        let dayLabel = openDayDetailForWakeCorrection(app)
+        captureMorningWake("linked-dark-accessibility-edit-entry", app: app)
+        openWakeCorrection(app)
+        captureMorningWake("linked-dark-accessibility-editor-overview", app: app)
+        let date = app.staticTexts["home.wake.date"]
+        revealWakeControl(date, app: app, editor: true)
+        XCTAssertTrue(date.isHittable)
+        assertWakeSelection("8:20", app: app)
+        selectWakeMinute("35", app: app)
+        captureMorningWake("linked-dark-accessibility-picker", app: app)
+        let save = app.buttons["home.wake.save"]
+        XCTAssertTrue(save.isHittable && save.isEnabled)
+        save.tap()
+        let updateBoth = app.buttons["home.wake.updateBoth"]
+        XCTAssertTrue(updateBoth.waitForExistence(timeout: 5))
+        XCTAssertTrue(updateBoth.isHittable && updateBoth.isEnabled)
+        captureMorningWake("linked-dark-accessibility-confirmation", app: app)
+        updateBoth.tap()
+        waitForWakeEditorDismissal(app)
+        assertCorrectedDayAndPlan(dayLabel, linked: true, app: app)
+    }
+
+    func testFutureMorningWakeCorrectionShowsErrorAndKeepsPersistedWakeUnchanged() {
+        let app = launch("morning-wake-verified")
+        let dayLabel = openDayDetailForWakeCorrection(app)
+        openWakeCorrection(app)
+        assertWakeSelection("8:20", app: app)
+        let wheels = app.datePickers["home.wake.time"].pickerWheels
+        let hour = wheels.element(boundBy: 0)
+        revealWakeControl(hour, app: app, editor: true)
+        if wheels.count == 3 {
+            hour.adjust(toPickerWheelValue: "1")
+            wheels.element(boundBy: 2).adjust(toPickerWheelValue: "PM")
+        } else {
+            hour.adjust(toPickerWheelValue: "13")
+        }
+        // B's captured clock is 12:07. The proposed 13:20 is still on the fixed day.
+        app.buttons["home.wake.save"].tap()
+        let error = app.alerts["Could not save wake time"]
+        XCTAssertTrue(error.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(error.staticTexts["Choose a valid wake time on this date that keeps the sleep and awake breaks consistent."].exists)
+        captureMorningWake("future-time-rejected-editor-retained", app: app)
+        error.buttons["OK"].tap()
+        XCTAssertTrue(app.navigationBars["Edit Morning Wake"].buttons["home.wake.cancel"].isHittable)
+        XCTAssertFalse(app.staticTexts["home.wake.pending"].exists, "Validation must not reserve an invalid correction.")
+        app.buttons["home.wake.cancel"].tap()
+        waitForWakeEditorDismissal(app)
+        XCTAssertEqual(app.staticTexts["history.day.date"].label, dayLabel)
+        let wake = app.descendants(matching: .any).matching(identifier: "history.day.wake").firstMatch
+        XCTAssertTrue(wake.label.contains("8:20"), wake.label)
+        captureMorningWake("future-time-rejected-original-wake", app: app)
+    }
+
+    private func openDayDetailForWakeCorrection(_ app: XCUIApplication) -> String {
+        app.buttons["home.plan.details"].tap()
+        XCTAssertTrue(app.navigationBars["Day detail"].waitForExistence(timeout: 5))
+        let date = app.staticTexts["history.day.date"]
+        XCTAssertTrue(date.waitForExistence(timeout: 5))
+        let dayLabel = date.label
+        XCTAssertTrue(dayLabel.contains("Today"), dayLabel)
+        let edit = app.buttons["history.wake.edit"]
+        revealWakeControl(edit, app: app)
+        XCTAssertTrue(edit.isEnabled && edit.isHittable)
+        XCTAssertTrue(edit.label.contains("Edit morning wake"))
+        return dayLabel
+    }
+
+    private func openWakeCorrection(_ app: XCUIApplication) {
+        let edit = app.buttons["history.wake.edit"]
+        revealWakeControl(edit, app: app)
+        edit.tap()
+        XCTAssertTrue(app.navigationBars["Edit Morning Wake"].waitForExistence(timeout: 5))
+        let date = app.staticTexts["home.wake.date"]
+        XCTAssertTrue(date.waitForExistence(timeout: 5))
+        let formatter = DateFormatter()
+        formatter.calendar = .current
+        formatter.timeZone = .current
+        formatter.dateFormat = "d MMM yyyy"
+        XCTAssertTrue(date.label.contains(formatter.string(from: Date())), date.label)
+    }
+
+    private func assertWakeSelection(_ time: String, app: XCUIApplication) {
+        let selected = app.staticTexts["home.wake.selection"]
+        XCTAssertTrue(selected.waitForExistence(timeout: 5))
+        let expected = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", time), object: selected)
+        XCTAssertEqual(XCTWaiter.wait(for: [expected], timeout: 5), .completed, selected.label)
+    }
+
+    private func selectWakeMinute(_ minute: String, app: XCUIApplication) {
+        let picker = app.datePickers["home.wake.time"]
+        XCTAssertTrue(picker.waitForExistence(timeout: 5), app.debugDescription)
+        let minuteWheel = picker.pickerWheels.element(boundBy: 1)
+        revealWakeControl(minuteWheel, app: app, editor: true)
+        XCTAssertTrue(minuteWheel.isEnabled && minuteWheel.isHittable)
+        minuteWheel.adjust(toPickerWheelValue: minute)
+        assertWakeSelection("8:\(minute)", app: app)
+    }
+
+    private func waitForWakeEditorDismissal(_ app: XCUIApplication) {
+        let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"),
+                                              object: app.navigationBars["Edit Morning Wake"])
+        XCTAssertEqual(XCTWaiter.wait(for: [gone], timeout: 5), .completed, app.debugDescription)
+        XCTAssertTrue(app.navigationBars["Day detail"].buttons["Done"].isHittable)
+    }
+
+    private func assertCorrectedDayAndPlan(_ dayLabel: String, linked: Bool, app: XCUIApplication) {
+        XCTAssertEqual(app.staticTexts["history.day.date"].label, dayLabel)
+        let wake = app.descendants(matching: .any).matching(identifier: "history.day.wake").firstMatch
+        let corrected = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "8:35"), object: wake)
+        XCTAssertEqual(XCTWaiter.wait(for: [corrected], timeout: 5), .completed, wake.label)
+        revealWakeControl(app.buttons["history.wake.edit"], app: app)
+        captureMorningWake("\(linked ? "linked" : "standalone")-same-day-after-save", app: app)
+        app.navigationBars["Day detail"].buttons["Done"].tap()
+        let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"),
+                                              object: app.navigationBars["Day detail"])
+        XCTAssertEqual(XCTWaiter.wait(for: [gone], timeout: 5), .completed)
+        let observed = event("record:\(wakeID)", app: app)
+        reveal(observed, app: app)
+        XCTAssertTrue(observed.label.contains("8:35"), "Today's Plan must reload the observed correction: \(observed.label)")
+        if linked {
+            let night = event("record:\(completedNightID)", app: app)
+            let calendar = Calendar.current
+            let yesterday = calendar.date(byAdding: .day, value: -1, to: Date())!
+            let start = calendar.date(bySettingHour: 20, minute: 30, second: 0, of: yesterday)!
+            let end = calendar.date(bySettingHour: 8, minute: 35, second: 0, of: Date())!
+            let minutes = Int(end.timeIntervalSince(start) / 60)
+            let duration = "\(minutes / 60)h \(minutes % 60)m net sleep"
+            let metadata = night.value as? String ?? ""
+            XCTAssertTrue(metadata.contains(duration),
+                          "The same linked night's accounting must refresh: \(night.value ?? "missing")")
+            XCTAssertTrue(metadata.contains("Previous Sleep Day context."), metadata)
+            XCTAssertTrue(metadata.contains("Original Sleep Day: \(yesterday.formatted(date: .abbreviated, time: .omitted))."),
+                          "Displaying a completed night on the plan must retain its original Sleep Day: \(metadata)")
+        }
+        captureMorningWake("\(linked ? "linked" : "standalone")-refreshed-plan", app: app)
+    }
+
+    private func captureMorningWake(_ name: String, app: XCUIApplication) {
+        let image = XCTAttachment(screenshot: app.screenshot())
+        image.name = "MORNING-WAKE-TEST-ONLY-\(name)"
+        image.lifetime = .keepAlways
+        add(image)
+    }
+
+    private func revealWakeControl(_ element: XCUIElement, app: XCUIApplication, editor: Bool = false) {
+        let scroll = app.scrollViews[editor ? "home.wake.scroll" : "history.day.scroll"]
+        let navigation = app.navigationBars[editor ? "Edit Morning Wake" : "Day detail"]
+        let anchor = editor ? navigation.buttons["home.wake.cancel"] : navigation.buttons["Done"]
+        XCTAssertTrue(scroll.waitForExistence(timeout: 5))
+        var previousY: CGFloat?
+        var stalledMoves = 0
+        for move in 0...10 {
+            let foreground = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "exists == true AND hittable == true"), object: anchor)
+            guard XCTWaiter.wait(for: [foreground], timeout: 3) == .completed else {
+                XCTFail("The expected editor must remain in front: \(app.debugDescription)")
+                return
+            }
+            let window = app.windows.firstMatch
+            let body = window.frame.intersection(scroll.frame)
+            let top = max(body.minY, navigation.frame.maxY)
+            let viewport = CGRect(x: body.minX, y: top, width: body.width, height: body.maxY - top).insetBy(dx: 2, dy: 2)
+            let frame = element.exists ? element.frame : .null
+            if !frame.isNull && !frame.isEmpty {
+                let fits = frame.height <= viewport.height && frame.width <= viewport.width
+                let visible = fits ? viewport.contains(frame) : viewport.contains(CGPoint(x: frame.midX, y: frame.midY))
+                if visible && element.isHittable { return }
+                if let previousY, abs(previousY - frame.midY) < 1 { stalledMoves += 1 }
+                else { stalledMoves = 0 }
+                previousY = frame.midY
+            }
+            guard move < 10, stalledMoves < 2, !viewport.isEmpty else { break }
+            let distance = frame.isNull ? viewport.height : frame.midY - viewport.midY
+            let up = distance < 0
+            let step = min(max(30, abs(distance)), viewport.height * 0.72)
+            let start = window.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
+                dx: viewport.minX + 8 - window.frame.minX,
+                dy: viewport.minY + viewport.height * (up ? 0.12 : 0.88) - window.frame.minY))
+            let end = start.withOffset(CGVector(dx: 0, dy: up ? step : -step))
+            // Drag the content margin, away from the wheel and full-width AX actions.
+            start.press(forDuration: 0.01, thenDragTo: end, withVelocity: .default, thenHoldForDuration: 0)
+        }
+        captureMorningWake("unreachable-control", app: app)
+        XCTFail("Wake correction control was not reachable: \(element)\n\(app.debugDescription)")
+    }
+
     func testOngoingNapAgreesWithHeroAndShowsElapsedWithoutCountdown() {
         let app = launch("active")
         let nap = event("record:\(parentID)", app: app)

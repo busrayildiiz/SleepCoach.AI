@@ -408,7 +408,14 @@ struct TodayPlanCard: View {
 enum TodayPlanUITestFixture {
     static var enabled: Bool { ProcessInfo.processInfo.environment["TODAY_PLAN_UI_TESTS"] == "1" }
     static var scenario: String { ProcessInfo.processInfo.environment["TODAY_PLAN_SCENARIO"] ?? "empty" }
+    private static let correctionReferenceTime = Calendar.current.date(bySettingHour: 12, minute: 7, second: 0, of: Date())!
+    /// Only the correction fixtures use this clock in their editor and save callback.
+    static var morningWakeCorrectionNow: Date? {
+        guard enabled, scenario.hasPrefix("morning-wake-") else { return nil }
+        return correctionReferenceTime
+    }
     static var now: Date {
+        if let correctionNow = morningWakeCorrectionNow { return correctionNow }
         if scenario == "night-before-midnight" {
             return Calendar.current.date(bySettingHour: 20, minute: 31, second: 0, of: eveningSessionStart)!
         }
@@ -443,6 +450,10 @@ enum TodayPlanUITestFixture {
         SecureDataStore.shared.set("Alex", forKey: "parentName")
         SecureDataStore.shared.set("Baby", forKey: "babyName")
         defaults.set(ProcessInfo.processInfo.environment["TODAY_PLAN_DARK"] == "1" ? "dark" : "light", forKey: "appAppearance")
+        if morningWakeCorrectionNow != nil {
+            prepareMorningWakeCorrection()
+            return
+        }
         var records: [SleepRecord] = []
         var wakes: [DailyWakeRecord] = []
         if ["completed", "completed-event-icons", "active", "reference", "many"].contains(scenario) {
@@ -481,6 +492,42 @@ enum TodayPlanUITestFixture {
         }
         SleepRecordPersistence().save(records)
         DailyWakeRecordPersistence().save(wakes)
+    }
+
+    private static func prepareMorningWakeCorrection() {
+        let calendar = Calendar.current
+        let sleeps = SleepRecordPersistence()
+        let wakes = DailyWakeRecordPersistence()
+        let linked = scenario == "morning-wake-linked"
+        let recorded = scenario == "morning-wake-recorded"
+        let initial = recorded ? at(8, 20) : at(7, 20)
+        let morning = DailyWakeRecord(id: wakeID, day: calendar.startOfDay(for: now), wakeTime: initial)
+        let previousDay = calendar.date(byAdding: .day, value: -1, to: now)!
+        let start = calendar.date(bySettingHour: 20, minute: 30, second: 0, of: previousDay)!
+        let night = SleepRecord(id: completedNightID, date: start, duration: 0, kind: .nightSleep,
+                                isOngoing: true, createdAt: start)
+        guard sleeps.save(linked ? [night] : []), wakes.save([morning]) else { return }
+        if recorded { return }
+
+        // Use the real observed-wake workflow to publish evidence and, when linked,
+        // complete this exact ongoing night. Matching timestamps alone never create a link.
+        guard let existing = wakes.load()?.first(where: { $0.id == wakeID }) else { return }
+        let operation: HomeWakeOperation
+        if linked {
+            guard let original = sleeps.load()?.first(where: { $0.id == completedNightID }) else { return }
+            operation = .associated(.init(night: original, morning: now, calendar: calendar))
+        } else {
+            operation = .independent
+        }
+        var draft = WakeObservationDraft(initial: initial, existing: existing)
+        draft.selected = at(8, 20)
+        _ = draft.submit { time, capture in
+            let result = SleepWakeTimeWorkflow(selectedWakeTime: time, now: now, calendar: calendar,
+                wakeRecords: [], sleepRecords: [], wakePersistence: wakes, sleepPersistence: sleeps,
+                capture: capture, homeOperation: operation).execute()
+            return result.wakePersistenceSucceeded && result.evidencePublicationSucceeded &&
+                (!linked || result.sleepPersistenceSucceeded)
+        }
     }
     static func wakePredictions(records: [SleepRecord]) -> [HeroPrediction] {
         guard scenario == "overnight-estimate", let night = records.first else { return [] }

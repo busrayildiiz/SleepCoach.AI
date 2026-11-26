@@ -46,7 +46,7 @@ struct ObservationProvenance: Codable {
         var answerRevision: UUID? = nil
         var labels: DaytimeReviewLabels? = nil
     }
-    struct NightWakeLink: Codable {
+    struct NightWakeLink: Codable, Equatable {
         let nightID: UUID
         let wakeID: UUID
         let nightRevision: UUID
@@ -315,6 +315,8 @@ struct ObservationCompletionPending: Codable {
     /// Additive discriminator: forward End Sleep commands also recover ordinary,
     /// unattested completions. Older wake-editor journals retain their contract.
     var nightCompletionInput: String? = nil
+    /// An existing wake correction is a distinct command, never an ongoing-night completion.
+    var morningWakeCorrection: MorningWakeCorrectionBinding? = nil
 
     static func completionInput(baseline: String, revision: UUID?, completed: SleepRecord) -> String {
         ObservationProvenance.digest(LearningEvidenceIdentity.pack([
@@ -331,6 +333,19 @@ struct ObservationCompletionPending: Codable {
             isOngoing: false, createdAt: originalNight.createdAt, endDate: wake.wakeTime)
     }
     func isValid(now: Date, calendar: Calendar) -> Bool {
+        if let correction = morningWakeCorrection {
+            return version == 3 && nightCompletionInput == nil && wakeAttested &&
+                recordedCalendar.map { scope in
+                    correction.validInput(selectedInput, wake: wake, calendar: scope, now: now) &&
+                    correction.isValid(wake: wake, originalWakeContent: originalWakeContent,
+                        originalWakeRevision: originalWakeRevision, originalNight: originalNight,
+                        originalNightRevision: originalNightRevision, onset: onset, calendar: scope, now: now)
+                } == true &&
+                (expectedWake.map { $0.content == ObservationProvenance.wakeIdentity(wake) } ?? true) &&
+                (expectedNight.map { $0.content == ObservationProvenance.sleepIdentity(night) } ?? true) &&
+                (creation.map { $0.operationID == operationID && $0.recordID == wake.id &&
+                    $0.collection == "dailyWakeRecords_v1" && $0.content == ObservationProvenance.wakeIdentity(wake) } ?? false)
+        }
         guard version == 3, let recordedCalendar, now.timeIntervalSinceReferenceDate.isFinite,
               originalNight.kind == .nightSleep, originalNight.isOngoing, originalNight.endDate == nil,
               originalNight.date.timeIntervalSinceReferenceDate.isFinite,
@@ -355,6 +370,14 @@ struct ObservationCompletionPending: Codable {
         defer { ObservationStorage.lock.unlock() }
         guard defaults.isAvailable, !ObservationStorage.retirementRequests.contains(operationID),
               creation.map({ !ObservationStorage.retirementRequests.contains($0.operationID) }) ?? true else { return false }
+        if let correction = morningWakeCorrection {
+            guard !isCancelled, isValid(now: now, calendar: recordedCalendar ?? .current),
+                  let scope = recordedCalendar else { return false }
+            return correction.authorizes(defaults: defaults, wake: wake, originalNight: originalNight,
+                night: night, onset: onset, originalNightRevision: originalNightRevision,
+                expectedWake: expectedWake, expectedNight: expectedNight, operationID: operationID,
+                calendar: scope, now: now)
+        }
         guard !isCancelled, isValid(now: now, calendar: recordedCalendar ?? .current),
               let sleeps = SleepRecordPersistence(defaults: defaults).load(),
               let actualNight = sleeps.first(where: { $0.id == originalNight.id }),
@@ -408,6 +431,7 @@ struct StandaloneWakePending: Codable {
     var isCancelled = false
     var historical: Bool? = nil
     var selectedInput: Date? = nil
+    var morningWakeCorrection: MorningWakeCorrectionBinding? = nil
 
     static func load(_ defaults: any PrivateDataStore) -> Self? {
         guard defaults.isAvailable, let data = defaults.data(forKey: key),
@@ -419,6 +443,19 @@ struct StandaloneWakePending: Codable {
         defer { ObservationStorage.lock.unlock() }
         guard defaults.isAvailable, !ObservationStorage.retirementRequests.contains(operationID),
               creation.map({ !ObservationStorage.retirementRequests.contains($0.operationID) }) ?? true else { return false }
+        if let correction = morningWakeCorrection {
+            guard !isCancelled, historical != true, attested,
+                  correction.validInput(selectedInput, wake: wake, calendar: calendar, now: now),
+                  correction.isValid(wake: wake, originalWakeContent: originalContent,
+                    originalWakeRevision: originalRevision, originalNight: nil,
+                    originalNightRevision: nil, onset: nil, calendar: calendar, now: now),
+                  let creation, creation.operationID == operationID, creation.recordID == wake.id,
+                  creation.collection == "dailyWakeRecords_v1", creation.content == ObservationProvenance.wakeIdentity(wake)
+            else { return false }
+            return correction.authorizes(defaults: defaults, wake: wake, originalNight: nil, night: nil,
+                onset: nil, originalNightRevision: nil, expectedWake: expected, expectedNight: nil,
+                operationID: operationID, calendar: calendar, now: now)
+        }
         guard !isCancelled, wake.wakeTime.timeIntervalSinceReferenceDate.isFinite,
               now.timeIntervalSinceReferenceDate.isFinite, wake.wakeTime <= now,
               selectedInput.map({ $0.timeIntervalSinceReferenceDate.isFinite }) ?? true,
@@ -445,6 +482,161 @@ struct StandaloneWakePending: Codable {
         }
         return actual.map(ObservationProvenance.wakeIdentity) == ObservationProvenance.wakeIdentity(wake) &&
             expected != nil && entry?.revision == expected?.revision && entry?.content == expected?.content
+    }
+}
+
+/// Original authority for an existing Morning Wake edit. Optional journal fields preserve
+/// older completion decoding, while keeping corrections out of timestamp-only adoption.
+struct MorningWakeCorrectionBinding: Codable {
+    let originalWake: DailyWakeRecord
+    let originalWakeEntry: ObservationProvenance.Entry?
+    let originalLink: ObservationProvenance.NightWakeLink?
+
+    func validInput(_ input: Date?, wake: DailyWakeRecord, calendar: Calendar, now: Date) -> Bool {
+        guard let input, input.timeIntervalSinceReferenceDate.isFinite, input <= now,
+              calendar.isDate(input, inSameDayAs: originalWake.day) else { return false }
+        let normalized = input == originalWake.wakeTime ? input : calendar.dateInterval(of: .minute, for: input)?.start
+        return normalized == wake.wakeTime
+    }
+
+    static func read(_ defaults: any PrivateDataStore)
+        -> (wakes: [DailyWakeRecord], sleeps: [SleepRecord], metadata: ObservationProvenance)? {
+        let generation = defaults.generationToken
+        guard defaults.isAvailable else { return nil }
+        let wakes = DailyWakeRecordPersistence(defaults: defaults).load()
+        let sleeps = SleepRecordPersistence(defaults: defaults).load()
+        let metadata = ObservationProvenance.load(defaults)
+        guard (wakes != nil || defaults.object(forKey: "dailyWakeRecords_v1") == nil),
+              (sleeps != nil || defaults.object(forKey: "sleepRecords") == nil),
+              (metadata != nil || defaults.object(forKey: ObservationProvenance.key) == nil),
+              defaults.isAvailable, defaults.generationToken == generation else { return nil }
+        let loadedWakes = wakes ?? [], loadedSleeps = sleeps ?? []
+        guard Set(loadedWakes.map(\.id)).count == loadedWakes.count,
+              Set(loadedSleeps.map(\.id)).count == loadedSleeps.count else { return nil }
+        return (loadedWakes, loadedSleeps, metadata ?? ObservationProvenance())
+    }
+
+    func input(wake: DailyWakeRecord, originalNight: SleepRecord?, originalNightRevision: UUID?, calendar: Calendar) -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        let link = originalLink.flatMap { try? encoder.encode($0) }?.base64EncodedString() ?? ""
+        let scope = (try? encoder.encode(calendar))?.base64EncodedString() ?? ""
+        return ObservationProvenance.digest(LearningEvidenceIdentity.pack([
+            "existing-morning-wake-correction-v1", ObservationProvenance.wakeIdentity(originalWake),
+            originalWakeEntry?.revision.uuidString ?? "", originalNight.map(ObservationProvenance.sleepIdentity) ?? "",
+            originalNightRevision?.uuidString ?? "", link, scope, ObservationProvenance.wakeIdentity(wake)
+        ]))
+    }
+
+    func isValid(wake: DailyWakeRecord, originalWakeContent: String?, originalWakeRevision: UUID?,
+                 originalNight: SleepRecord?, originalNightRevision: UUID?, onset: ObservationProvenance.Entry?,
+                 calendar: Calendar, now: Date) -> Bool {
+        guard now.timeIntervalSinceReferenceDate.isFinite, wake.wakeTime.timeIntervalSinceReferenceDate.isFinite,
+              originalWake.wakeTime.timeIntervalSinceReferenceDate.isFinite,
+              originalWake.day.timeIntervalSinceReferenceDate.isFinite,
+              wake.id == originalWake.id, wake.day == originalWake.day,
+              wake.day == calendar.startOfDay(for: wake.wakeTime),
+              originalWake.day == calendar.startOfDay(for: originalWake.wakeTime),
+              originalWake.wakeTime <= now, wake.wakeTime <= now,
+              originalWakeContent == ObservationProvenance.wakeIdentity(originalWake),
+              originalWakeEntry?.revision == originalWakeRevision,
+              originalWakeEntry.map({ $0.content == originalWakeContent }) ?? (originalWakeRevision == nil)
+        else { return false }
+        guard let night = originalNight else { return originalLink == nil && originalNightRevision == nil && onset == nil }
+        guard let link = originalLink, let onset, let wakeEntry = originalWakeEntry,
+              link.wakeID == wake.id, link.nightID == night.id, night.id != wake.id,
+              link.wakeRevision == wakeEntry.revision, link.nightRevision == originalNightRevision,
+              link.recordedCalendar.map({ $0 == calendar }) ?? true,
+              night.kind == .nightSleep, !night.isOngoing, night.completedEnd(at: now) == originalWake.wakeTime,
+              night.date.timeIntervalSinceReferenceDate.isFinite, night.createdAt.timeIntervalSinceReferenceDate.isFinite,
+              onset.content == ObservationProvenance.sleepIdentity(night), onset.revision == originalNightRevision,
+              wake.wakeTime.timeIntervalSince(night.date) >= 60,
+              wake.wakeTime.timeIntervalSince(night.date) / 60 < Double(Int.max) else { return false }
+        return true
+    }
+
+    static func published(_ receipt: ObservationProvenance.Entry, operation: UUID, input: String,
+                          wake: Bool, onset: ObservationProvenance.Entry? = nil) -> ObservationProvenance.Entry {
+        let verifiedOnset = onset.map {
+            $0.source == LearningEvidenceSource.verifiedObservation.rawValue &&
+                ["parent-entered-sleep-boundaries-v1", "parent-confirmed-night-completion-v1"].contains($0.intent ?? "")
+        } ?? false
+        var entry = receipt
+        if wake || verifiedOnset {
+            entry = .init(revision: receipt.revision, content: receipt.content,
+                source: LearningEvidenceSource.verifiedObservation.rawValue,
+                intent: wake ? "parent-entered-morning-wake-v1" : "parent-confirmed-night-completion-v1",
+                coverageContent: receipt.coverageContent, coverageRevision: receipt.coverageRevision)
+        }
+        entry.completedOperationID = operation
+        entry.completedInput = input
+        return entry
+    }
+
+    static func validNight(_ night: SleepRecord, in records: [SleepRecord], now: Date, calendar: Calendar) -> Bool {
+        guard let end = night.completedEnd(at: now), end.timeIntervalSince(night.date) >= 60 else { return false }
+        for record in records where record.kind == .break && record.parentNapID == night.id {
+            guard record.completedEnd(at: now) != nil,
+                  AwakeBreakDraft(parent: night, editing: record, now: now)
+                    .validationMessage(existing: records, now: now) == nil else { return false }
+        }
+        let updated = records.map { $0.id == night.id ? night : $0 }
+        let conflict = SleepAccounting(records: updated, now: now, calendar: calendar).conflicts(affecting: [night])
+        return !conflict.classification && !conflict.assignment
+    }
+
+    func authorizes(defaults: any PrivateDataStore, wake: DailyWakeRecord, originalNight: SleepRecord?,
+                    night: SleepRecord?, onset: ObservationProvenance.Entry?, originalNightRevision: UUID?,
+                    expectedWake: ObservationProvenance.Entry?, expectedNight: ObservationProvenance.Entry?,
+                    operationID: UUID, calendar: Calendar, now: Date) -> Bool {
+        guard let state = Self.read(defaults),
+              state.wakes.filter({ calendar.isDate($0.day, inSameDayAs: wake.day) }).count == 1,
+              let actualWake = state.wakes.first(where: { $0.id == wake.id }),
+              !state.sleeps.contains(where: { $0.id == wake.id }),
+              Self.linkShapeIsValid(state.metadata, wakeID: wake.id) else { return false }
+        let input = input(wake: wake, originalNight: originalNight, originalNightRevision: originalNightRevision, calendar: calendar)
+        let wakeEntry = state.metadata.wakes[wake.id.uuidString]
+        let oldWake = ObservationProvenance.wakeIdentity(actualWake) == ObservationProvenance.wakeIdentity(originalWake)
+        let newWake = ObservationProvenance.wakeIdentity(actualWake) == ObservationProvenance.wakeIdentity(wake)
+        let wakePublished = expectedWake.map { wakeEntry == Self.published($0, operation: operationID, input: input, wake: true) } ?? false
+        let wakeOriginal = oldWake && wakeEntry == originalWakeEntry
+        guard wakeOriginal || ((oldWake || newWake) && expectedWake != nil && wakeEntry == expectedWake) ||
+                (newWake && wakePublished) else { return false }
+        guard let originalNight, let night else {
+            return originalLink == nil && state.metadata.links[wake.id.uuidString] == nil
+        }
+        guard let actualNight = state.sleeps.first(where: { $0.id == originalNight.id }),
+              Self.validNight(night, in: state.sleeps, now: now, calendar: calendar) else { return false }
+        let nightEntry = state.metadata.sleeps[night.id.uuidString]
+        let oldNight = ObservationProvenance.sleepIdentity(actualNight) == ObservationProvenance.sleepIdentity(originalNight)
+        let newNight = ObservationProvenance.sleepIdentity(actualNight) == ObservationProvenance.sleepIdentity(night)
+        let nightPublished = expectedNight.map { nightEntry == Self.published($0, operation: operationID, input: input, wake: false, onset: onset) } ?? false
+        let nightOriginal = oldNight && nightEntry == onset
+        guard nightOriginal || ((oldNight || newNight) && expectedNight != nil && nightEntry == expectedNight) ||
+                (newNight && nightPublished), wakePublished == nightPublished else { return false }
+        let link = state.metadata.links[wake.id.uuidString]
+        guard Self.linkShapeIsValid(state.metadata, wakeID: wake.id, nightID: night.id) else { return false }
+        if wakePublished && nightPublished {
+            guard newWake, newNight, let expectedWake, let expectedNight else { return false }
+            return link == ObservationProvenance.NightWakeLink(nightID: night.id, wakeID: wake.id,
+                nightRevision: expectedNight.revision, wakeRevision: expectedWake.revision, recordedCalendar: calendar)
+        }
+        if wakeOriginal && nightOriginal { return link == originalLink }
+        // The operation's own revocation removes the old link before writing observations.
+        // This absence is permitted only while the exact reserved receipts remain current.
+        return link == nil && !state.metadata.links.values.contains(where: { $0.nightID == night.id })
+    }
+
+    static func linkShapeIsValid(_ metadata: ObservationProvenance, wakeID: UUID, nightID: UUID? = nil) -> Bool {
+        let relevant = metadata.links.filter { $0.key == wakeID.uuidString || $0.value.wakeID == wakeID }
+        if let link = metadata.links[wakeID.uuidString] {
+            guard relevant.count == 1, link.wakeID == wakeID else { return false }
+        } else if !relevant.isEmpty { return false }
+        if let nightID {
+            let linked = metadata.links.filter { $0.value.nightID == nightID }
+            guard linked.count <= 1, linked.allSatisfy({ $0.key == wakeID.uuidString && $0.value.wakeID == wakeID }) else { return false }
+        }
+        return true
     }
 }
 
@@ -667,7 +859,7 @@ struct ObservationStorage {
         var sleepRevisionChanged = false
         var wakeRevisionChanged = false
         if let pending = ObservationCompletionPending.load(defaults), pending.operationID == operation,
-           pending.nightCompletionInput != nil {
+           pending.nightCompletionInput != nil || pending.morningWakeCorrection != nil {
             // Cancellation and automatic retirement share the same repair. A failed
             // record write may have left metadata for a record that never reached disk.
             guard defaults.data(forKey: "sleepRecords") == nil || SleepRecordPersistence(defaults: defaults).load() != nil,
@@ -686,6 +878,15 @@ struct ObservationStorage {
            metadata.revokeUnfinishedHistoricalWake(pending) {
             guard publishHistoricalWake(metadata) else { return false }
             wakeRevisionChanged = true
+        }
+        if let pending = StandaloneWakePending.load(defaults), pending.operationID == operation,
+           pending.morningWakeCorrection != nil {
+            guard let state = MorningWakeCorrectionBinding.read(defaults) else { return false }
+            var metadata = state.metadata
+            let old = metadata.wakes
+            metadata.reconcile(wakes: state.wakes)
+            guard self.metadata(metadata, notify: false) else { return false }
+            wakeRevisionChanged = wakeRevisionChanged || metadata.wakes != old
         }
         if let reservation {
             guard let ledger = ObservationCreationLedger.load(defaults), ledger.id == reservation.ledgerID else { return false }
@@ -723,18 +924,21 @@ struct ObservationStorage {
     func retireInvalidForwardCompletion(now: Date) -> Bool {
         Self.lock.lock()
         defer { Self.lock.unlock() }
-        guard defaults.isAvailable else { return false }
+        guard defaults.isAvailable, retireInvalidStandaloneCorrection(now: now) else { return false }
         guard let raw = defaults.data(forKey: ObservationCompletionPending.key) else { return true }
         guard let pending = ObservationCompletionPending.load(defaults) else {
             // Existing B1 maintenance quarantines malformed/unsupported envelopes.
             return pruneRecoveryArchives()
         }
-        guard pending.nightCompletionInput != nil else { return true }
+        guard pending.nightCompletionInput != nil || pending.morningWakeCorrection != nil else { return true }
         guard now.timeIntervalSinceReferenceDate.isFinite,
               defaults.data(forKey: "sleepRecords") == nil || SleepRecordPersistence(defaults: defaults).load() != nil,
               defaults.data(forKey: "dailyWakeRecords_v1") == nil || DailyWakeRecordPersistence(defaults: defaults).load() != nil else { return false }
         // A clock rollback alone does not retire an otherwise legitimate operation.
-        let validationTime = pending.wake.wakeTime.timeIntervalSinceReferenceDate.isFinite ? max(now, pending.wake.wakeTime) : now
+        let correctionTimes = (pending.morningWakeCorrection.map { [$0.originalWake.wakeTime, pending.selectedInput] } ?? [])
+            .compactMap { $0 }.filter { $0.timeIntervalSinceReferenceDate.isFinite }
+        let validationTime = pending.wake.wakeTime.timeIntervalSinceReferenceDate.isFinite
+            ? ([now, pending.wake.wakeTime] + correctionTimes).max() ?? now : now
         if pending.canResume(defaults: defaults, now: validationTime) { return true }
         guard preserve(raw, recoveryKey: "nightWakeCompletionRecovery_v1"),
               defaults.data(forKey: ObservationCompletionPending.key) == raw else { return false }
@@ -742,6 +946,24 @@ struct ObservationStorage {
         guard defaults.data(forKey: ObservationCreationLedger.key) == nil || ledger != nil else { return false }
         // Consult the actual ledger, rather than trusting a corrupt journal's
         // reservation to retire some other form's serial or operation.
+        let reservations = ledger?.pending.filter { $0.operationID == pending.operationID } ?? []
+        guard reservations.count <= 1 else { return false }
+        return retireOperation(pending.operationID, reservation: reservations.first, useJournalReservation: false)
+    }
+
+    private func retireInvalidStandaloneCorrection(now: Date) -> Bool {
+        guard let pending = StandaloneWakePending.load(defaults),
+              let correction = pending.morningWakeCorrection else { return true }
+        guard now.timeIntervalSinceReferenceDate.isFinite,
+              MorningWakeCorrectionBinding.read(defaults) != nil,
+              let raw = defaults.data(forKey: StandaloneWakePending.key) else { return false }
+        let times = [now, pending.wake.wakeTime, correction.originalWake.wakeTime, pending.selectedInput ?? now]
+            .filter { $0.timeIntervalSinceReferenceDate.isFinite }
+        if pending.canResume(defaults: defaults, now: times.max() ?? now) { return true }
+        guard preserve(raw, recoveryKey: "nightWakeCompletionRecovery_v1"),
+              defaults.data(forKey: StandaloneWakePending.key) == raw else { return false }
+        let ledger = ObservationCreationLedger.load(defaults)
+        guard defaults.data(forKey: ObservationCreationLedger.key) == nil || ledger != nil else { return false }
         let reservations = ledger?.pending.filter { $0.operationID == pending.operationID } ?? []
         guard reservations.count <= 1 else { return false }
         return retireOperation(pending.operationID, reservation: reservations.first, useJournalReservation: false)

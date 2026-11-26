@@ -1935,3 +1935,507 @@ extension TrustedObservationCorrectionTests {
         XCTAssertTrue(snapshot.daytime.isEmpty)
     }
 }
+
+extension TrustedObservationCorrectionTests {
+    /// Models the synchronous vault notification emitted after set/remove commits.
+    /// The callback mutates through real persistence, not forged revision receipts.
+    private final class CorrectionNotificationStore: PrivateDataStore {
+        let backing: any PrivateDataStore
+        var didChange: ((String) -> Void)?
+        init(_ backing: any PrivateDataStore) { self.backing = backing }
+        var isAvailable: Bool { backing.isAvailable }
+        var generationToken: UUID? { backing.generationToken }
+        func object(forKey key: String) -> Any? { backing.object(forKey: key) }
+        func set(_ value: Any?, forKey key: String) {
+            backing.set(value, forKey: key)
+            didChange?(key)
+        }
+        func removeObject(forKey key: String) {
+            backing.removeObject(forKey: key)
+            didChange?(key)
+        }
+    }
+
+    private func correctionContext(for wake: DailyWakeRecord) throws -> MorningWakeCorrectionContext {
+        try XCTUnwrap(MorningWakeCorrectionContext.load(wakeID: wake.id, at: now, calendar: calendar,
+            wakePersistence: wakes, sleepPersistence: sleeps))
+    }
+
+    private func correctionDraft(_ context: MorningWakeCorrectionContext) -> MorningWakeCorrectionDraft {
+        MorningWakeCorrectionDraft(context: context, wakePersistence: wakes, sleepPersistence: sleeps)
+    }
+
+    private func linkedMorning() throws -> (DailyWakeRecord, SleepRecord) {
+        let original = try night()
+        XCTAssertTrue(operation().execute().evidencePublicationSucceeded)
+        let wake = try XCTUnwrap(wakes.load()?.first)
+        let completed = try XCTUnwrap(sleeps.load()?.first { $0.id == original.id })
+        XCTAssertEqual(snapshot.wakes.first { $0.record.id == wake.id }?.completedNightID, original.id)
+        return (wake, completed)
+    }
+
+    func testMorningWakeCorrectionStandaloneAcquiringLinkRejectsOldIndependentIntent() throws {
+        XCTAssertTrue(operation().execute().evidencePublicationSucceeded)
+        let wake = try XCTUnwrap(wakes.load()?.first)
+        let context = try correctionContext(for: wake)
+        XCTAssertFalse(context.requiresPairedConfirmation)
+        let draft = correctionDraft(context)
+        let original = try night()
+        XCTAssertTrue(operation().execute().evidencePublicationSucceeded)
+        XCTAssertEqual(snapshot.wakes.first?.completedNightID, original.id)
+        let wakeBytes = defaults.data(forKey: "dailyWakeRecords_v1")
+        let sleepBytes = defaults.data(forKey: "sleepRecords")
+        let metadata = defaults.data(forKey: ObservationProvenance.key)
+
+        XCTAssertEqual(draft.submit(wake.wakeTime.addingTimeInterval(60), at: now, calendar: calendar), .stale)
+
+        XCTAssertEqual(defaults.data(forKey: "dailyWakeRecords_v1"), wakeBytes)
+        XCTAssertEqual(defaults.data(forKey: "sleepRecords"), sleepBytes)
+        XCTAssertEqual(defaults.data(forKey: ObservationProvenance.key), metadata)
+        XCTAssertEqual(snapshot.wakes.first?.completedNightID, original.id)
+    }
+
+    func testMorningWakeCorrectionUntouchedRecordedSecondsNeverGainVerification() throws {
+        let exact = at(0, 7).addingTimeInterval(12.25)
+        let original = DailyWakeRecord(day: calendar.startOfDay(for: exact), wakeTime: exact)
+        XCTAssertTrue(wakes.save([original]))
+        let wakeBytes = defaults.data(forKey: "dailyWakeRecords_v1")
+        let metadata = defaults.data(forKey: ObservationProvenance.key)
+        let context = try correctionContext(for: original)
+        XCTAssertEqual(context.wake.wakeTime, exact)
+        let draft = correctionDraft(context)
+
+        XCTAssertEqual(draft.submit(exact, at: now, calendar: calendar), .unchanged)
+
+        XCTAssertEqual(defaults.data(forKey: "dailyWakeRecords_v1"), wakeBytes)
+        XCTAssertEqual(defaults.data(forKey: ObservationProvenance.key), metadata)
+        XCTAssertEqual(snapshot.wakes.first?.source, .recordedUnverified)
+        XCTAssertEqual(wakes.load()?.first?.id, original.id)
+        XCTAssertNil(snapshot.wakes.first?.completedNightID)
+    }
+
+    func testMorningWakeCorrectionRequiresConsentFromSameDraftForExactProposedTime() throws {
+        let (wake, _) = try linkedMorning()
+        let context = try correctionContext(for: wake)
+        let draft = correctionDraft(context)
+        let proposed = wake.wakeTime.addingTimeInterval(900)
+        let wakeBytes = defaults.data(forKey: "dailyWakeRecords_v1")
+        let sleepBytes = defaults.data(forKey: "sleepRecords")
+        XCTAssertEqual(draft.submit(proposed, at: now, calendar: calendar), .requiresConfirmation)
+        let foreign = correctionDraft(context)
+        let foreignConsent = try XCTUnwrap(foreign.confirmUpdateBoth(at: proposed))
+        XCTAssertEqual(draft.submit(proposed, confirmation: foreignConsent, at: now, calendar: calendar), .requiresConfirmation)
+        let wrongTime = try XCTUnwrap(draft.confirmUpdateBoth(at: proposed.addingTimeInterval(60)))
+        XCTAssertEqual(draft.submit(proposed, confirmation: wrongTime, at: now, calendar: calendar), .requiresConfirmation)
+        XCTAssertEqual(defaults.data(forKey: "dailyWakeRecords_v1"), wakeBytes)
+        XCTAssertEqual(defaults.data(forKey: "sleepRecords"), sleepBytes)
+        let consent = try XCTUnwrap(draft.confirmUpdateBoth(at: proposed))
+        XCTAssertTrue(draft.submit(proposed, confirmation: consent, at: now, calendar: calendar).succeeded)
+    }
+
+    func testMorningWakeCorrectionAbandonedConsentCannotCommitTheProposedBoundary() throws {
+        try buildDays(3)
+        let wake = try XCTUnwrap(wakes.load()?.first { calendar.isDate($0.day, inSameDayAs: at(-1, 7)) })
+        let draft = correctionDraft(try correctionContext(for: wake))
+        let proposed = wake.wakeTime.addingTimeInterval(600)
+        let consent = try XCTUnwrap(draft.confirmUpdateBoth(at: proposed))
+        let wakeBytes = defaults.data(forKey: "dailyWakeRecords_v1")
+        let sleepBytes = defaults.data(forKey: "sleepRecords")
+        let coverage = try XCTUnwrap(ObservationProvenance.load(defaults)?.daytime)
+
+        XCTAssertTrue(draft.abandon())
+        XCTAssertFalse(draft.submit(proposed, confirmation: consent, at: now, calendar: calendar).succeeded)
+
+        XCTAssertEqual(defaults.data(forKey: "dailyWakeRecords_v1"), wakeBytes)
+        XCTAssertEqual(defaults.data(forKey: "sleepRecords"), sleepBytes)
+        XCTAssertEqual(ObservationProvenance.load(defaults)?.daytime, coverage)
+        XCTAssertEqual(snapshot.daytime.count, 3)
+    }
+
+    func testMorningWakeCorrectionPreservesVerifiedOnsetAndUnrelatedRecordingProvenance() throws {
+        let (wake, originalNight) = try linkedMorning()
+        let recordedNap = SleepRecord(date: at(0, 10), duration: 60, createdAt: now, endDate: at(0, 11))
+        XCTAssertTrue(sleeps.save((sleeps.load() ?? []) + [recordedNap]))
+        XCTAssertEqual(snapshot.sleeps.first { $0.record.id == originalNight.id }?.source, .verifiedObservation)
+        XCTAssertEqual(snapshot.sleeps.first { $0.record.id == recordedNap.id }?.source, .recordedUnverified)
+        let napEntry = ObservationProvenance.load(defaults)?.sleeps[recordedNap.id.uuidString]
+        let draft = correctionDraft(try correctionContext(for: wake))
+        let proposed = wake.wakeTime.addingTimeInterval(900)
+        let consent = try XCTUnwrap(draft.confirmUpdateBoth(at: proposed))
+
+        XCTAssertTrue(draft.submit(proposed, confirmation: consent, at: now, calendar: calendar).succeeded)
+
+        let night = try XCTUnwrap(sleeps.load()?.first { $0.id == originalNight.id })
+        XCTAssertEqual(night.date, originalNight.date)
+        XCTAssertEqual(night.createdAt, originalNight.createdAt)
+        XCTAssertEqual(night.observedEnd, proposed)
+        XCTAssertEqual(snapshot.sleeps.first { $0.record.id == night.id }?.source, .verifiedObservation)
+        XCTAssertEqual(snapshot.wakes.first { $0.record.id == wake.id }?.completedNightID, night.id)
+        XCTAssertEqual(ObservationProvenance.load(defaults)?.sleeps[recordedNap.id.uuidString], napEntry)
+        XCTAssertEqual(snapshot.sleeps.first { $0.record.id == recordedNap.id }?.source, .recordedUnverified)
+    }
+
+    func testMorningWakeCorrectionDoesNotPromoteUnverifiedNightOnset() throws {
+        let originalNight = SleepRecord(date: at(-1, 20), duration: 0, kind: .nightSleep, isOngoing: true, createdAt: at(-1, 20))
+        XCTAssertTrue(sleeps.save([originalNight]))
+        XCTAssertTrue(operation().execute().evidencePublicationSucceeded)
+        let wake = try XCTUnwrap(wakes.load()?.first)
+        XCTAssertEqual(snapshot.wakes.first?.completedNightID, originalNight.id)
+        XCTAssertEqual(snapshot.sleeps.first?.source, .recordedUnverified)
+        let draft = correctionDraft(try correctionContext(for: wake))
+        let proposed = wake.wakeTime.addingTimeInterval(900)
+
+        XCTAssertTrue(draft.submit(proposed, confirmation: draft.confirmUpdateBoth(at: proposed), at: now, calendar: calendar).succeeded)
+
+        XCTAssertEqual(snapshot.wakes.first?.source, .verifiedObservation)
+        XCTAssertEqual(snapshot.wakes.first?.completedNightID, originalNight.id)
+        XCTAssertEqual(snapshot.sleeps.first?.source, .recordedUnverified)
+        XCTAssertEqual(sleeps.load()?.first?.date, originalNight.date)
+    }
+
+    func testMorningWakeCorrectionInvalidatesBothAdjacentCoverageWindowsOnly() throws {
+        try buildDays(4)
+        let records = try XCTUnwrap(wakes.load()).sorted { $0.wakeTime < $1.wakeTime }
+        let shared = records[3]
+        let before = try XCTUnwrap(ObservationProvenance.load(defaults))
+        let affected = before.daytime.filter { $0.value.morningWakeID == shared.id || $0.value.followingWakeID == shared.id }
+        let unrelated = before.daytime.filter { $0.value.morningWakeID != shared.id && $0.value.followingWakeID != shared.id }
+        XCTAssertEqual(affected.count, 2)
+        XCTAssertEqual(unrelated.count, 2)
+        let priorAnswerDrafts = try affected.values.map {
+            try XCTUnwrap(adapter.beginDaytimeConfirmation(morningWakeID: $0.morningWakeID, followingWakeID: $0.followingWakeID))
+        }
+        let draft = correctionDraft(try correctionContext(for: shared))
+        let proposed = shared.wakeTime.addingTimeInterval(600)
+
+        XCTAssertTrue(draft.submit(proposed, confirmation: draft.confirmUpdateBoth(at: proposed), at: now, calendar: calendar).succeeded)
+
+        let after = try XCTUnwrap(ObservationProvenance.load(defaults))
+        for key in affected.keys { XCTAssertNil(after.daytime[key]) }
+        for (key, assertion) in unrelated { XCTAssertEqual(after.daytime[key], assertion) }
+        XCTAssertEqual(after.daytime.count, 2)
+        for oldDraft in priorAnswerDrafts {
+            XCTAssertFalse(oldDraft.submit(.allNapsRecorded, at: now, using: .init(defaults: defaults)))
+        }
+        XCTAssertEqual(snapshot.daytime.count, 2)
+    }
+
+    func testMorningWakeCorrectionUnchangedLinkedBoundaryPreservesRevisionsAndCoverage() throws {
+        try buildDays(2)
+        let wake = try XCTUnwrap(wakes.load()?.first { calendar.isDate($0.day, inSameDayAs: at(0, 7)) })
+        let wakeBytes = defaults.data(forKey: "dailyWakeRecords_v1")
+        let sleepBytes = defaults.data(forKey: "sleepRecords")
+        let metadata = defaults.data(forKey: ObservationProvenance.key)
+        let draft = correctionDraft(try correctionContext(for: wake))
+
+        XCTAssertEqual(draft.submit(wake.wakeTime, confirmation: draft.confirmUpdateBoth(at: wake.wakeTime),
+            at: now, calendar: calendar), .unchanged)
+
+        XCTAssertEqual(defaults.data(forKey: "dailyWakeRecords_v1"), wakeBytes)
+        XCTAssertEqual(defaults.data(forKey: "sleepRecords"), sleepBytes)
+        XCTAssertEqual(defaults.data(forKey: ObservationProvenance.key), metadata)
+        XCTAssertEqual(snapshot.daytime.count, 2)
+    }
+
+    func testMorningWakeCorrectionUnreadableMetadataIsNeverStandaloneAuthority() throws {
+        XCTAssertTrue(operation().execute().evidencePublicationSucceeded)
+        let wake = try XCTUnwrap(wakes.load()?.first)
+        let draft = correctionDraft(try correctionContext(for: wake))
+        let wakeBytes = defaults.data(forKey: "dailyWakeRecords_v1")
+        let broken = Data("unreadable-link-provenance".utf8)
+        defaults.set(broken, forKey: ObservationProvenance.key)
+
+        XCTAssertNil(MorningWakeCorrectionContext.load(wakeID: wake.id, at: now, calendar: calendar,
+            wakePersistence: wakes, sleepPersistence: sleeps))
+        XCTAssertFalse(draft.submit(wake.wakeTime.addingTimeInterval(600), at: now, calendar: calendar).succeeded)
+
+        XCTAssertEqual(defaults.data(forKey: "dailyWakeRecords_v1"), wakeBytes)
+        XCTAssertEqual(defaults.data(forKey: ObservationProvenance.key), broken)
+        XCTAssertNil(StandaloneWakePending.load(defaults))
+    }
+
+    func testMorningWakeCorrectionLostRelationshipCannotBecomeStandaloneSave() throws {
+        let (wake, _) = try linkedMorning()
+        let draft = correctionDraft(try correctionContext(for: wake))
+        let proposed = wake.wakeTime.addingTimeInterval(900)
+        let consent = try XCTUnwrap(draft.confirmUpdateBoth(at: proposed))
+        var metadata = try XCTUnwrap(ObservationProvenance.load(defaults))
+        metadata.links.removeValue(forKey: wake.id.uuidString)
+        XCTAssertTrue(wakes.storage.metadata(metadata))
+        let wakeBytes = defaults.data(forKey: "dailyWakeRecords_v1")
+        let sleepBytes = defaults.data(forKey: "sleepRecords")
+
+        XCTAssertEqual(draft.submit(proposed, confirmation: consent, at: now, calendar: calendar), .stale)
+
+        XCTAssertEqual(defaults.data(forKey: "dailyWakeRecords_v1"), wakeBytes)
+        XCTAssertEqual(defaults.data(forKey: "sleepRecords"), sleepBytes)
+        XCTAssertNil(snapshot.wakes.first?.completedNightID)
+    }
+
+    func testMorningWakeCorrectionFinalPublicationLinkRemovalCannotBeRepublishedByRetry() throws {
+        let (wake, night) = try linkedMorning()
+        let draft = correctionDraft(try correctionContext(for: wake))
+        let proposed = wake.wakeTime.addingTimeInterval(900)
+        let consent = try XCTUnwrap(draft.confirmUpdateBoth(at: proposed))
+        let changed = ObserverGate()
+        let observer = NotificationCenter.default.addObserver(forName: .observationProvenanceDidChange,
+                                                               object: nil, queue: nil) { _ in
+            guard var metadata = ObservationProvenance.load(self.defaults),
+                  metadata.links[wake.id.uuidString]?.nightID == night.id,
+                  self.wakes.load()?.first(where: { $0.id == wake.id })?.wakeTime == proposed,
+                  self.sleeps.load()?.first(where: { $0.id == night.id })?.observedEnd == proposed,
+                  changed.claim() else { return }
+            metadata.links.removeValue(forKey: wake.id.uuidString)
+            XCTAssertTrue(self.wakes.storage.metadata(metadata))
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+
+        XCTAssertFalse(draft.submit(proposed, confirmation: consent, at: now, calendar: calendar).succeeded)
+        XCTAssertTrue(changed.wasEntered)
+        XCTAssertFalse(draft.submit(proposed, confirmation: consent, at: now, calendar: calendar).succeeded)
+        XCTAssertFalse(SleepWakeTimeWorkflow.resumePending(now: now, wakePersistence: wakes,
+            sleepPersistence: sleeps)?.evidencePublicationSucceeded == true)
+
+        XCTAssertEqual(wakes.load()?.first?.wakeTime, proposed)
+        XCTAssertEqual(sleeps.load()?.first?.observedEnd, proposed)
+        XCTAssertNil(ObservationProvenance.load(defaults)?.links[wake.id.uuidString])
+        XCTAssertNil(snapshot.wakes.first?.completedNightID)
+    }
+
+    func testMorningWakeCorrectionReentrantOverlapAfterWakeWriteBlocksNightExtension() throws {
+        let (wake, night) = try linkedMorning()
+        let draft = correctionDraft(try correctionContext(for: wake))
+        let proposed = at(0, 8)
+        let consent = try XCTUnwrap(draft.confirmUpdateBoth(at: proposed))
+        let overlap = SleepRecord(date: at(0, 7).addingTimeInterval(1800), duration: 60,
+            createdAt: now, endDate: at(0, 8).addingTimeInterval(1800))
+        let changed = ObserverGate()
+        let observer = NotificationCenter.default.addObserver(forName: .dailyWakeRecordsDidChange,
+                                                               object: nil, queue: nil) { _ in
+            guard self.wakes.load()?.first(where: { $0.id == wake.id })?.wakeTime == proposed,
+                  changed.claim() else { return }
+            XCTAssertTrue(self.sleeps.save((self.sleeps.load() ?? []) + [overlap]))
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+
+        XCTAssertFalse(draft.submit(proposed, confirmation: consent, at: now, calendar: calendar).succeeded)
+        XCTAssertTrue(changed.wasEntered)
+        XCTAssertFalse(SleepWakeTimeWorkflow.resumePending(now: now, wakePersistence: wakes,
+            sleepPersistence: sleeps)?.evidencePublicationSucceeded == true)
+
+        XCTAssertEqual(sleeps.load()?.first { $0.id == night.id }?.observedEnd, night.observedEnd)
+        XCTAssertEqual(sleeps.load()?.first { $0.id == overlap.id }?.date, overlap.date)
+        XCTAssertEqual(wakes.load()?.first { $0.id == wake.id }?.wakeTime, proposed)
+        XCTAssertNil(snapshot.wakes.first?.completedNightID)
+    }
+
+    func testMorningWakeCorrectionChangedCalendarCannotRetargetCapturedDay() throws {
+        let (wake, _) = try linkedMorning()
+        let draft = correctionDraft(try correctionContext(for: wake))
+        let proposed = wake.wakeTime.addingTimeInterval(900)
+        let consent = try XCTUnwrap(draft.confirmUpdateBoth(at: proposed))
+        let wakeBytes = defaults.data(forKey: "dailyWakeRecords_v1")
+        let sleepBytes = defaults.data(forKey: "sleepRecords")
+        var otherCalendar = calendar!
+        otherCalendar.timeZone = TimeZone(secondsFromGMT: 3 * 3600)!
+
+        XCTAssertFalse(draft.submit(proposed, confirmation: consent, at: now, calendar: otherCalendar).succeeded)
+
+        XCTAssertEqual(defaults.data(forKey: "dailyWakeRecords_v1"), wakeBytes)
+        XCTAssertEqual(defaults.data(forKey: "sleepRecords"), sleepBytes)
+        XCTAssertEqual(wakes.load()?.first?.day, wake.day)
+    }
+
+    func testMorningWakeCorrectionFutureSecondsCannotNormalizeIntoAnAllowedMinute() throws {
+        XCTAssertTrue(operation().execute().evidencePublicationSucceeded)
+        let wake = try XCTUnwrap(wakes.load()?.first)
+        let draft = correctionDraft(try correctionContext(for: wake))
+        let wakeBytes = defaults.data(forKey: "dailyWakeRecords_v1")
+        let metadata = defaults.data(forKey: ObservationProvenance.key)
+
+        XCTAssertEqual(draft.submit(now.addingTimeInterval(30), at: now, calendar: calendar), .invalidTime)
+
+        XCTAssertEqual(defaults.data(forKey: "dailyWakeRecords_v1"), wakeBytes)
+        XCTAssertEqual(defaults.data(forKey: ObservationProvenance.key), metadata)
+        XCTAssertNil(StandaloneWakePending.load(defaults))
+    }
+
+    func testMorningWakeCorrectionMiskeyedRelationshipIsUnresolvedNotStandalone() throws {
+        let (wake, _) = try linkedMorning()
+        let draft = correctionDraft(try correctionContext(for: wake))
+        var metadata = try XCTUnwrap(ObservationProvenance.load(defaults))
+        let link = try XCTUnwrap(metadata.links.removeValue(forKey: wake.id.uuidString))
+        metadata.links[UUID().uuidString] = link
+        XCTAssertTrue(wakes.storage.metadata(metadata))
+        let wakeBytes = defaults.data(forKey: "dailyWakeRecords_v1")
+        let sleepBytes = defaults.data(forKey: "sleepRecords")
+        let proposed = wake.wakeTime.addingTimeInterval(900)
+
+        XCTAssertNil(MorningWakeCorrectionContext.load(wakeID: wake.id, at: now, calendar: calendar,
+            wakePersistence: wakes, sleepPersistence: sleeps))
+        XCTAssertFalse(draft.submit(proposed, confirmation: draft.confirmUpdateBoth(at: proposed),
+            at: now, calendar: calendar).succeeded)
+
+        XCTAssertEqual(defaults.data(forKey: "dailyWakeRecords_v1"), wakeBytes)
+        XCTAssertEqual(defaults.data(forKey: "sleepRecords"), sleepBytes)
+    }
+
+    private func assertCorrectionLedgerCallbackDoesNotRestoreRevokedEvidence(linked: Bool) throws {
+        let wake: DailyWakeRecord
+        if linked { wake = try linkedMorning().0 }
+        else {
+            XCTAssertTrue(operation().execute().evidencePublicationSucceeded)
+            wake = try XCTUnwrap(wakes.load()?.first)
+        }
+        let store = CorrectionNotificationStore(defaults)
+        let correctedWakes = DailyWakeRecordPersistence(defaults: store)
+        let correctedSleeps = SleepRecordPersistence(defaults: store)
+        let context = try XCTUnwrap(MorningWakeCorrectionContext.load(wakeID: wake.id, at: now, calendar: calendar,
+            wakePersistence: correctedWakes, sleepPersistence: correctedSleeps))
+        let draft = MorningWakeCorrectionDraft(context: context, wakePersistence: correctedWakes,
+            sleepPersistence: correctedSleeps)
+        let proposed = wake.wakeTime.addingTimeInterval(900)
+        let changed = ObserverGate()
+        store.didChange = { key in
+            guard key == ObservationCreationLedger.key,
+                  ObservationCreationLedger.load(self.defaults)?.pending.isEmpty == true,
+                  let current = self.wakes.load()?.first(where: { $0.id == wake.id }), current.wakeTime == proposed,
+                  changed.claim() else { return }
+            var records = self.wakes.load() ?? []
+            records = records.map { $0.id == wake.id ? DailyWakeRecord(id: current.id, day: current.day,
+                wakeTime: proposed.addingTimeInterval(60)) : $0 }
+            XCTAssertTrue(self.wakes.save(records))
+            XCTAssertTrue(self.wakes.save(records.map { $0.id == wake.id ? current : $0 }))
+        }
+        defer { store.didChange = nil }
+
+        XCTAssertFalse(draft.submit(proposed, confirmation: draft.confirmUpdateBoth(at: proposed),
+            at: now, calendar: calendar).succeeded)
+
+        XCTAssertTrue(changed.wasEntered)
+        XCTAssertEqual(wakes.load()?.first { $0.id == wake.id }?.wakeTime, proposed)
+        XCTAssertEqual(snapshot.wakes.first { $0.record.id == wake.id }?.source, .recordedUnverified,
+                       "Ledger callbacks must not allow an old receipt to republish revoked verification.")
+        XCTAssertNil(snapshot.wakes.first { $0.record.id == wake.id }?.completedNightID)
+        XCTAssertNil(ObservationProvenance.load(defaults)?.links[wake.id.uuidString])
+    }
+
+    func testMorningWakeCorrectionPairedLedgerCallbackCannotRestoreEditRevertEvidence() throws {
+        try assertCorrectionLedgerCallbackDoesNotRestoreRevokedEvidence(linked: true)
+    }
+
+    func testMorningWakeCorrectionStandaloneLedgerCallbackCannotRestoreEditRevertEvidence() throws {
+        try assertCorrectionLedgerCallbackDoesNotRestoreRevokedEvidence(linked: false)
+    }
+
+    func testMorningWakeCorrectionCleanupLinkRemovalCannotReportSuccessOrRebind() throws {
+        let (wake, night) = try linkedMorning()
+        let store = CorrectionNotificationStore(defaults)
+        let correctedWakes = DailyWakeRecordPersistence(defaults: store)
+        let correctedSleeps = SleepRecordPersistence(defaults: store)
+        let context = try XCTUnwrap(MorningWakeCorrectionContext.load(wakeID: wake.id, at: now, calendar: calendar,
+            wakePersistence: correctedWakes, sleepPersistence: correctedSleeps))
+        let draft = MorningWakeCorrectionDraft(context: context, wakePersistence: correctedWakes,
+            sleepPersistence: correctedSleeps)
+        let proposed = wake.wakeTime.addingTimeInterval(900)
+        let consent = try XCTUnwrap(draft.confirmUpdateBoth(at: proposed))
+        let changed = ObserverGate()
+        store.didChange = { key in
+            guard key == ObservationCompletionPending.key,
+                  self.defaults.object(forKey: key) == nil,
+                  var metadata = ObservationProvenance.load(self.defaults),
+                  metadata.links[wake.id.uuidString]?.nightID == night.id,
+                  self.wakes.load()?.first(where: { $0.id == wake.id })?.wakeTime == proposed,
+                  changed.claim() else { return }
+            metadata.links.removeValue(forKey: wake.id.uuidString)
+            XCTAssertTrue(self.wakes.storage.metadata(metadata))
+        }
+        defer { store.didChange = nil }
+
+        XCTAssertFalse(draft.submit(proposed, confirmation: consent, at: now, calendar: calendar).succeeded)
+        XCTAssertTrue(changed.wasEntered)
+        XCTAssertFalse(draft.submit(proposed, confirmation: consent, at: now, calendar: calendar).succeeded)
+
+        XCTAssertNil(ObservationCompletionPending.load(defaults))
+        XCTAssertEqual(wakes.load()?.first { $0.id == wake.id }?.wakeTime, proposed)
+        XCTAssertEqual(sleeps.load()?.first { $0.id == night.id }?.observedEnd, proposed)
+        XCTAssertNil(snapshot.wakes.first { $0.record.id == wake.id }?.completedNightID)
+    }
+
+    func testMorningWakeCorrectionStandaloneCleanupEditCannotReportStaleSuccess() throws {
+        XCTAssertTrue(operation().execute().evidencePublicationSucceeded)
+        let wake = try XCTUnwrap(wakes.load()?.first)
+        let store = CorrectionNotificationStore(defaults)
+        let correctedWakes = DailyWakeRecordPersistence(defaults: store)
+        let correctedSleeps = SleepRecordPersistence(defaults: store)
+        let context = try XCTUnwrap(MorningWakeCorrectionContext.load(wakeID: wake.id, at: now, calendar: calendar,
+            wakePersistence: correctedWakes, sleepPersistence: correctedSleeps))
+        let draft = MorningWakeCorrectionDraft(context: context, wakePersistence: correctedWakes,
+            sleepPersistence: correctedSleeps)
+        let proposed = wake.wakeTime.addingTimeInterval(900)
+        let laterEdit = proposed.addingTimeInterval(60)
+        let changed = ObserverGate()
+        store.didChange = { key in
+            guard key == StandaloneWakePending.key, self.defaults.object(forKey: key) == nil,
+                  self.wakes.load()?.first(where: { $0.id == wake.id })?.wakeTime == proposed,
+                  changed.claim() else { return }
+            XCTAssertTrue(self.wakes.save([DailyWakeRecord(id: wake.id, day: wake.day, wakeTime: laterEdit)]))
+        }
+        defer { store.didChange = nil }
+
+        XCTAssertFalse(draft.submit(proposed, at: now, calendar: calendar).succeeded)
+        XCTAssertTrue(changed.wasEntered)
+
+        XCTAssertEqual(wakes.load()?.first?.wakeTime, laterEdit)
+        XCTAssertEqual(snapshot.wakes.first?.source, .recordedUnverified)
+        XCTAssertNil(StandaloneWakePending.load(defaults))
+    }
+
+    private func assertCorrectionCleanupGenerationChangeCannotAcknowledgeOldStore(linked: Bool) throws {
+        let wake: DailyWakeRecord
+        if linked { wake = try linkedMorning().0 }
+        else {
+            XCTAssertTrue(operation().execute().evidencePublicationSucceeded)
+            wake = try XCTUnwrap(wakes.load()?.first)
+        }
+        let backing = TestPrivateDataStore()
+        for key in ["sleepRecords", "dailyWakeRecords_v1", ObservationProvenance.key, ObservationCreationLedger.key] {
+            if let value = defaults.object(forKey: key) { backing.set(value, forKey: key) }
+        }
+        let store = CorrectionNotificationStore(backing)
+        let correctedWakes = DailyWakeRecordPersistence(defaults: store)
+        let correctedSleeps = SleepRecordPersistence(defaults: store)
+        let context = try XCTUnwrap(MorningWakeCorrectionContext.load(wakeID: wake.id, at: now, calendar: calendar,
+            wakePersistence: correctedWakes, sleepPersistence: correctedSleeps))
+        let draft = MorningWakeCorrectionDraft(context: context, wakePersistence: correctedWakes,
+            sleepPersistence: correctedSleeps)
+        let proposed = wake.wakeTime.addingTimeInterval(900)
+        let changed = ObserverGate()
+        let journalKey = linked ? ObservationCompletionPending.key : StandaloneWakePending.key
+        let openingGeneration = backing.generationToken
+        store.didChange = { key in
+            guard key == journalKey, backing.object(forKey: key) == nil,
+                  correctedWakes.load()?.first(where: { $0.id == wake.id })?.wakeTime == proposed,
+                  changed.claim() else { return }
+            // Byte equality does not transfer the old editor's authority to a new vault epoch.
+            backing.generationToken = UUID()
+        }
+        defer { store.didChange = nil }
+
+        XCTAssertFalse(draft.submit(proposed, confirmation: draft.confirmUpdateBoth(at: proposed),
+            at: now, calendar: calendar).succeeded)
+
+        XCTAssertTrue(changed.wasEntered)
+        XCTAssertNotEqual(backing.generationToken, openingGeneration)
+        XCTAssertFalse(draft.submit(proposed, confirmation: draft.confirmUpdateBoth(at: proposed),
+            at: now, calendar: calendar).succeeded)
+    }
+
+    func testMorningWakeCorrectionPairedCleanupGenerationChangeRejectsOldAuthority() throws {
+        try assertCorrectionCleanupGenerationChangeCannotAcknowledgeOldStore(linked: true)
+    }
+
+    func testMorningWakeCorrectionStandaloneCleanupGenerationChangeRejectsOldAuthority() throws {
+        try assertCorrectionCleanupGenerationChangeCannotAcknowledgeOldStore(linked: false)
+    }
+}
