@@ -3,7 +3,7 @@ import XCTest
 @MainActor
 final class TodaySleepHeroUITests: XCTestCase {
     private func launch(_ scenario: String, live: Bool = false, large: Bool = false, dark: Bool = false,
-                        xxl: Bool = false, historicalNightStart: Date? = nil) -> XCUIApplication {
+                        xxl: Bool = false, historicalNightStart: Date? = nil, cardReference: Bool = false) -> XCUIApplication {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchEnvironment["RECORDING_UI_TESTS"] = "1" // Existing offline LLM agent.
@@ -13,6 +13,11 @@ final class TodaySleepHeroUITests: XCTestCase {
         if dark { app.launchEnvironment["SLEEP_HERO_DARK"] = "1" }
         if xxl { app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXL"] }
         if large { app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"] }
+        if cardReference {
+            app.launchEnvironment["SLEEP_HERO_CARD_REFERENCES"] = "1"
+            app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_GB"]
+            if !large && !xxl { app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryL"] }
+        }
         if let historicalNightStart {
             app.launchEnvironment["SLEEP_HERO_HISTORICAL_NIGHT_START"] = String(historicalNightStart.timeIntervalSince1970)
         }
@@ -158,28 +163,70 @@ final class TodaySleepHeroUITests: XCTestCase {
     private func dismissed(_ navigation: XCUIElement) {
         XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: navigation)], timeout: 5), .completed)
     }
-    func testSevenApprovedHeroStatesCapture() {
-        let states = [("ready", "Ready to record"), ("napActive", "Sleeping now"),
-                      ("napCompleted", "Nap completed"), ("nightActive", "Night sleep in progress"),
-                      ("morningConfirmed", "Good morning, Alex!"), ("morningUnconfirmed", "Good morning, Alex!"),
-                      ("likelyNext", "Likely next sleep")]
-        for (state, title) in states {
-            let app = launch(state)
+    private func captureHeroStates(dark: Bool, large: Bool = false) {
+        let states: [(scenario: String, summaryText: String, actions: [String])] = [
+            ("ready", "Ready to record", ["hero.addNap"]),
+            ("napActive", "Sleeping now", ["hero.endSleep", "sleep.current.addBreak"]),
+            ("napCompleted", "Nap completed", ["hero.details"]),
+            ("nightActive", "Night sleep in progress", ["hero.endSleep", "hero.details"]),
+            ("morningConfirmed", "woke up at", ["hero.addNap", "hero.plan"]),
+            ("morningUnconfirmed", "wake time yet", ["hero.confirmWake", "hero.addNap"]),
+            ("likelyNext", "Likely next sleep", ["hero.addNap", "hero.plan"]),
+            ("bedtimeRoutine", "Bedtime routine", ["hero.recordNight"])
+        ]
+        let appearance = dark ? "dark" : "light"
+        let textSize = large ? "accessibility-xxxl" : "default"
+        for state in states {
+            let app = launch(state.scenario, large: large, dark: dark, cardReference: true)
+            defer { app.terminate() }
+
             let summary = app.descendants(matching: .any).matching(identifier: "home.sleep.summary").firstMatch
             XCTAssertTrue(summary.waitForExistence(timeout: 5))
-            XCTAssertTrue(summary.label.contains(title), summary.label)
-            capture(state, app: app)
-            app.terminate()
+            XCTAssertTrue(summary.label.contains(state.summaryText), summary.label)
+            let live = app.descendants(matching: .any)
+                .matching(NSPredicate(format: "label == %@", "Live, confirmed ongoing night sleep")).firstMatch
+            XCTAssertEqual(live.exists, state.scenario == "nightActive")
+
+            let name = "\(state.scenario)-\(appearance)-\(textSize)"
+            capture(name, app: app)
+            for identifier in state.actions {
+                let button = app.buttons[identifier]
+                XCTAssertTrue(button.exists, "Missing \(identifier) in \(state.scenario).")
+                reveal(button, app: app)
+                XCTAssertTrue(button.isHittable)
+                XCTAssertGreaterThanOrEqual(button.frame.height, 44)
+                XCTAssertGreaterThanOrEqual(button.frame.width, 44)
+            }
+            if large { capture("\(name)-actions", app: app) }
         }
     }
-    func testDarkModeAndActiveNapAtLargeDynamicTypeCapture() {
-        let dark = launch("nightActive", dark: true)
-        capture("night-dark", app: dark)
-        dark.terminate()
-        let large = launch("napActive", large: true)
-        reveal(large.buttons["hero.endSleep"], app: large)
-        XCTAssertTrue(large.buttons["hero.endSleep"].isHittable)
-        capture("nap-active-large-type", app: large)
+
+    func testAllEightHeroStatesCaptureInLightMode() {
+        captureHeroStates(dark: false)
+    }
+
+    func testAllEightHeroStatesCaptureInDarkMode() {
+        captureHeroStates(dark: true)
+    }
+
+    func testAllEightHeroStatesCaptureInLightModeAtAccessibilitySize() {
+        captureHeroStates(dark: false, large: true)
+    }
+
+    func testAllEightHeroStatesCaptureInDarkModeAtAccessibilitySize() {
+        captureHeroStates(dark: true, large: true)
+    }
+
+    func testEstimateExplanationHasAccessibleTarget() {
+        let app = launch("napActive", large: true)
+        let info = app.buttons["About estimates"]
+        reveal(info, app: app)
+        XCTAssertGreaterThanOrEqual(info.frame.width, 44)
+        XCTAssertGreaterThanOrEqual(info.frame.height, 44)
+        info.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.5)).tap()
+        let alert = app.alerts["About estimates"]
+        XCTAssertTrue(alert.waitForExistence(timeout: 5))
+        alert.buttons["OK"].tap()
     }
     func testNapEndRequiresSaveAndBreakKeepsParentRoute() {
         let app = launch("napActive", live: true)
