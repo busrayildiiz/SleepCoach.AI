@@ -183,6 +183,11 @@ final class TodaySleepHeroUITests: XCTestCase {
             let summary = app.descendants(matching: .any).matching(identifier: "home.sleep.summary").firstMatch
             XCTAssertTrue(summary.waitForExistence(timeout: 5))
             XCTAssertTrue(summary.label.contains(state.summaryText), summary.label)
+            if state.scenario == "napActive" {
+                XCTAssertEqual(app.buttons["hero.endSleep"].label, "Finish Nap")
+            } else if state.scenario == "nightActive" {
+                XCTAssertEqual(app.buttons["hero.endSleep"].label, "End Sleep")
+            }
             let live = app.descendants(matching: .any)
                 .matching(NSPredicate(format: "label == %@", "Live, confirmed ongoing night sleep")).firstMatch
             XCTAssertEqual(live.exists, state.scenario == "nightActive")
@@ -230,28 +235,60 @@ final class TodaySleepHeroUITests: XCTestCase {
     }
     func testNapEndRequiresSaveAndBreakKeepsParentRoute() {
         let app = launch("napActive", live: true)
-        app.buttons["hero.endSleep"].tap()
-        XCTAssertTrue(app.navigationBars["Edit Nap"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["recording.end.edit"].exists)
-        app.buttons["recording.cancel"].tap()
-        dismissed(app.navigationBars["Edit Nap"])
+        let finish = app.buttons["hero.endSleep"]
+        XCTAssertEqual(finish.label, "Finish Nap")
+        finish.tap()
+        XCTAssertTrue(app.navigationBars["Finish Nap"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.datePickers["home.nap.end.time"].exists)
+        XCTAssertTrue(app.datePickers["home.nap.end.date"].exists)
+        XCTAssertTrue(app.staticTexts["home.nap.start"].exists)
+        XCTAssertFalse(app.buttons["recording.start.edit"].exists, "Quick completion keeps the original nap start.")
+        app.buttons["home.nap.cancel"].tap()
+        dismissed(app.navigationBars["Finish Nap"])
         XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "home.sleep.summary").firstMatch.label.contains("Sleeping now"))
         app.buttons["sleep.current.addBreak"].tap()
         XCTAssertTrue(app.navigationBars["Add Awake Break"].waitForExistence(timeout: 5))
         app.buttons["recording.cancel"].tap()
         dismissed(app.navigationBars["Add Awake Break"])
-        app.buttons["hero.endSleep"].tap()
+        finish.tap()
+        XCTAssertTrue(app.navigationBars["Finish Nap"].waitForExistence(timeout: 5))
         let save = app.buttons["recording.save"]
-        reveal(save, app: app)
+        XCTAssertEqual(save.label, "Save End Time")
+        XCTAssertTrue(save.isHittable)
         XCTAssertTrue(save.isEnabled)
         save.tap()
-        dismissed(app.navigationBars["Edit Nap"])
+        dismissed(app.navigationBars["Finish Nap"])
         let completed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "Nap completed"),
             object: app.descendants(matching: .any).matching(identifier: "home.sleep.summary").firstMatch)
         XCTAssertEqual(XCTWaiter.wait(for: [completed], timeout: 5), .completed)
         XCTAssertFalse(app.buttons["hero.endSleep"].exists)
         app.buttons["hero.details"].tap()
         XCTAssertTrue(app.buttons["sleep.addBreak.22222222-2222-2222-2222-222222222222"].waitForExistence(timeout: 5))
+    }
+
+    func testFinishNapSheetRemainsUsableInDarkModeAtAccessibilitySize() {
+        let app = launch("napActive", live: true, large: true, dark: true)
+        let finish = app.buttons["hero.endSleep"]
+        reveal(finish, app: app)
+        finish.tap()
+        XCTAssertTrue(app.navigationBars["Finish Nap"].waitForExistence(timeout: 5))
+        let picker = app.datePickers["home.nap.end.time"]
+        XCTAssertTrue(picker.waitForExistence(timeout: 5))
+        reveal(picker, app: app)
+        XCTAssertTrue(picker.isHittable)
+        XCTAssertTrue(app.staticTexts["home.nap.end.selection"].exists)
+        capture("finish-nap-dark-accessibility-xxxl", app: app)
+
+        let save = app.buttons["recording.save"]
+        XCTAssertTrue(save.isHittable)
+        XCTAssertTrue(save.isEnabled)
+        XCTAssertGreaterThanOrEqual(save.frame.height, 44)
+        save.tap()
+        dismissed(app.navigationBars["Finish Nap"])
+        let completed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "Nap completed"),
+            object: app.descendants(matching: .any).matching(identifier: "home.sleep.summary").firstMatch)
+        XCTAssertEqual(XCTWaiter.wait(for: [completed], timeout: 5), .completed)
+        XCTAssertFalse(finish.exists)
     }
     func testPlanActionScrollsToExistingTimelineWithoutInventingNavigation() {
         let app = launch("morningConfirmed")

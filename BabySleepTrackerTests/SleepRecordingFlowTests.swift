@@ -23,6 +23,14 @@ final class SleepRecordingFlowTests: XCTestCase {
         XCTAssertNotEqual(SleepListView.ActiveSheet.addNightSleep(defaultDate: start).id,
                           SleepListView.ActiveSheet.addSleep(editing: nil, defaultDate: start).id)
         XCTAssertTrue(SleepListView.ActiveSheet.addBreak(parentID: parent.id).isRecording)
+        XCTAssertTrue(SleepListView.ActiveSheet.endSleep(parent: parent).isRecording)
+        let nap = SleepRecord(date: start, duration: 0, kind: .dayNap, isOngoing: true)
+        let finishNap = SleepListView.ActiveSheet.finishNap(parent: nap)
+        XCTAssertFalse(finishNap.isRecording, "Quick nap completion opens a bottom sheet.")
+        guard case .finishNap(let selected) = finishNap else { return XCTFail("Missing ongoing nap") }
+        XCTAssertEqual(selected.id, nap.id)
+        XCTAssertNotEqual(finishNap.id, SleepListView.ActiveSheet.endSleep(parent: nap).id)
+        XCTAssertNotEqual(finishNap.id, SleepListView.ActiveSheet.finishNap(parent: parent).id)
         XCTAssertFalse(SleepListView.ActiveSheet.dayDetail(.init(day: start)).isRecording)
         XCTAssertFalse(SleepListView.ActiveSheet.wakeTime().isRecording)
     }
@@ -261,6 +269,236 @@ final class SleepRecordingFlowTests: XCTestCase {
         }
         XCTAssertEqual(saved, 1)
         XCTAssertEqual(dismissed, 1)
+    }
+}
+
+extension SleepRecordingFlowTests {
+    private var napCalendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        return calendar
+    }
+
+    func testFinishNapCancelPreservesTheStoredOngoingSession() throws {
+        let suite = "FinishNapTests-\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let persistence = SleepRecordPersistence(defaults: defaults)
+        let nap = SleepRecord(date: start, duration: 0, kind: .dayNap, isOngoing: true, createdAt: start)
+        XCTAssertTrue(persistence.save([nap]))
+        let original = try XCTUnwrap(persistence.load()?.first)
+        let before = defaults.data(forKey: "sleepRecords")
+        var draft = NapCompletionDraft(parent: original, now: now, calendar: napCalendar)
+        let selected = now.addingTimeInterval(-600)
+        draft.selectEnd(selected, changesDay: true)
+        draft.selectEnd(selected, changesDay: false)
+
+        XCTAssertEqual(defaults.data(forKey: "sleepRecords"), before, "Opening or editing the sheet must not finish the nap.")
+        XCTAssertTrue(draft.abandon())
+        XCTAssertEqual(defaults.data(forKey: "sleepRecords"), before)
+        let stored = try XCTUnwrap(persistence.load()?.first)
+        XCTAssertTrue(stored.isOngoing)
+        XCTAssertNil(stored.observedEnd)
+        XCTAssertFalse(draft.isSubmitted)
+    }
+
+    func testFinishNapSavesTheSelectedEndOnceAndPreservesIdentityBreaksAndWakeRecords() throws {
+        let suite = "FinishNapTests-\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let persistence = SleepRecordPersistence(defaults: defaults)
+        let nap = SleepRecord(date: start, duration: 0, kind: .dayNap, isOngoing: true, createdAt: start.addingTimeInterval(3))
+        let awake = SleepRecord(date: start.addingTimeInterval(600), duration: 5, kind: .break, parentNapID: nap.id, createdAt: start)
+        let other = SleepRecord(date: start.addingTimeInterval(-3600), duration: 30, kind: .dayNap, createdAt: start)
+        XCTAssertTrue(persistence.save([nap, awake, other]))
+        let original = try XCTUnwrap(persistence.load()?.first { $0.id == nap.id })
+        let records = try XCTUnwrap(persistence.load())
+        let wakePersistence = DailyWakeRecordPersistence(defaults: defaults)
+        let wakesBefore = defaults.data(forKey: "dailyWakeRecords_v1")
+        var draft = NapCompletionDraft(parent: original, now: now, calendar: napCalendar)
+        let selected = try XCTUnwrap(napCalendar.dateInterval(of: .minute, for: now.addingTimeInterval(-1200))?.start)
+        draft.selectEnd(selected, changesDay: true)
+        draft.selectEnd(selected, changesDay: false)
+        XCTAssertEqual(draft.end, selected)
+        XCTAssertNil(draft.validationMessage(records: records, now: now))
+
+        var saves = 0
+        var dismissals = 0
+        let save: (SleepRecord) -> Bool = { record in
+            saves += 1
+            XCTAssertEqual(record.id, original.id)
+            XCTAssertEqual(record.date, original.date)
+            XCTAssertEqual(record.createdAt, original.createdAt)
+            XCTAssertEqual(record.kind, .dayNap)
+            XCTAssertFalse(record.isOngoing)
+            XCTAssertEqual(record.endDate, selected)
+            XCTAssertEqual(record.observationCapture?.confirmsStart, false)
+            return persistence.saveRecording(record, now: self.now)
+        }
+        XCTAssertTrue(draft.submit(records: records, now: now, save: save, dismiss: { dismissals += 1 }))
+        _ = draft.submit(records: records, now: now, save: save, dismiss: { dismissals += 1 })
+        XCTAssertEqual(saves, 1)
+        XCTAssertEqual(dismissals, 1)
+        XCTAssertTrue(draft.isSubmitted)
+
+        let stored = try XCTUnwrap(persistence.load())
+        XCTAssertEqual(Set(stored.map(\.id)), Set([nap.id, awake.id, other.id]))
+        let completed = try XCTUnwrap(stored.first { $0.id == nap.id })
+        XCTAssertEqual(completed.observedEnd, selected)
+        XCTAssertEqual(completed.totalMinutes(breaks: stored, at: now), Int(selected.timeIntervalSince(start) / 60) - 5)
+        XCTAssertEqual(stored.first { $0.id == awake.id }?.observedEnd, awake.observedEnd)
+        XCTAssertEqual(defaults.data(forKey: "dailyWakeRecords_v1"), wakesBefore)
+        XCTAssertTrue((wakePersistence.load() ?? []).isEmpty, "Finishing a daytime nap must not create a morning wake observation.")
+    }
+
+    func testFinishNapRejectsInvalidEndTimesAndNonOngoingNapParents() {
+        let nap = SleepRecord(date: start, duration: 0, kind: .dayNap, isOngoing: true, createdAt: start)
+        for selected in [start, start.addingTimeInterval(-60), now.addingTimeInterval(120)] {
+            var draft = NapCompletionDraft(parent: nap, now: now, calendar: napCalendar)
+            draft.selectEnd(selected, changesDay: true)
+            draft.selectEnd(selected, changesDay: false)
+            XCTAssertNotNil(draft.validationMessage(records: [nap], now: now))
+            XCTAssertFalse(draft.submit(records: [nap], now: now, save: { _ in
+                XCTFail("An invalid endpoint must not be submitted.")
+                return true
+            }, dismiss: { XCTFail("An invalid draft must stay open.") }))
+        }
+        let ongoingNight = SleepRecord(date: start, duration: 0, kind: .nightSleep, isOngoing: true)
+        for invalid in [ongoingNight, SleepRecord(date: start, duration: 30, kind: .dayNap)] {
+            var draft = NapCompletionDraft(parent: invalid, now: now, calendar: napCalendar)
+            XCTAssertNotNil(draft.validationMessage(records: [invalid], now: now))
+            XCTAssertFalse(draft.submit(records: [invalid], now: now, save: { _ in
+                XCTFail("Quick completion is only for ongoing daytime naps.")
+                return true
+            }, dismiss: { XCTFail("An invalid parent must stay open.") }))
+        }
+    }
+
+    func testFinishNapRechecksLatestParentAndAwakeBreakBeforeSaving() throws {
+        let nap = SleepRecord(date: start, duration: 0, kind: .dayNap, isOngoing: true, createdAt: start)
+        var draft = NapCompletionDraft(parent: nap, now: now, calendar: napCalendar)
+        let selected = try XCTUnwrap(napCalendar.dateInterval(of: .minute, for: now.addingTimeInterval(-1200))?.start)
+        draft.selectEnd(selected, changesDay: true)
+        draft.selectEnd(selected, changesDay: false)
+        XCTAssertNil(draft.validationMessage(records: [nap], now: now))
+
+        let newBreak = SleepRecord(date: selected.addingTimeInterval(-60), duration: 5, kind: .break, parentNapID: nap.id)
+        let changed = SleepRecord(id: nap.id, date: nap.date, duration: 30, kind: .dayNap,
+                                  createdAt: nap.createdAt, endDate: nap.date.addingTimeInterval(1800))
+        for latest in [[], [changed], [nap, newBreak]] {
+            XCTAssertNotNil(draft.validationMessage(records: latest, now: now))
+            XCTAssertFalse(draft.submit(records: latest, now: now, save: { _ in
+                XCTFail("A stale parent or a later awake break must block completion.")
+                return true
+            }, dismiss: { XCTFail("A rejected completion must stay open.") }))
+        }
+        let unrelated = SleepRecord(date: newBreak.date, duration: newBreak.duration, kind: .break, parentNapID: UUID())
+        XCTAssertNil(draft.validationMessage(records: [nap, unrelated], now: now))
+    }
+
+    func testFinishNapEnforcesTheOneMinuteMinimumAtSubmission() {
+        let nap = SleepRecord(date: start, duration: 0, kind: .dayNap, isOngoing: true, createdAt: start)
+        let tooSoon = start.addingTimeInterval(59)
+        var early = NapCompletionDraft(parent: nap, now: tooSoon, calendar: napCalendar)
+        XCTAssertNotNil(early.validationMessage(records: [nap], now: tooSoon))
+        XCTAssertFalse(early.submit(records: [nap], now: tooSoon, save: { _ in
+            XCTFail("A nap shorter than one minute must not be submitted.")
+            return true
+        }, dismiss: { XCTFail("An invalid draft must stay open.") }))
+
+        let minimum = start.addingTimeInterval(60)
+        var valid = NapCompletionDraft(parent: nap, now: minimum, calendar: napCalendar)
+        XCTAssertNil(valid.validationMessage(records: [nap], now: minimum))
+        XCTAssertTrue(valid.submit(records: [nap], now: minimum, save: { record in
+            XCTAssertEqual(record.duration, 1)
+            XCTAssertEqual(record.endDate, minimum)
+            return true
+        }, dismiss: {}))
+    }
+
+    func testFinishNapPersistenceRejectsABreakAddedAfterDraftValidation() throws {
+        let suite = "FinishNapTests-\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let persistence = SleepRecordPersistence(defaults: defaults)
+        let nap = SleepRecord(date: start, duration: 0, kind: .dayNap, isOngoing: true, createdAt: start)
+        XCTAssertTrue(persistence.save([nap]))
+        let snapshot = try XCTUnwrap(persistence.load())
+        let original = try XCTUnwrap(snapshot.first)
+        let selected = try XCTUnwrap(napCalendar.dateInterval(of: .minute, for: now.addingTimeInterval(-1200))?.start)
+        var draft = NapCompletionDraft(parent: original, now: now, calendar: napCalendar)
+        draft.selectEnd(selected, changesDay: true)
+        draft.selectEnd(selected, changesDay: false)
+        XCTAssertNil(draft.validationMessage(records: snapshot, now: now))
+
+        var breakDraft = AwakeBreakDraft(parent: original, now: now)
+        breakDraft.start = selected.addingTimeInterval(-60)
+        breakDraft.end = selected.addingTimeInterval(240)
+        let addedBreak = try XCTUnwrap(breakDraft.record(existing: snapshot, now: now))
+        var saveAttempts = 0
+        var dismissals = 0
+        XCTAssertFalse(draft.submit(records: snapshot, now: now, save: { candidate in
+            saveAttempts += 1
+            // Simulate a second editor saving a valid break after this sheet's last read.
+            guard persistence.saveRecording(addedBreak, now: self.now) else {
+                XCTFail("The concurrent awake break must be accepted for the ongoing nap.")
+                return false
+            }
+            let currentParent = persistence.load()?.first { $0.id == original.id }
+            XCTAssertTrue(currentParent.map { SleepRecordVersion(original).matches($0) } == true,
+                          "Only the attached breaks changed; the original parent revision still matches.")
+            let saved = persistence.saveRecording(candidate, now: self.now)
+            XCTAssertFalse(saved, "Persistence must recheck latest breaks under the write lock.")
+            return saved
+        }, dismiss: { dismissals += 1 }))
+        XCTAssertEqual(saveAttempts, 1)
+        XCTAssertEqual(dismissals, 0)
+        XCTAssertFalse(draft.isSubmitted)
+        XCTAssertEqual(draft.end, selected)
+
+        let stored = try XCTUnwrap(persistence.load())
+        XCTAssertEqual(Set(stored.map(\.id)), Set([original.id, addedBreak.id]))
+        let stillOpen = try XCTUnwrap(stored.first { $0.id == original.id })
+        XCTAssertTrue(stillOpen.isOngoing)
+        XCTAssertNil(stillOpen.observedEnd)
+        XCTAssertEqual(stored.first { $0.id == addedBreak.id }?.observedEnd, addedBreak.observedEnd)
+    }
+
+    func testFinishNapTimeValidationRefreshDoesNotMoveTheSelectedEnd() throws {
+        let nap = SleepRecord(date: start, duration: 0, kind: .dayNap, isOngoing: true, createdAt: start)
+        var draft = NapCompletionDraft(parent: nap, now: now, calendar: napCalendar)
+        let selected = try XCTUnwrap(napCalendar.dateInterval(of: .minute, for: now.addingTimeInterval(120))?.start)
+        draft.selectEnd(selected, changesDay: true)
+        draft.selectEnd(selected, changesDay: false)
+        XCTAssertEqual(draft.end, selected)
+        XCTAssertNotNil(draft.validationMessage(records: [nap], now: now))
+
+        XCTAssertNil(draft.validationMessage(records: [nap], now: selected))
+        XCTAssertEqual(draft.end, selected, "Advancing the reference clock must not silently replace the chosen end.")
+        XCTAssertFalse(draft.isSubmitted)
+    }
+
+    func testFinishNapFailedSaveRetainsSelectedTimeAndCanRetry() {
+        let nap = SleepRecord(date: start, duration: 0, kind: .dayNap, isOngoing: true, createdAt: start)
+        var draft = NapCompletionDraft(parent: nap, now: now, calendar: napCalendar)
+        var attempts = 0
+        var dismissals = 0
+        XCTAssertFalse(draft.submit(records: [nap], now: now, save: { record in
+            attempts += 1
+            XCTAssertEqual(record.endDate, self.now)
+            return false
+        }, dismiss: { dismissals += 1 }))
+        XCTAssertFalse(draft.isSubmitted)
+        XCTAssertEqual(draft.end, now)
+        XCTAssertEqual(dismissals, 0)
+        XCTAssertTrue(draft.submit(records: [nap], now: now, save: { record in
+            attempts += 1
+            XCTAssertEqual(record.endDate, self.now)
+            XCTAssertEqual(record.observationCapture?.confirmsStart, false)
+            return true
+        }, dismiss: { dismissals += 1 }))
+        XCTAssertEqual(attempts, 2)
+        XCTAssertEqual(dismissals, 1)
     }
 }
 

@@ -40,6 +40,7 @@ struct SleepListView: View {
         case addSleep(editing: SleepRecord?, defaultDate: Date)
         case addNightSleep(defaultDate: Date)
         case addBreak(parentID: UUID)
+        case finishNap(parent: SleepRecord)
         case endSleep(parent: SleepRecord, review: Bool = false)
         case dayDetail(SelectedDay)
         case wakeTime(association: AssociatedHomeWake? = nil)
@@ -47,7 +48,7 @@ struct SleepListView: View {
         var isRecording: Bool {
             switch self {
             case .addSleep, .addNightSleep, .addBreak, .endSleep: return true
-            case .dayDetail, .wakeTime: return false
+            case .finishNap, .dayDetail, .wakeTime: return false
             }
         }
 
@@ -59,6 +60,8 @@ struct SleepListView: View {
                 return "addNightSleep-\(date.timeIntervalSince1970)"
             case .addBreak(let id):
                 return "addBreak-\(id)"
+            case .finishNap(let parent):
+                return "finishNap-\(parent.id)"
             case .endSleep(let parent, _):
                 return "endSleep-\(parent.id)"
             case .dayDetail(let day):
@@ -900,7 +903,9 @@ struct SleepListView: View {
                 recordNight: { activeSheet = .addNightSleep(defaultDate: Date()) },
                 endSleep: {
                     if let record = model.record {
-                        activeSheet = .endSleep(parent: record, review: model.elapsedMinutes == nil)
+                        activeSheet = record.kind == .dayNap
+                            ? .finishNap(parent: record)
+                            : .endSleep(parent: record, review: model.elapsedMinutes == nil)
                     }
                 },
                 reviewEnd: { record in

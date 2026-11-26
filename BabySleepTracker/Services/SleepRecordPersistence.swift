@@ -75,6 +75,15 @@ struct SleepRecordPersistence {
                 return false
             }
         }
+        if record.kind == .dayNap, !record.isOngoing,
+           records.contains(where: { $0.id == record.id && $0.kind == .dayNap && $0.isOngoing }) {
+            // Complete against the latest breaks under the same storage lock as the write.
+            guard let end = record.observedEnd,
+                  !records.contains(where: {
+                      $0.kind == .break && $0.parentNapID == record.id &&
+                          $0.observedEnd.map { $0 > end } == true
+                  }) else { return false }
+        }
         var creation: ObservationCreationReservation?
         if record.recordingDraft, record.recordingBaseline == nil {
             guard let intent = record.creationIntent, intent.recordID == record.id,

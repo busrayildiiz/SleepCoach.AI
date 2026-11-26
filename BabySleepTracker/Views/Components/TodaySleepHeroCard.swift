@@ -322,7 +322,7 @@ struct TodaySleepHeroCard: View {
             action("Record night sleep", symbol: "moon", id: "hero.recordNight", primary: true, recordNight)
         case .napActive:
             adaptive {
-                action("End Sleep", symbol: "stop.fill", id: "hero.endSleep", primary: true, endSleep)
+                action("Finish Nap", symbol: "stop.fill", id: "hero.endSleep", primary: true, endSleep)
                 action("Add Break", symbol: "sun.max", id: "sleep.current.addBreak", primary: false, addBreak)
             }
         case .napCompleted: action("View details", symbol: "chevron.right", id: "hero.details", primary: false, viewDetails)

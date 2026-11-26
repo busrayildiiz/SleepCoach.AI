@@ -137,6 +137,73 @@ struct SleepRecordingDraft {
     }
 }
 
+/// An end-only draft for an existing nap. Opening or dismissing it never records a wake.
+struct NapCompletionDraft {
+    let parent: SleepRecord
+    let calendar: Calendar
+    private var recording: SleepRecordingDraft
+    private var submission = RecordingSubmission()
+    private var invalidLocalTime = false
+
+    var end: Date { recording.end }
+    var isSubmitted: Bool { submission.isSubmitted }
+    var requiresExplicitCancellation: Bool { recording.requiresExplicitCancellation }
+
+    init(parent: SleepRecord, now: Date, calendar: Calendar) {
+        self.parent = parent
+        let capturedCalendar = DaytimeReviewWindow.capture(calendar)
+        self.calendar = capturedCalendar
+        var draft = SleepRecordingDraft(defaultDate: parent.date, editing: parent, now: now)
+        draft.prepareForEnding(at: now, calendar: capturedCalendar, requireConfirmation: true)
+        recording = draft
+    }
+
+    mutating func selectEnd(_ value: Date, changesDay: Bool) {
+        let day = changesDay ? value : end
+        let time = changesDay ? end : value
+        guard let selected = RecordingEndpointSelection.combine(day: day, time: time,
+                preserving: end, calendar: calendar) else {
+            invalidLocalTime = true
+            return
+        }
+        var selection = RecordingEndpointSelection(end)
+        selection.select(selected)
+        recording.applyEndSelection(selection)
+        invalidLocalTime = false
+    }
+
+    func validationMessage(records: [SleepRecord], now: Date) -> String? {
+        guard parent.kind == .dayNap, parent.isOngoing,
+              let current = records.first(where: { $0.id == parent.id }),
+              SleepRecordVersion(parent).matches(current) else {
+            return "This nap has changed or is no longer open. Close this sheet and review the current record."
+        }
+        if invalidLocalTime { return "Choose a valid local time for this date." }
+        if let message = recording.validationMessage(now: now) { return message }
+        let exceedsEnd = records.contains { record in
+            record.kind == .break && record.parentNapID == parent.id &&
+                record.observedEnd.map { $0 > end } == true
+        }
+        if exceedsEnd { return "Choose an end time after the last awake break, or edit that break first." }
+        return nil
+    }
+
+    /// Save explicitly confirms only the selected end; the original start retains its provenance.
+    @discardableResult
+    mutating func submit(records: [SleepRecord], now: Date, save: (SleepRecord) -> Bool,
+                         dismiss: () -> Void) -> Bool {
+        guard !submission.isSubmitted else { return true }
+        guard validationMessage(records: records, now: now) == nil else { return false }
+        recording.confirmObservedEnd(now: now)
+        submission.submit(draft: recording, kind: .dayNap, editing: parent, now: now,
+                          save: save, dismiss: dismiss)
+        return submission.isSubmitted
+    }
+
+    @discardableResult
+    func abandon() -> Bool { recording.abandon() }
+}
+
 struct RecordingEndpointSelection {
     private(set) var value: Date
     private(set) var hasChanged = false
