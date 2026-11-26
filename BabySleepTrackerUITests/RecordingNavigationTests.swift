@@ -95,7 +95,7 @@ final class RecordingNavigationTests: XCTestCase {
         waitForDismissal(of: app.navigationBars["Add Awake Break"])
         let netSleep = app.staticTexts["sleep.netSleep.\(parentID)"]
         XCTAssertTrue(netSleep.waitForExistence(timeout: 5))
-        XCTAssertEqual(netSleep.label, "55m")
+        XCTAssertEqual(netSleep.label, "55m net sleep")
         // Reopening the same interval must disable save instead of creating a duplicate.
         reveal(addBreak, in: app)
         addBreak.tap()

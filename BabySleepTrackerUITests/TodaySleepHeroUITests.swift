@@ -263,7 +263,16 @@ final class TodaySleepHeroUITests: XCTestCase {
         XCTAssertEqual(XCTWaiter.wait(for: [completed], timeout: 5), .completed)
         XCTAssertFalse(app.buttons["hero.endSleep"].exists)
         app.buttons["hero.details"].tap()
-        XCTAssertTrue(app.buttons["sleep.addBreak.22222222-2222-2222-2222-222222222222"].waitForExistence(timeout: 5))
+        let addBreak = app.buttons["sleep.addBreak.22222222-2222-2222-2222-222222222222"]
+        XCTAssertTrue(addBreak.waitForExistence(timeout: 5))
+        revealDayDetail(addBreak, app: app)
+        XCTAssertTrue(addBreak.isHittable)
+        addBreak.tap()
+        let breakEditor = app.navigationBars["Add Awake Break"]
+        XCTAssertTrue(breakEditor.waitForExistence(timeout: 5))
+        app.buttons["recording.cancel"].tap()
+        dismissed(breakEditor)
+        XCTAssertTrue(addBreak.exists)
     }
 
     func testFinishNapSheetRemainsUsableInDarkModeAtAccessibilitySize() {
@@ -478,15 +487,55 @@ extension TodaySleepHeroUITests {
         // The overnight plan can omit recorded wakes while a night is active.
         // Today's records show the missing-wake card only when there is no recorded wake.
         tapHomeButton("sleep.todayRecords", app: app)
-        guard app.navigationBars["Today"].waitForExistence(timeout: 5),
-              app.staticTexts["Add today's wake-up time for better predictions"].waitForExistence(timeout: 5) else {
+        let wake = app.descendants(matching: .any).matching(identifier: "history.day.wake").firstMatch
+        guard app.navigationBars["Day detail"].waitForExistence(timeout: 5),
+              wake.waitForExistence(timeout: 5),
+              wake.label.contains("Add today's wake-up time for better predictions") else {
             fail("Expected today's sleep records to show that the wake was not recorded.")
             return
         }
+        XCTAssertTrue(wake.label.contains("No wake recorded"), wake.label)
+        XCTAssertFalse(wake.label.contains("Verified"))
+        XCTAssertFalse(app.buttons["history.wake.review"].exists)
     }
 }
 
 extension TodaySleepHeroUITests {
+    private func revealDayDetail(_ element: XCUIElement, app: XCUIApplication, requiresTap: Bool = true) {
+        let scroll = app.scrollViews["history.day.scroll"]
+        XCTAssertTrue(scroll.waitForExistence(timeout: 5))
+        let window = app.windows.firstMatch
+        let nav = app.navigationBars["Day detail"]
+        for _ in 0..<8 {
+            let foreground = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "exists == true AND hittable == true"), object: nav.buttons["Done"])
+            guard XCTWaiter.wait(for: [foreground], timeout: 3) == .completed else {
+                capture("day-detail-scroll-presented-unexpected-screen", app: app)
+                XCTFail("Scrolling left Day detail: \(app.debugDescription)")
+                return
+            }
+            let bounds = window.frame
+            let area = bounds.intersection(scroll.frame)
+            let top = nav.exists ? max(area.minY, nav.frame.maxY) : area.minY
+            let viewport = CGRect(x: area.minX, y: top, width: area.width, height: max(0, area.maxY - top))
+            guard !viewport.isEmpty, !viewport.isNull, element.exists else { break }
+            let frame = element.frame
+            let visible = requiresTap ? viewport.contains(CGPoint(x: frame.midX, y: frame.midY)) : viewport.contains(frame)
+            if visible && (!requiresTap || element.isHittable) { return }
+            let distance = frame.midY - viewport.midY
+            let step = min(max(30, abs(distance)), viewport.height * 0.55)
+            let startY = viewport.minY + viewport.height * (distance < 0 ? 0.18 : 0.82)
+            // Use the scroll content margin so a navigation drag cannot begin on a row action.
+            let start = window.coordinate(withNormalizedOffset: .zero)
+                .withOffset(CGVector(dx: viewport.minX + 8 - bounds.minX, dy: startY - bounds.minY))
+            start.press(forDuration: 0.01,
+                        thenDragTo: start.withOffset(CGVector(dx: 0, dy: distance < 0 ? step : -step)),
+                        withVelocity: .default, thenHoldForDuration: 0)
+        }
+        capture("day-detail-target-unreachable", app: app)
+        XCTFail("Day Detail element was unreachable: \(element)\n\(app.debugDescription)")
+    }
+
     func testDayDetailShowsUnknownNetForAnOngoingNapAtLargeTextSize() {
         let app = launch("napNetUnknown", live: true, large: true)
         tapHomeButton("sleep.todayRecords", app: app)
@@ -495,7 +544,17 @@ extension TodaySleepHeroUITests {
         XCTAssertTrue(unknown.waitForExistence(timeout: 5))
         XCTAssertEqual(unknown.label, "Net sleep unknown")
         XCTAssertFalse(app.staticTexts["sleep.netSleep." + suffix].exists)
+        XCTAssertFalse(app.descendants(matching: .any).matching(identifier: "history.day.planning").firstMatch.exists)
+        revealDayDetail(unknown, app: app, requiresTap: false)
         capture("ongoing-nap-unknown-net-xxxl", app: app)
+        let addBreak = app.buttons["sleep.addBreak." + suffix]
+        revealDayDetail(addBreak, app: app)
+        XCTAssertTrue(addBreak.isHittable)
+        capture("day-detail-ongoing-actions-xxxl", app: app)
+        let review = app.buttons["daytimeReview.open"]
+        revealDayDetail(review, app: app)
+        XCTAssertTrue(review.isHittable)
+        capture("day-detail-today-review-link-xxxl", app: app)
     }
 
     func testHistoricalPickerCancelPreservesConfirmationAndAcceptedRevertClearsIt() throws {
@@ -608,10 +667,24 @@ extension TodaySleepHeroUITests {
         XCTAssertTrue((wake.value as? String)?.contains(wakeDay.formatted(date: .abbreviated, time: .omitted)) == true)
 
         tapHomeButton("sleep.dayRecords.0", app: app)
-        XCTAssertTrue(app.navigationBars[startDay.formatted(.dateTime.day().month(.abbreviated))].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["Night Sleep"].exists)
-        XCTAssertTrue(app.staticTexts["8:12 PM – 7:21 AM"].exists)
-        XCTAssertFalse(app.staticTexts["End unconfirmed"].exists)
+        XCTAssertTrue(app.navigationBars["Day detail"].waitForExistence(timeout: 5))
+        let selectedDay = app.staticTexts["history.day.date"]
+        XCTAssertTrue(selectedDay.waitForExistence(timeout: 5))
+        let dateStyle = Date.FormatStyle(date: .omitted, time: .omitted, locale: .current,
+                                         calendar: calendar, timeZone: calendar.timeZone)
+        XCTAssertEqual(selectedDay.label, startDay.formatted(dateStyle.weekday(.abbreviated).day().month(.abbreviated).year()),
+                       "The completed night must stay on its original Sleep Day after relaunch.")
+        let nightID = "22222222-2222-2222-2222-222222222222"
+        let night = app.descendants(matching: .any).matching(identifier: "history.sleep.record.\(nightID)").firstMatch
+        XCTAssertTrue(night.waitForExistence(timeout: 5))
+        revealDayDetail(night, app: app)
+        let timeStyle = dateStyle.hour().minute()
+        XCTAssertTrue(night.label.contains("\(start.formatted(timeStyle))–\(wakeTime.formatted(timeStyle))"), night.label)
+        XCTAssertTrue(night.label.contains("Ends \(wakeDay.formatted(dateStyle.day().month(.abbreviated)))"), night.label)
+        XCTAssertFalse(night.label.contains("End unconfirmed"), night.label)
+        let editNight = app.buttons["history.sleep.edit.\(nightID)"]
+        XCTAssertTrue(editNight.exists)
+        XCTAssertEqual(editNight.label, "Edit Night sleep")
         capture(timeFirst ? "historical-time-first-persisted" : "historical-date-first-persisted", app: app)
     }
 

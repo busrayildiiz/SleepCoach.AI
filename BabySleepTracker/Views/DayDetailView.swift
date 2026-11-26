@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 
 enum AddMode {
@@ -13,70 +14,49 @@ struct DayDetailView: View {
     let onRecordUpsert: (SleepRecord) -> Bool
     let onBreakSaved: (_ newBreak: SleepRecord) -> Bool
 
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.dynamicTypeSize) private var dynamicType
     @State private var showHistoricalWake = false
     @State private var showAddMenu = false
     @State private var recordingSheet: RecordingSheet?
-    @State private var contextNap: SleepRecord? = nil
+    @State private var contextNap: SleepRecord?
     @State private var showNapActions = false
     @StateObject private var orchestrator = SleepCoachOrchestrator.shared
-
-
-    @Environment(\.dismiss) private var dismiss
-
     @State private var cal = Calendar.current
     @State private var now = Date()
 
-    // MARK: - Derived
-
-    private var sortedNaps: [SleepRecord] {
-        records.filter { $0.kind == .dayNap }.sorted { $0.date < $1.date }
-    }
-
-    private var nightSleep: SleepRecord? {
-        records.filter { $0.kind == .nightSleep }.sorted { $0.date < $1.date }.first
-    }
-
-    private var breaks: [SleepRecord] {
-        records.filter { $0.kind == .break }.sorted { $0.date < $1.date }
-    }
-
-    private var wakeEvidence: DayDetailWakeEvidence {
-        DayDetailWakeEvidence(records: DailyWakeRecordPersistence().load() ?? [], day: day, calendar: cal, now: now)
-    }
-
-    private var wakeUpTime: Date? {
-        if case .recorded(let time) = wakeEvidence { return time }
-        return nil
-    }
-
-    private var accounting: SleepAccounting {
-        SleepAccounting(records: SleepRecordPersistence().load() ?? records, now: now, calendar: cal)
-    }
-
     private var isToday: Bool { cal.isDate(day, inSameDayAs: now) }
-
-    // MARK: - Body
+    private var isHistorical: Bool { cal.startOfDay(for: day) < cal.startOfDay(for: now) }
 
     var body: some View {
-        NavigationStack {
-            ScrollView(showsIndicators: false) {
-                VStack(spacing: 12) {
-                    let summary = accounting.completedSubtotal(on: day)
-                    Text("Sleep Day: " + summary.display)
-                        .font(.subheadline)
-                    if cal.startOfDay(for: day) < cal.startOfDay(for: now) {
-                        Button("Review Morning Wake") { showHistoricalWake = true }
-                            .accessibilityIdentifier("history.wake.review")
-                    }
+        let snapshot = TrustedObservationAdapter(defaults: SecureDataStore.shared)
+            .snapshot(includeDaytime: false, calendar: cal)
+        let observations = DayDetailObservationProjection(snapshot: snapshot)
+        let accounting = SleepAccounting(records: snapshot.sleeps.map(\.record), now: now, calendar: cal)
+        let displayed = snapshot.storageIsReadable ? displayedRecords(accounting) : []
+        let breaks = displayed.filter { $0.kind == .break }
+        let sleeps = displayed.filter { $0.kind != .break }
+        return NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    dateHeader
+                    recordedSummary(accounting.completedSubtotal(on: day), readable: snapshot.storageIsReadable)
+                    morningWake(observations.wake(on: day, at: now, calendar: cal))
+                    sleepRecords(sleeps, breaks: breaks, accounting: accounting, observations: observations)
+                    planningSuggestions(hasNight: (snapshot.storageIsReadable ? sleeps : records)
+                        .contains { $0.kind == .nightSleep })
                     daytimeReviewLink
-                    allCards
                 }
-                .padding(.horizontal, 16)
-                .padding(.top, 16)
-                .padding(.bottom, 40)
+                .padding(.horizontal, 18)
+                .padding(.top, 12)
+                .padding(.bottom, 24)
             }
-            .background(Color(.systemGroupedBackground))
-            .navigationTitle(dayTitle)
+            .accessibilityIdentifier("history.day.scroll")
+            .foregroundStyle(RecordingColor.ink)
+            .background(RecordingColor.background.ignoresSafeArea())
+            .toolbarBackground(RecordingColor.background, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
+            .navigationTitle("Day detail")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
@@ -114,7 +94,7 @@ struct DayDetailView: View {
                 }
                 Button("Cancel", role: .cancel) { contextNap = nil }
             }
-            .sheet(isPresented: $showHistoricalWake) {
+            .sheet(isPresented: $showHistoricalWake, onDismiss: refreshPresentation) {
                 let initialDay = isToday ? cal.date(byAdding: .day, value: -1, to: day) ?? day : day
                 HistoricalWakeEditor(day: initialDay, calendar: cal) { savedDay, calendar in
                     day = savedDay
@@ -124,7 +104,7 @@ struct DayDetailView: View {
                                               now: now, calendar: calendar).records(on: savedDay)
                 }
             }
-            .fullScreenCover(item: $recordingSheet) { destination in
+            .fullScreenCover(item: $recordingSheet, onDismiss: refreshPresentation) { destination in
                 switch destination {
                 case .sleep(let editing, let date):
                     AddRecordView(defaultDate: date, editingRecord: editing,
@@ -136,123 +116,336 @@ struct DayDetailView: View {
                                  onSave: onBreakSaved)
                 }
             }
-            .onReceive(NotificationCenter.default.publisher(for: .dailyWakeRecordsDidChange)) { _ in
-                now = Date()
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .sleepRecordsDidChange)) { _ in
-                now = Date()
-                if let saved = SleepRecordPersistence().load() {
-                    records = SleepAccounting(records: saved, now: now, calendar: cal).records(on: day)
+            .onAppear(perform: refreshPresentation)
+            .onChange(of: day) { _ in refreshPresentation() }
+            .onReceive(observationChanges) { _ in refreshPresentation() }
+        }
+        .tint(RecordingColor.accent)
+    }
+
+    private var observationChanges: some Publisher<Notification, Never> {
+        let names: [Notification.Name] = [.observationProvenanceDidChange, .sleepRecordsDidChange, .dailyWakeRecordsDidChange,
+                                         .secureDataStoreDidChange, .NSSystemTimeZoneDidChange, .NSCalendarDayChanged,
+                                         UIApplication.significantTimeChangeNotification, UIApplication.didBecomeActiveNotification]
+        return Publishers.MergeMany(names.map { NotificationCenter.default.publisher(for: $0) })
+            .receive(on: RunLoop.main)
+    }
+
+    private func refreshPresentation() { now = Date() }
+
+    private func displayedRecords(_ accounting: SleepAccounting) -> [SleepRecord] {
+        let selected = accounting.records(on: day)
+        // Keep a carried ongoing night only when it was supplied by the caller.
+        let carriedIDs = Set(records.filter {
+            $0.kind == .nightSleep && $0.isOngoing && !cal.isDate($0.date, inSameDayAs: day)
+        }.map(\.id))
+        let carried = accounting.records.filter {
+            carriedIDs.contains($0.id) && $0.kind == .nightSleep && $0.isOngoing &&
+                !cal.isDate($0.date, inSameDayAs: day)
+        }.sorted { $0.date < $1.date }.first
+        let nights = (selected.filter { $0.kind == .nightSleep } + [carried].compactMap { $0 })
+            .sorted { $0.date < $1.date }
+        let parents = (selected.filter { $0.kind == .dayNap } + Array(nights.prefix(1)))
+            .sorted { $0.date < $1.date }
+        let parentIDs = Set(parents.map(\.id))
+        return parents + accounting.records.filter { record in
+            record.kind == .break && record.parentNapID.map(parentIDs.contains) == true
+        }.sorted { $0.date < $1.date }
+    }
+
+    private var dateFormat: Date.FormatStyle {
+        .init(date: .omitted, time: .omitted, locale: .current, calendar: cal, timeZone: cal.timeZone)
+    }
+    private var shortDate: Date.FormatStyle { dateFormat.day().month(.abbreviated) }
+    private var fullDate: Date.FormatStyle { shortDate.weekday(.abbreviated).year() }
+    private var timeFormat: Date.FormatStyle { dateFormat.hour().minute() }
+
+    private var dateHeader: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Group {
+                if isToday {
+                    Text("Today · \(day.formatted(shortDate))")
+                        .accessibilityLabel(Text("Today, \(day.formatted(fullDate))"))
+                } else {
+                    Text(day, format: fullDate)
+                        .accessibilityLabel(Text(day.formatted(fullDate)))
                 }
             }
-            .onReceive(NotificationCenter.default.publisher(for: UIApplication.significantTimeChangeNotification)) { _ in now = Date() }
-            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in now = Date() }
+            .font(.title2.weight(.bold))
+            .accessibilityAddTraits(.isHeader)
+            .accessibilityIdentifier("history.day.date")
+            Text("Sleep Day · \(day.formatted(dateFormat.timeZone(.localizedGMT(.short))))")
+                .font(.footnote)
+                .foregroundStyle(RecordingColor.secondary)
         }
-        .tint(Color(red: 0.45, green: 0.35, blue: 0.92))
+    }
+
+    private func recordedSummary(_ subtotal: CompletedRecordedSubtotal, readable: Bool) -> some View {
+        let amount = readable ? subtotal.minutes.map(TimeFormat.minutes) : nil
+        let value: String
+        if !readable { value = String(localized: "Unavailable") }
+        else { value = amount ?? String(localized: "Unknown") }
+        let total = Text(value).font(.title.weight(.bold)).monospacedDigit()
+        let status = summaryStatus(subtotal, readable: readable)
+        return VStack(alignment: .leading, spacing: 5) {
+            Text("Recorded sleep").font(.footnote).foregroundStyle(RecordingColor.secondary)
+            if dynamicType.isAccessibilitySize {
+                total
+                status
+            } else {
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .firstTextBaseline) { total; Spacer(); status }
+                    VStack(alignment: .leading, spacing: 6) { total; status }
+                }
+            }
+            if readable {
+                switch subtotal.unavailableReason {
+                case .conflict:
+                    Text("Review the conflicting sleep records.").font(.footnote).foregroundStyle(RecordingColor.secondary)
+                case .unresolvedBreak:
+                    Text("An awake break needs a confirmed end.").font(.footnote).foregroundStyle(RecordingColor.secondary)
+                default:
+                    EmptyView()
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .detailSurface()
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("history.day.summary")
+    }
+
+    @ViewBuilder
+    private func summaryStatus(_ subtotal: CompletedRecordedSubtotal, readable: Bool) -> some View {
+        if !readable {
+            Text("Saved sleep records could not be opened.").font(.footnote).foregroundStyle(RecordingColor.secondary)
+        } else if subtotal.unavailableReason == .missing {
+            Text("No recorded subtotal").font(.footnote).foregroundStyle(RecordingColor.secondary)
+        } else if subtotal.isIncomplete {
+            Label("Incomplete", systemImage: "minus.circle")
+                .font(.footnote)
+                .foregroundStyle(ObservationStatusColor.caution)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(ObservationStatusColor.caution.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
+        }
+    }
+
+    private func morningWake(_ wake: DayDetailObservationProjection.Wake) -> some View {
+        let layout = dynamicType.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 5))
+            : AnyLayout(HStackLayout(alignment: .center, spacing: 12))
+        return layout {
+            if !dynamicType.isAccessibilitySize {
+                Image(systemName: "sun.max")
+                    .font(.body.weight(.medium))
+                    .foregroundStyle(RecordingColor.accent)
+                    .padding(10)
+                    .background(RecordingColor.inset, in: RoundedRectangle(cornerRadius: 13))
+                    .accessibilityHidden(true)
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                if dynamicType.isAccessibilitySize {
+                    Label("Morning wake", systemImage: "sun.max")
+                        .font(.footnote)
+                        .foregroundStyle(RecordingColor.secondary)
+                } else {
+                    Text("Morning wake").font(.footnote).foregroundStyle(RecordingColor.secondary)
+                }
+                wakeDescription(wake)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier(wake == .ambiguous ? "history.day.wake.ambiguous" : "history.day.wake")
+
+            if isHistorical {
+                switch wake {
+                case .recorded:
+                    historicalWakeButton("Edit", icon: "pencil", spokenLabel: "Edit morning wake")
+                case .missing:
+                    historicalWakeButton("Record", icon: "plus", spokenLabel: "Record morning wake")
+                case .ambiguous, .unavailable:
+                    historicalWakeButton("Review", icon: "exclamationmark.circle", spokenLabel: "Review morning wakes")
+                }
+            }
+        }
+        .padding(13)
+        .detailSurface()
+    }
+
+    @ViewBuilder
+    private func wakeDescription(_ wake: DayDetailObservationProjection.Wake) -> some View {
+        switch wake {
+        case .recorded(let time, let verified):
+            let value = Text(time, format: timeFormat).font(.title3.weight(.bold)).monospacedDigit()
+            let status = Group {
+                if verified { verifiedObservation }
+                else { Text("Recorded").font(.caption).foregroundStyle(RecordingColor.secondary) }
+            }
+            if dynamicType.isAccessibilitySize {
+                value
+                status
+            } else {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 9) { value; status }
+                    VStack(alignment: .leading, spacing: 4) { value; status }
+                }
+            }
+        case .missing:
+            Text("No wake recorded").font(.headline)
+            if isToday {
+                Text("Add today's wake-up time for better predictions")
+                    .font(.footnote)
+                    .foregroundStyle(RecordingColor.secondary)
+            } else if isHistorical {
+                Text("Add the wake time you observed.").font(.footnote).foregroundStyle(RecordingColor.secondary)
+            }
+        case .ambiguous:
+            Text("Conflicting morning wakes").font(.headline).foregroundStyle(ObservationStatusColor.caution)
+            Text("Multiple wakes are recorded for this date. Resolve the duplicates before confirming a morning wake.")
+                .font(.footnote).foregroundStyle(RecordingColor.secondary)
+        case .unavailable:
+            Text("Morning wake unavailable").font(.headline)
+            Text("Saved observations could not be opened.").font(.footnote).foregroundStyle(RecordingColor.secondary)
+        }
+    }
+
+    private func historicalWakeButton(_ title: LocalizedStringKey, icon: String, spokenLabel: LocalizedStringKey) -> some View {
+        Button { showHistoricalWake = true } label: {
+            Label(title, systemImage: icon)
+                .font(.subheadline)
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(RecordingColor.accent)
+        .accessibilityLabel(Text(spokenLabel))
+        .accessibilityHint(Text(day, format: fullDate))
+        .accessibilityIdentifier("history.wake.review")
+    }
+
+    private func sleepRecords(_ sleeps: [SleepRecord], breaks: [SleepRecord], accounting: SleepAccounting,
+                              observations: DayDetailObservationProjection) -> some View {
+        let naps = sleeps.filter { $0.kind == .dayNap }
+        let heading = Text("Sleep records").font(.headline).accessibilityAddTraits(.isHeader)
+        return VStack(alignment: .leading, spacing: 8) {
+            if !sleeps.isEmpty {
+                let count = Text(sleeps.count == 1 ? "1 record" : "\(sleeps.count) records")
+                    .font(.footnote).foregroundStyle(RecordingColor.secondary)
+                if dynamicType.isAccessibilitySize {
+                    heading
+                    count
+                } else {
+                    ViewThatFits(in: .horizontal) {
+                        HStack(alignment: .firstTextBaseline) { heading; Spacer(); count }
+                        VStack(alignment: .leading, spacing: 4) { heading; count }
+                    }
+                }
+            } else {
+                heading
+            }
+            if sleeps.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    if observations.snapshot.storageIsReadable {
+                        Text("No sleep records").font(.headline)
+                        Text("Use + to add a sleep record.").font(.footnote).foregroundStyle(RecordingColor.secondary)
+                    } else {
+                        Text("Sleep records unavailable").font(.headline)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(16)
+                .detailSurface()
+            } else {
+                VStack(spacing: dynamicType.isAccessibilitySize ? 8 : 0) {
+                    ForEach(Array(sleeps.enumerated()), id: \.element.id) { index, sleep in
+                        if index > 0 && !dynamicType.isAccessibilitySize {
+                            Divider().padding(.leading, 43).padding(.trailing, 12)
+                        }
+                        let napNumber = naps.firstIndex { $0.id == sleep.id }.map { $0 + 1 }
+                        sleepRow(sleep, number: napNumber, breaks: breaks.filter { $0.parentNapID == sleep.id },
+                                 accounting: accounting, verified: observations.isVerified(sleep))
+                            .detailSurface(visible: dynamicType.isAccessibilitySize)
+                    }
+                }
+                .background(alignment: .leading) {
+                    if !dynamicType.isAccessibilitySize && sleeps.count > 1 {
+                        Rectangle().fill(RecordingColor.border)
+                            .frame(width: 1).padding(.leading, 23).padding(.vertical, 26)
+                            .accessibilityHidden(true).allowsHitTesting(false)
+                    }
+                }
+                .detailSurface(visible: !dynamicType.isAccessibilitySize)
+                if sleeps.contains(where: { $0.completedEnd(at: now) == nil }) {
+                    Text("Sleep with an unconfirmed end is not included in this subtotal.")
+                        .font(.footnote).foregroundStyle(RecordingColor.secondary)
+                }
+                if sleeps.contains(where: { $0.kind == .nightSleep && cal.isDate($0.date, inSameDayAs: day) }) {
+                    Text("Night sleep stays with the day it started.")
+                        .font(.footnote).foregroundStyle(RecordingColor.secondary)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func sleepRow(_ sleep: SleepRecord, number: Int?, breaks: [SleepRecord],
+                          accounting: SleepAccounting, verified: Bool) -> some View {
+        let row = DayDetailSleepRow(record: sleep, napNumber: number, breaks: breaks, accounting: accounting,
+                                   verified: verified, timeFormat: timeFormat, dateFormat: shortDate,
+                                   onEdit: { recordingSheet = .sleep(editing: sleep, date: sleep.date) },
+                                   onBreak: { recordingSheet = .awakeBreak(sleep) },
+                                   onActions: { contextNap = sleep; showNapActions = true })
+        if sleep.kind == .dayNap || cal.isDate(sleep.date, inSameDayAs: day) {
+            row.swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                Button(role: .destructive) { onDelete([sleep.id]) } label: { Label("Delete", systemImage: "trash") }
+            }
+        } else {
+            row
+        }
+    }
+
+    @ViewBuilder
+    private func planningSuggestions(hasNight: Bool) -> some View {
+        if isToday, let snapshot = orchestrator.snapshot, !snapshot.hasCurrentSleep {
+            let nap = snapshot.nextSleepKind == .nap ? snapshot.daytime.recommendation.value : nil
+            let bedtime = hasNight ? nil : snapshot.night.recommendation.value
+            if nap != nil || bedtime != nil {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Planning suggestions").font(.headline).accessibilityAddTraits(.isHeader)
+                    DayDetailPlanningSuggestions(nap: nap, napSource: snapshot.daytime.source,
+                                                 expectedDuration: snapshot.daytime.expectedDurationMinutes,
+                                                 bedtime: bedtime, bedtimeSource: snapshot.night.source,
+                                                 timeFormat: timeFormat)
+                    Text("Suggestions are not sleep records.").font(.footnote).foregroundStyle(RecordingColor.secondary)
+                }
+                .accessibilityIdentifier("history.day.planning")
+            }
+        }
     }
 
     private var daytimeReviewLink: some View {
-        let historical = cal.startOfDay(for: day) < cal.startOfDay(for: now)
-        let title: LocalizedStringKey = historical ? "Review daytime recording" : "Review a past day"
-        return NavigationLink {
-            DaytimeCoverageReviewView(initialDay: historical ? day : nil, initialCalendar: cal, onRecordSaved: onRecordUpsert)
-        } label: {
-            Label(title, systemImage: "checklist")
-                .font(.body.weight(.semibold))
-                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                .padding(.horizontal, 14)
-                .background(RecordingColor.surface, in: RoundedRectangle(cornerRadius: 14))
-        }
-        .foregroundStyle(RecordingColor.accent)
-        .accessibilityIdentifier("daytimeReview.open")
-    }
-
-    // MARK: - All Cards (kronolojik)
-    @ViewBuilder
-    private var allCards: some View {
-        switch wakeEvidence {
-        case .recorded(let time):
-            WakeUpCard(time: time)
-        case .missing:
-            if isToday {
-                WakeUpPlaceholderCard()
-            } else {
-                Text("No morning wake recorded")
-                    .foregroundStyle(.secondary)
-            }
-        case .ambiguous:
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Conflicting morning wakes").font(.headline)
-                Text("Multiple wakes are recorded for this date. Resolve the duplicates before confirming a morning wake.")
-                    .foregroundStyle(.secondary)
-            }
-            .accessibilityElement(children: .combine)
-            .accessibilityIdentifier("history.day.wake.ambiguous")
-        }
-
-        // Devam eden night sleep varsa (dünden kalan) önce göster
-        if let night = nightSleep, night.isOngoing,
-           !cal.isDate(night.date, inSameDayAs: day) {
-            NightSleepCard(
-                night: night,
-                napBreaks: breaks.filter { $0.parentNapID == night.id },
-                accounting: accounting,
-                onAddBreakTap: { recordingSheet = .awakeBreak(night) },
-                onEditTap: { recordingSheet = .sleep(editing: night, date: night.date) },
-                onLongPress: { contextNap = night; showNapActions = true }
-            )
-        }
-
-        // 2. Gerçek naplar
-        ForEach(Array(sortedNaps.enumerated()), id: \.element.id) { index, nap in
-            let napBreaks = breaks.filter { $0.parentNapID == nap.id }
-            NapDetailCard(
-                napNumber: index + 1,
-                nap: nap,
-                napBreaks: napBreaks,
-                accounting: accounting,
-                onAddBreakTap: { recordingSheet = .awakeBreak(nap) },
-                onEditTap: { recordingSheet = .sleep(editing: nap, date: nap.date) },
-                onLongPress: { contextNap = nap; showNapActions = true }
-            )
-            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                Button(role: .destructive) { onDelete([nap.id]) } label: {
-                    Label("Delete", systemImage: "trash")
+        let title: LocalizedStringKey = isHistorical ? "Review daytime recording" : "Review a past day"
+        return VStack(spacing: 3) {
+            Divider().overlay(RecordingColor.border)
+            NavigationLink {
+                DaytimeCoverageReviewView(initialDay: isHistorical ? day : nil, initialCalendar: cal, onRecordSaved: onRecordUpsert)
+            } label: {
+                HStack(spacing: 9) {
+                    Image(systemName: "checklist").accessibilityHidden(true)
+                    Text(title).frame(maxWidth: .infinity, alignment: .leading)
+                    Image(systemName: "chevron.right").font(.caption.weight(.semibold)).accessibilityHidden(true)
                 }
+                .font(.body)
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+            .foregroundStyle(RecordingColor.accent)
+            .accessibilityIdentifier("daytimeReview.open")
         }
-
-        if isToday, let snapshot = orchestrator.snapshot, !snapshot.hasCurrentSleep,
-           snapshot.nextSleepKind == .nap, let next = snapshot.daytime.recommendation.value {
-            PredictedNapCard(napNumber: sortedNaps.count + 1, predictedTime: next,
-                             expectedDuration: snapshot.daytime.expectedDurationMinutes, source: snapshot.daytime.source)
-        }
-
-        // 4. Night sleep (bugün girilmiş, tamamlanmış veya live)
-        if let night = nightSleep, cal.isDate(night.date, inSameDayAs: day) {
-            NightSleepCard(
-                night: night,
-                napBreaks: breaks.filter { $0.parentNapID == night.id },
-                accounting: accounting,
-                onAddBreakTap: { recordingSheet = .awakeBreak(night) },
-                onEditTap: { recordingSheet = .sleep(editing: night, date: night.date) },
-                onLongPress: { contextNap = night; showNapActions = true }
-            )
-            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                Button(role: .destructive) { onDelete([night.id]) } label: {
-                    Label("Delete", systemImage: "trash")
-                }
-            }
-        } else if isToday, nightSleep == nil, let snapshot = orchestrator.snapshot, !snapshot.hasCurrentSleep,
-                  let bedtime = snapshot.night.recommendation.value {
-            PredictedBedtimeCard(bedtime: bedtime, source: snapshot.night.source)
-        }
-    }
-
-    private var dayTitle: String {
-        if cal.isDateInToday(day) { return "Today" }
-        if cal.isDateInYesterday(day) { return "Yesterday" }
-        return day.formatted(.dateTime.day().month(.abbreviated))
     }
 }
 
@@ -460,523 +653,361 @@ struct WakeUpCard: View {
         return f.string(from: date)
     }
 }
-struct WakeUpPlaceholderCard: View {
-    var body: some View {
-        HStack(spacing: 14) {
-            ZStack {
-                Circle()
-                    .fill(Color(red: 1.0, green: 0.85, blue: 0.3).opacity(0.2))
-                    .frame(width: 48, height: 48)
-                Circle()
-                    .strokeBorder(
-                        Color(red: 1.0, green: 0.75, blue: 0.2).opacity(0.4),
-                        style: StrokeStyle(lineWidth: 1.5, dash: [5, 4])
-                    )
-                    .frame(width: 48, height: 48)
-                Image(systemName: "sunrise")
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(Color(red: 1.0, green: 0.72, blue: 0.2).opacity(0.5))
-            }
 
-            VStack(alignment: .leading, spacing: 3) {
-                Text("Wake Up")
-                    .font(.system(size: 15, weight: .bold))
-                    .foregroundStyle(Color(red: 0.55, green: 0.38, blue: 0.0).opacity(0.5))
-                Text("Add today's wake-up time for better predictions")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(Color(.secondaryLabel).opacity(0.7))
-            }
+/// Read-only projection of one evidence snapshot. Verification follows record identity and revision.
+struct DayDetailObservationProjection {
+    enum Wake: Equatable {
+        case unavailable, missing, ambiguous, recorded(Date, verified: Bool)
+    }
 
-            Spacer()
+    let snapshot: LearningEvidenceSnapshot
+
+    func wake(on day: Date, at now: Date, calendar: Calendar) -> Wake {
+        guard snapshot.storageIsReadable else { return .unavailable }
+        let records = snapshot.wakes.map(\.record)
+        switch DayDetailWakeEvidence(records: records, day: day, calendar: calendar, now: now) {
+        case .ambiguous: return .ambiguous
+        case .missing: return .missing
+        case .recorded(let time):
+            guard let observed = DailyWakeRecord.uniqueObservation(in: records, on: day, at: now, calendar: calendar)
+            else { return .missing }
+            let matches = snapshot.wakes.filter { $0.record.id == observed.id }
+            guard matches.count == 1, !snapshot.sleeps.contains(where: { $0.record.id == observed.id }) else {
+                return .ambiguous
+            }
+            return .recorded(time, verified: matches[0].source == .verifiedObservation)
         }
-        .padding(16)
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color(red: 1.0, green: 0.96, blue: 0.78).opacity(0.4))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color(red: 1.0, green: 0.78, blue: 0.2).opacity(0.25), lineWidth: 1)
-        )
-        .opacity(0.7)
+    }
+
+    func isVerified(_ record: SleepRecord) -> Bool {
+        guard snapshot.storageIsReadable,
+              !snapshot.wakes.contains(where: { $0.record.id == record.id }) else { return false }
+        let matches = snapshot.sleeps.filter { $0.record.id == record.id }
+        return matches.count == 1 && matches[0].source == .verifiedObservation &&
+            SleepRecordVersion(record).matches(matches[0].record)
     }
 }
-// MARK: - Predicted Nap Card
 
-struct PredictedNapCard: View {
-    let napNumber: Int
-    let predictedTime: Date
+private struct DayDetailSleepRow: View {
+    let record: SleepRecord
+    let napNumber: Int?
+    let breaks: [SleepRecord]
+    let accounting: SleepAccounting
+    let verified: Bool
+    let timeFormat: Date.FormatStyle
+    let dateFormat: Date.FormatStyle
+    let onEdit: () -> Void
+    let onBreak: () -> Void
+    let onActions: () -> Void
+
+    @Environment(\.dynamicTypeSize) private var dynamicType
+    @State private var breaksExpanded: Bool
+
+    init(record: SleepRecord, napNumber: Int?, breaks: [SleepRecord], accounting: SleepAccounting,
+         verified: Bool, timeFormat: Date.FormatStyle, dateFormat: Date.FormatStyle,
+         onEdit: @escaping () -> Void, onBreak: @escaping () -> Void, onActions: @escaping () -> Void) {
+        self.record = record
+        self.napNumber = napNumber
+        self.breaks = breaks
+        self.accounting = accounting
+        self.verified = verified
+        self.timeFormat = timeFormat
+        self.dateFormat = dateFormat
+        self.onEdit = onEdit
+        self.onBreak = onBreak
+        self.onActions = onActions
+        _breaksExpanded = State(initialValue: record.kind == .dayNap)
+    }
+
+    private var title: String {
+        napNumber.map { String(localized: "Nap \($0)") } ?? String(localized: "Night sleep")
+    }
+    private var end: Date? { record.completedEnd(at: accounting.now) }
+    private var netMinutes: Int? { accounting.completedMinutes(sleepIDs: [record.id]) }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 9) {
+            if !dynamicType.isAccessibilitySize { marker }
+            VStack(alignment: .leading, spacing: 2) {
+                if dynamicType.isAccessibilitySize {
+                    description
+                    editButton
+                } else {
+                    HStack(alignment: .top, spacing: 6) {
+                        description
+                        editButton
+                    }
+                }
+                rowActions
+                if breaksExpanded {
+                    ForEach(breaks) { record in
+                        Divider()
+                        breakRow(record)
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+    }
+
+    private var marker: some View {
+        Group {
+            if let napNumber { Text("\(napNumber)").font(.caption2.weight(.semibold)) }
+            else { Image(systemName: "moon.fill").font(.caption) }
+        }
+        .foregroundStyle(RecordingColor.accent)
+        .padding(5)
+        .frame(minWidth: 22, minHeight: 22)
+        .background(RecordingColor.inset, in: Circle())
+        .background(RecordingColor.background, in: Circle())
+        .padding(.top, 3)
+        .accessibilityHidden(true)
+    }
+
+    private var description: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 4) {
+                if dynamicType.isAccessibilitySize {
+                    Text(title).font(.subheadline).foregroundStyle(RecordingColor.secondary)
+                    timeRange
+                    if verified { verifiedObservation }
+                } else {
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 7) {
+                            timeRange
+                            if verified { verifiedObservation }
+                        }
+                        VStack(alignment: .leading, spacing: 4) {
+                            timeRange
+                            if verified { verifiedObservation }
+                        }
+                    }
+                }
+                if end == nil {
+                    Text(dynamicType.isAccessibilitySize ? "End unconfirmed" : "\(title) · End unconfirmed")
+                        .font(.subheadline)
+                        .foregroundStyle(ObservationStatusColor.caution)
+                }
+                if let end, !accounting.calendar.isDate(end, inSameDayAs: record.date) {
+                    Text("Ends \(end.formatted(dateFormat))").font(.footnote).foregroundStyle(RecordingColor.secondary)
+                }
+            }
+            .contentShape(Rectangle())
+            .gesture(
+                LongPressGesture(minimumDuration: 0.4)
+                    .exclusively(before: TapGesture())
+                    .onEnded { gesture in
+                        switch gesture {
+                        case .first(true):
+                            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                            onActions()
+                        case .second:
+                            onEdit()
+                        case .first(false):
+                            break
+                        }
+                    }
+            )
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("history.sleep.record.\(record.id)")
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction(.default, onEdit)
+            .accessibilityAction(named: Text("Actions for \(title)"), onActions)
+            if let netMinutes {
+                Text(dynamicType.isAccessibilitySize ? "\(TimeFormat.minutes(netMinutes)) net sleep" :
+                        "\(title) · \(TimeFormat.minutes(netMinutes)) net sleep")
+                    .font(.subheadline)
+                    .foregroundStyle(RecordingColor.secondary)
+                    .accessibilityIdentifier("sleep.netSleep.\(record.id)")
+            } else {
+                Text("Net sleep unknown")
+                    .font(.subheadline)
+                    .foregroundStyle(RecordingColor.secondary)
+                    .accessibilityIdentifier("sleep.netSleepUnknown.\(record.id)")
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    @ViewBuilder
+    private var timeRange: some View {
+        let start = record.date.formatted(timeFormat)
+        if let end {
+            Text("\(start)–\(end.formatted(timeFormat))")
+                .font(.headline).monospacedDigit()
+        } else {
+            Text("Started \(start)").font(.headline).monospacedDigit()
+        }
+    }
+
+    private var editButton: some View {
+        Button(action: onEdit) {
+            Text(dynamicType.isAccessibilitySize ? (napNumber == nil ? "Edit night sleep" : "Edit nap") : "Edit")
+                .font(.subheadline)
+                .frame(minWidth: 44, minHeight: 44, alignment: dynamicType.isAccessibilitySize ? .leading : .trailing)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(RecordingColor.accent)
+        .accessibilityLabel("Edit \(title)")
+        .accessibilityHint(Text(record.date, format: dateFormat))
+        .accessibilityIdentifier("history.sleep.edit.\(record.id)")
+    }
+
+    private var rowActions: some View {
+        let layout = dynamicType.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 2))
+            : AnyLayout(HStackLayout(spacing: 8))
+        return layout {
+            Button(action: onBreak) {
+                Text("Add awake break")
+                    .font(.subheadline)
+                    .frame(minWidth: 44, minHeight: 44, alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(RecordingColor.accent)
+            .accessibilityLabel("Add awake break to \(title)")
+            .accessibilityHint(Text(record.date, format: dateFormat))
+            .accessibilityIdentifier("sleep.addBreak.\(record.id)")
+            if !breaks.isEmpty {
+                if !dynamicType.isAccessibilitySize { Spacer(minLength: 0) }
+                Button {
+                    breaksExpanded.toggle()
+                } label: {
+                    HStack(spacing: 6) {
+                        Text(breaks.count == 1 ? "1 awake break" : "\(breaks.count) awake breaks")
+                        Image(systemName: breaksExpanded ? "chevron.up" : "chevron.down").accessibilityHidden(true)
+                    }
+                    .font(.footnote)
+                    .frame(minWidth: 44, minHeight: 44)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(RecordingColor.secondary)
+                .accessibilityValue(breaksExpanded ? "Expanded" : "Collapsed")
+            }
+        }
+    }
+
+    private func breakRow(_ record: SleepRecord) -> some View {
+        let time = Text(record.date, format: timeFormat).monospacedDigit()
+        let minutes = record.completedEnd(at: accounting.now).flatMap { end in
+            Int(exactly: (end.timeIntervalSince(record.date) / 60).rounded(.down))
+        }
+        let duration = Text(minutes.map { String(localized: "\(TimeFormat.minutes($0)) awake") }
+                            ?? String(localized: "End unconfirmed"))
+        return ViewThatFits(in: .horizontal) {
+            HStack(spacing: 10) { time; Spacer(); duration }
+            VStack(alignment: .leading, spacing: 4) { time; duration }
+        }
+        .font(.footnote)
+        .foregroundStyle(RecordingColor.secondary)
+        .padding(.vertical, 6)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+private struct DayDetailPlanningSuggestions: View {
+    let nap: Date?
+    let napSource: SleepPlanningSource
     let expectedDuration: Int
-    var source: SleepPlanningSource = .recordedEstimate
+    let bedtime: Date?
+    let bedtimeSource: SleepPlanningSource
+    let timeFormat: Date.FormatStyle
 
-    private let purple = Color(red: 0.55, green: 0.45, blue: 0.96)
-
-    var body: some View {
-        HStack(spacing: 14) {
-            ZStack {
-                Circle()
-                    .fill(purple.opacity(0.10))
-                    .frame(width: 48, height: 48)
-                Circle()
-                    .strokeBorder(
-                        purple.opacity(0.35),
-                        style: StrokeStyle(lineWidth: 1.5, dash: [5, 4])
-                    )
-                    .frame(width: 48, height: 48)
-                Image(systemName: "moon.fill")
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(purple.opacity(0.5))
-            }
-
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Text("Nap \(napNumber)")
-                        .font(.system(size: 15, weight: .bold))
-                        .foregroundStyle(Color(.label).opacity(0.5))
-                    estimatedBadge
-                }
-                Text("~\(ampm(predictedTime)) · \(TimeFormat.minutes(expectedDuration)) expected")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(Color(.secondaryLabel).opacity(0.7))
-            }
-
-            Spacer()
-        }
-        .padding(16)
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color(.systemBackground).opacity(0.7))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(purple.opacity(0.2), lineWidth: 1)
-        )
-        .opacity(0.75)
-    }
-
-    private var estimatedBadge: some View {
-        Text(source == .routine ? "Routine" : "Estimated")
-            .font(.system(size: 9, weight: .semibold))
-            .foregroundStyle(Color(.secondaryLabel))
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(
-                Capsule()
-                    .fill(Color(.systemGroupedBackground))
-                    .overlay(Capsule().stroke(Color(.separator), lineWidth: 1))
-            )
-    }
-
-    private func ampm(_ date: Date) -> String {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.dateFormat = "h:mm a"
-        return f.string(from: date)
-    }
-}
-
-// MARK: - Night Sleep Card
-
-struct NightSleepCard: View {
-    let night: SleepRecord
-    let napBreaks: [SleepRecord]
-    let accounting: SleepAccounting
-    let onAddBreakTap: () -> Void
-    let onEditTap: () -> Void
-    let onLongPress: () -> Void
-
-    @State private var breaksExpanded = false
-
-    private let deepPurple = Color(red: 0.28, green: 0.18, blue: 0.68)
-    private let midPurple  = Color(red: 0.38, green: 0.28, blue: 0.78)
-
-    private var netMinutes: Int? { accounting.completedMinutes(sleepIDs: [night.id]) }
-    private var observedEnd: Date? { night.completedEnd(at: accounting.now) }
+    @Environment(\.dynamicTypeSize) private var dynamicType
 
     var body: some View {
-        VStack(spacing: 0) {
-            // Header
-            HStack(spacing: 14) {
-                ZStack {
-                    Circle()
-                        .fill(
-                            LinearGradient(
-                                colors: [midPurple, deepPurple],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
-                        .frame(width: 48, height: 48)
-                        .shadow(color: deepPurple.opacity(0.5), radius: 8, x: 0, y: 4)
-                    Image(systemName: "moon.stars.fill")
-                        .font(.system(size: 20, weight: .semibold))
-                        .foregroundStyle(.white)
-                }
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Night Sleep")
-                        .font(.system(size: 15, weight: .bold))
-                        .foregroundStyle(Color(red: 0.85, green: 0.82, blue: 1.0))
-                    Text(ampm(night.date) + (observedEnd.map { " – \(ampm($0))" } ?? " · End unconfirmed"))
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(Color(red: 0.75, green: 0.70, blue: 0.95))
-                }
-
-                Spacer()
-
-                VStack(alignment: .trailing, spacing: 2) {
-                    if netMinutes == nil {
-                        Text(observedEnd == nil ? "End unconfirmed" : "Net sleep unknown")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(.white)
-                    } else if let netMinutes {
-                        Text(TimeFormat.minutes(netMinutes))
-                            .font(.system(size: 16, weight: .bold, design: .rounded))
-                            .foregroundStyle(Color(red: 0.85, green: 0.82, blue: 1.0))
-                        Text("Net sleep")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(Color(red: 0.75, green: 0.70, blue: 0.95))
-                    }
-                }
-            }
-            .padding(16)
-            .contentShape(Rectangle())
-            .onTapGesture(perform: onEditTap)
-            .accessibilityAction(named: Text("Edit Sleep"), onEditTap)
-            .onLongPressGesture(minimumDuration: 0.4) {
-                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                onLongPress()
-            }
-
-            if !napBreaks.isEmpty {
-                Divider()
-                    .background(Color.white.opacity(0.15))
-                    .padding(.horizontal, 16)
-
-                Button {
-                    withAnimation(.easeInOut(duration: 0.2)) { breaksExpanded.toggle() }
-                } label: {
-                    HStack {
-                        Text("Wake periods (\(napBreaks.count))")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(Color(red: 0.75, green: 0.70, blue: 0.95))
-                        Spacer()
-                        Image(systemName: breaksExpanded ? "chevron.up" : "chevron.down")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(Color(red: 0.75, green: 0.70, blue: 0.95))
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
-                }
-                .buttonStyle(.plain)
-
-                if breaksExpanded {
-                    ForEach(napBreaks) { br in
-                        HStack {
-                            Text(ampm(br.date))
-                                .font(.subheadline)
-                                .foregroundStyle(Color(red: 0.85, green: 0.82, blue: 1.0))
-                                .monospacedDigit()
-                            Spacer()
-                            Text(br.completedEnd(at: accounting.now)
-                                .map { TimeFormat.minutes(Int($0.timeIntervalSince(br.date) / 60)) } ?? "End unconfirmed")
-                                .font(.subheadline)
-                                .foregroundStyle(Color(red: 0.75, green: 0.70, blue: 0.95))
+        Group {
+            if let nap, let bedtime {
+                if dynamicType.isAccessibilitySize {
+                    stacked(nap, bedtime)
+                } else {
+                    ViewThatFits(in: .horizontal) {
+                        HStack(alignment: .top, spacing: 14) {
+                            napSuggestion(nap)
+                            Divider()
+                            bedtimeSuggestion(bedtime)
                         }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 8)
+                        .fixedSize(horizontal: false, vertical: true)
+                        stacked(nap, bedtime)
                     }
                 }
+            } else if let nap {
+                napSuggestion(nap)
+            } else if let bedtime {
+                bedtimeSuggestion(bedtime)
             }
+        }
+        .padding(14)
+        .detailSurface()
+    }
 
+    private func stacked(_ nap: Date, _ bedtime: Date) -> some View {
+        VStack(alignment: .leading, spacing: 11) {
+            napSuggestion(nap)
             Divider()
-                .background(Color.white.opacity(0.15))
-                .padding(.horizontal, 16)
-
-            Button(action: onAddBreakTap) {
-                HStack(spacing: 6) {
-                    Image(systemName: "plus").font(.system(size: 13, weight: .semibold))
-                    Text("Add Awake Break").font(.subheadline.weight(.semibold))
-                }
-                .foregroundStyle(Color(red: 0.75, green: 0.70, blue: 0.95))
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-            }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("sleep.addBreak.\(night.id)")
-            .padding(.horizontal, 16)
+            bedtimeSuggestion(bedtime)
         }
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            Color(red: 0.18, green: 0.12, blue: 0.42),
-                            Color(red: 0.12, green: 0.08, blue: 0.32)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(midPurple.opacity(0.4), lineWidth: 1)
-        )
-        .shadow(color: deepPurple.opacity(0.3), radius: 12, x: 0, y: 6)
     }
 
-    private func ampm(_ date: Date) -> String {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.dateFormat = "h:mm a"
-        return f.string(from: date)
+    private func napSuggestion(_ nap: Date) -> some View {
+        suggestion("Next nap", icon: "sun.max", time: nap, source: napSource, duration: expectedDuration > 0 ? expectedDuration : nil)
+    }
+
+    private func bedtimeSuggestion(_ bedtime: Date) -> some View {
+        suggestion("Bedtime", icon: "moon.fill", time: bedtime, source: bedtimeSource)
+    }
+
+    private func suggestion(_ title: LocalizedStringKey, icon: String, time: Date,
+                            source: SleepPlanningSource, duration: Int? = nil) -> some View {
+        let sourceChip = Text(source == .routine ? "Routine" : "Estimated")
+            .padding(.horizontal, 8).padding(.vertical, 4)
+            .background(RecordingColor.inset, in: RoundedRectangle(cornerRadius: 7))
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: icon).foregroundStyle(RecordingColor.accent).accessibilityHidden(true)
+                Text(title)
+            }
+            .font(.subheadline)
+            .foregroundStyle(RecordingColor.secondary)
+            Text(time, format: timeFormat).font(.title2.weight(.bold)).monospacedDigit()
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 6) {
+                    sourceChip
+                    if let duration { Text("~\(TimeFormat.minutes(duration))") }
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    sourceChip
+                    if let duration { Text("~\(TimeFormat.minutes(duration))") }
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(RecordingColor.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
     }
 }
 
-// MARK: - Predicted Bedtime Card
-
-struct PredictedBedtimeCard: View {
-    let bedtime: Date
-    var source: SleepPlanningSource = .recordedEstimate
-
-    private let deepPurple = Color(red: 0.28, green: 0.18, blue: 0.68)
-    private let midPurple  = Color(red: 0.38, green: 0.28, blue: 0.78)
-
-    var body: some View {
-        HStack(spacing: 14) {
-            ZStack {
-                Circle()
-                    .fill(deepPurple.opacity(0.12))
-                    .frame(width: 48, height: 48)
-                Circle()
-                    .strokeBorder(
-                        deepPurple.opacity(0.3),
-                        style: StrokeStyle(lineWidth: 1.5, dash: [5, 4])
-                    )
-                    .frame(width: 48, height: 48)
-                Image(systemName: "moon.stars.fill")
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(deepPurple.opacity(0.5))
-            }
-
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Text("Bedtime")
-                        .font(.system(size: 15, weight: .bold))
-                        .foregroundStyle(Color(.label).opacity(0.45))
-                    estimatedBadge
-                }
-                Text(source == .routine ? ampm(bedtime) : "~\(ampm(bedtime)) estimated")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(Color(.secondaryLabel).opacity(0.6))
-            }
-
-            Spacer()
-        }
-        .padding(16)
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            Color(red: 0.18, green: 0.12, blue: 0.42).opacity(0.25),
-                            Color(red: 0.12, green: 0.08, blue: 0.32).opacity(0.15)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(deepPurple.opacity(0.2), lineWidth: 1)
-        )
-        .opacity(0.75)
-    }
-
-    private var estimatedBadge: some View {
-        Text(source == .routine ? "Routine" : "Estimated")
-            .font(.system(size: 9, weight: .semibold))
-            .foregroundStyle(Color(.secondaryLabel))
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(
-                Capsule()
-                    .fill(Color(.systemGroupedBackground))
-                    .overlay(Capsule().stroke(Color(.separator), lineWidth: 1))
-            )
-    }
-
-    private func ampm(_ date: Date) -> String {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.dateFormat = "h:mm a"
-        return f.string(from: date)
-    }
+private var verifiedObservation: some View {
+    Label("Verified", systemImage: "checkmark.circle.fill")
+        .font(.caption)
+        .foregroundStyle(ObservationStatusColor.verified)
 }
 
-// MARK: - NapDetailCard
-
-struct NapDetailCard: View {
-    let napNumber: Int
-    let nap: SleepRecord
-    let napBreaks: [SleepRecord]
-    let accounting: SleepAccounting
-    let onAddBreakTap: () -> Void
-    let onEditTap: () -> Void
-    let onLongPress: () -> Void
-
-    @State private var breaksExpanded = true
-
-    private let purple     = Color(red: 0.55, green: 0.45, blue: 0.96)
-    private let deepPurple = Color(red: 0.35, green: 0.25, blue: 0.80)
-
-    private var isNight: Bool { nap.kind == .nightSleep }
-    private var napTint: Color { nap.isOngoing ? purple : (isNight ? deepPurple : purple) }
-    private var netMinutes: Int? { accounting.completedMinutes(sleepIDs: [nap.id]) }
-    private var napEnd: Date? { nap.completedEnd(at: accounting.now) }
-    private var title: String { isNight ? "Night Sleep" : "Nap \(napNumber)" }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                ZStack {
-                    Circle()
-                        .fill(napTint.opacity(0.12))
-                        .frame(width: 44, height: 44)
-                    Image(systemName: nap.kind.icon)
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(napTint)
-                }
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .font(.system(size: 15, weight: .bold))
-                        .foregroundStyle(napTint)
-                    Text(TimeFormat.ampm(nap.date) + (napEnd.map { " – \(TimeFormat.ampm($0))" } ?? " · End unconfirmed"))
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
-                }
-
-                Spacer()
-
-                VStack(alignment: .trailing, spacing: 2) {
-                    if netMinutes == nil {
-                        Text(napEnd == nil ? "End unconfirmed" : "Net sleep unknown")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(napTint)
-                    } else if let netMinutes {
-                        Text(TimeFormat.minutes(netMinutes))
-                            .font(.subheadline.weight(.bold))
-                            .foregroundStyle(.primary)
-                        Text("Net sleep")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-            .padding(.horizontal, 14)
-            .padding(.top, 14)
-            .padding(.bottom, 10)
-            .contentShape(Rectangle())
-            .onTapGesture(perform: onEditTap)
-            .accessibilityAction(named: Text("Edit Sleep"), onEditTap)
-            .onLongPressGesture(minimumDuration: 0.4) {
-                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                onLongPress()
-            }
-
-            Divider().padding(.horizontal, 14)
-
-            HStack(spacing: 0) {
-                VStack(spacing: 4) {
-                    Text("\(napBreaks.count)")
-                        .font(.title2.weight(.bold)).foregroundStyle(.primary)
-                    HStack(spacing: 4) {
-                        Text("Breaks").font(.caption).foregroundStyle(.secondary)
-                        Image(systemName: "info.circle").font(.system(size: 10)).foregroundStyle(.secondary)
-                    }
-                }
-                .frame(maxWidth: .infinity)
-
-                Divider().frame(height: 36)
-
-                VStack(spacing: 2) {
-                    if let netMinutes {
-                        Text(TimeFormat.minutes(netMinutes))
-                            .font(.subheadline.weight(.bold)).foregroundStyle(.primary)
-                            .accessibilityIdentifier("sleep.netSleep.\(nap.id)")
-                        Text("Net Sleep").font(.caption2).foregroundStyle(.secondary)
-                    } else {
-                        Text("Net sleep unknown").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                            .accessibilityIdentifier("sleep.netSleepUnknown.\(nap.id)")
-                    }
-                }
-                .frame(maxWidth: .infinity)
-            }
-            .padding(.vertical, 10)
-
-            if !napBreaks.isEmpty {
-                Divider().padding(.horizontal, 14)
-
-                Button {
-                    withAnimation(.easeInOut(duration: 0.2)) { breaksExpanded.toggle() }
-                } label: {
-                    HStack {
-                        Text("Breaks (Wake Periods)").font(.subheadline).foregroundStyle(.primary)
-                        Spacer()
-                        Text("\(napBreaks.count)")
-                            .font(.caption.weight(.semibold)).foregroundStyle(napTint)
-                            .padding(.horizontal, 8).padding(.vertical, 3)
-                            .background(Capsule().fill(napTint.opacity(0.10)))
-                        Image(systemName: breaksExpanded ? "chevron.up" : "chevron.down")
-                            .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                    }
-                    .padding(.horizontal, 14).padding(.vertical, 10)
-                }
-                .buttonStyle(.plain)
-
-                if breaksExpanded {
-                    ForEach(napBreaks) { br in
-                        HStack {
-                            Text(TimeFormat.ampm(br.date)).font(.subheadline).foregroundStyle(.primary).monospacedDigit()
-                            Spacer()
-                            Text(br.completedEnd(at: accounting.now)
-                                .map { TimeFormat.minutes(Int($0.timeIntervalSince(br.date) / 60)) } ?? "End unconfirmed")
-                                .font(.subheadline).foregroundStyle(.secondary)
-                            Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
-                        }
-                        .padding(.horizontal, 14).padding(.vertical, 8)
-                        if br.id != napBreaks.last?.id { Divider().padding(.leading, 14) }
-                    }
-                }
-            }
-
-            Divider().padding(.horizontal, 14)
-
-            Button(action: onAddBreakTap) {
-                HStack(spacing: 6) {
-                    Image(systemName: "plus").font(.system(size: 13, weight: .semibold))
-                    Text("Add Awake Break").font(.subheadline.weight(.semibold))
-                }
-                .foregroundStyle(napTint)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-            }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("sleep.addBreak.\(nap.id)")
-            .padding(.horizontal, 14)
+private extension View {
+    @ViewBuilder
+    func detailSurface(visible: Bool = true) -> some View {
+        if visible {
+            let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
+            background(RecordingColor.surface, in: shape)
+                .overlay(shape.strokeBorder(RecordingColor.border, lineWidth: 1).allowsHitTesting(false))
+        } else {
+            self
         }
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color(.systemBackground))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .strokeBorder(napTint.opacity(0.15), style: StrokeStyle(lineWidth: 1))
-        )
-        .shadow(color: .black.opacity(0.04), radius: 8, x: 0, y: 2)
     }
 }

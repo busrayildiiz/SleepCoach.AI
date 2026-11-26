@@ -85,8 +85,18 @@ final class TodayPlanUITests: XCTestCase {
     func testHistoricalWakeEditorGatesSaveAndReturnsToSavedDayAtAccessibilitySize() {
         let app = launch("completed", large: true)
         app.buttons["home.plan.details"].tap()
-        let today = app.navigationBars["Today"]
-        XCTAssertTrue(today.waitForExistence(timeout: 5))
+        let detail = app.navigationBars["Day detail"]
+        XCTAssertTrue(detail.waitForExistence(timeout: 5))
+        let selectedDate = app.staticTexts["history.day.date"]
+        XCTAssertTrue(selectedDate.waitForExistence(timeout: 5))
+        let todayLabel = selectedDate.label
+        XCTAssertTrue(todayLabel.contains("Today"), todayLabel)
+        let calendar = Calendar.current
+        let expectedDay = calendar.date(byAdding: .day, value: -1, to: calendar.startOfDay(for: Date()))!
+        let display = Date.FormatStyle(date: .omitted, time: .omitted, locale: .current,
+                                       calendar: calendar, timeZone: calendar.timeZone)
+            .weekday(.abbreviated).day().month(.abbreviated).year()
+        let expectedLabel = expectedDay.formatted(display)
 
         func openEditor() {
             app.buttons["history.day.add"].tap()
@@ -106,7 +116,8 @@ final class TodayPlanUITests: XCTestCase {
         XCTAssertTrue(confirmation.exists)
         XCTAssertTrue(datePicker.exists)
         app.buttons["history.wake.cancel"].tap()
-        XCTAssertTrue(today.waitForExistence(timeout: 5))
+        XCTAssertTrue(detail.waitForExistence(timeout: 5))
+        XCTAssertEqual(selectedDate.label, todayLabel)
 
         openEditor()
         let initialPicker = datePicker.debugDescription
@@ -138,7 +149,10 @@ final class TodayPlanUITests: XCTestCase {
                        failureDetails("Save did not enable after confirmation."))
         XCTAssertTrue(save.isEnabled, failureDetails("Save was disabled before submission."))
         save.tap()
-        XCTAssertTrue(app.navigationBars["Yesterday"].waitForExistence(timeout: 5))
+        XCTAssertTrue(detail.waitForExistence(timeout: 5))
+        let returnedToSavedDay = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", expectedLabel),
+                                                           object: selectedDate)
+        XCTAssertEqual(XCTWaiter.wait(for: [returnedToSavedDay], timeout: 5), .completed, selectedDate.label)
         XCTAssertTrue(app.buttons["history.wake.review"].exists)
     }
 
@@ -197,6 +211,15 @@ final class TodayPlanUITests: XCTestCase {
     }
 
     func testOvernightCarryoverRemainsActiveAndKeepsOriginalDay() {
+        // TodayPlanUITestFixture anchors carryover at 01:55 today and seeds the
+        // same parent ID at 18:45 on the preceding calendar day.
+        let calendar = Calendar.current
+        let fixtureNow = calendar.date(bySettingHour: 1, minute: 55, second: 0, of: Date())!
+        let previousDay = calendar.date(byAdding: .day, value: -1, to: fixtureNow)!
+        let originalStart = calendar.date(bySettingHour: 18, minute: 45, second: 0, of: previousDay)!
+        let dateDisplay = Date.FormatStyle(date: .omitted, time: .omitted, locale: .current,
+                                          calendar: calendar, timeZone: calendar.timeZone)
+            .day().month(.abbreviated).weekday(.abbreviated).year()
         let app = launch("carryover")
         let night = event("record:\(parentID)", app: app)
         XCTAssertTrue(night.label.contains("Ongoing"), night.label)
@@ -210,7 +233,11 @@ final class TodayPlanUITests: XCTestCase {
         capture("night-carryover", app: app)
         assertOvernightLayout(app: app, elapsed: "7h 10m")
         app.buttons["home.plan.details"].tap()
-        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Sleep Day:")).firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars["Day detail"].waitForExistence(timeout: 5))
+        let selectedDate = app.staticTexts["history.day.date"]
+        XCTAssertTrue(selectedDate.waitForExistence(timeout: 5))
+        XCTAssertEqual(selectedDate.label, originalStart.formatted(dateDisplay),
+                       "The full plan must retain the carried night's original Sleep Day.")
         XCTAssertTrue(app.buttons["sleep.addBreak.\(parentID)"].waitForExistence(timeout: 5), "The full plan opens the carried night's original Sleep Day.")
     }
 
