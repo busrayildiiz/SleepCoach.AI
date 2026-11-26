@@ -398,25 +398,15 @@ struct WakeUpCard: View {
     var body: some View {
         HStack(spacing: 14) {
             // İkon
-            ZStack {
-                Circle()
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                Color(red: 1.0, green: 0.85, blue: 0.3),
-                                Color(red: 1.0, green: 0.65, blue: 0.15)
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                    .frame(width: 48, height: 48)
-                    .shadow(color: Color(red: 1.0, green: 0.72, blue: 0.2).opacity(0.4),
-                            radius: 8, x: 0, y: 4)
-                Image(systemName: "sunrise.fill")
-                    .font(.system(size: 22, weight: .semibold))
-                    .foregroundStyle(.white)
-            }
+            Image(decorative: "TodayPlanWakeTime")
+                .renderingMode(.original)
+                .resizable()
+                .interpolation(.high)
+                .frame(width: 49.875, height: 49.875)
+                .offset(x: 0.119318, y: -0.338068)
+                .frame(width: 48, height: 48)
+                .accessibilityHidden(true)
+                .allowsHitTesting(false)
 
             VStack(alignment: .leading, spacing: 3) {
                 Text("Wake Up")
