@@ -85,8 +85,18 @@ final class TodayPlanUITests: XCTestCase {
     func testHistoricalWakeEditorGatesSaveAndReturnsToSavedDayAtAccessibilitySize() {
         let app = launch("completed", large: true)
         app.buttons["home.plan.details"].tap()
-        let today = app.navigationBars["Today"]
-        XCTAssertTrue(today.waitForExistence(timeout: 5))
+        let detail = app.navigationBars["Day detail"]
+        XCTAssertTrue(detail.waitForExistence(timeout: 5))
+        let selectedDate = app.staticTexts["history.day.date"]
+        XCTAssertTrue(selectedDate.waitForExistence(timeout: 5))
+        let todayLabel = selectedDate.label
+        XCTAssertTrue(todayLabel.contains("Today"), todayLabel)
+        let calendar = Calendar.current
+        let expectedDay = calendar.date(byAdding: .day, value: -1, to: calendar.startOfDay(for: Date()))!
+        let display = Date.FormatStyle(date: .omitted, time: .omitted, locale: .current,
+                                       calendar: calendar, timeZone: calendar.timeZone)
+            .weekday(.abbreviated).day().month(.abbreviated).year()
+        let expectedLabel = expectedDay.formatted(display)
 
         func openEditor() {
             app.buttons["history.day.add"].tap()
@@ -106,7 +116,8 @@ final class TodayPlanUITests: XCTestCase {
         XCTAssertTrue(confirmation.exists)
         XCTAssertTrue(datePicker.exists)
         app.buttons["history.wake.cancel"].tap()
-        XCTAssertTrue(today.waitForExistence(timeout: 5))
+        XCTAssertTrue(detail.waitForExistence(timeout: 5))
+        XCTAssertEqual(selectedDate.label, todayLabel)
 
         openEditor()
         let initialPicker = datePicker.debugDescription
@@ -138,7 +149,10 @@ final class TodayPlanUITests: XCTestCase {
                        failureDetails("Save did not enable after confirmation."))
         XCTAssertTrue(save.isEnabled, failureDetails("Save was disabled before submission."))
         save.tap()
-        XCTAssertTrue(app.navigationBars["Yesterday"].waitForExistence(timeout: 5))
+        XCTAssertTrue(detail.waitForExistence(timeout: 5))
+        let returnedToSavedDay = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", expectedLabel),
+                                                           object: selectedDate)
+        XCTAssertEqual(XCTWaiter.wait(for: [returnedToSavedDay], timeout: 5), .completed, selectedDate.label)
         XCTAssertTrue(app.buttons["history.wake.review"].exists)
     }
 
