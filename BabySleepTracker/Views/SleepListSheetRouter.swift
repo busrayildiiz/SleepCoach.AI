@@ -26,6 +26,9 @@ struct SleepListSheetRouter: View {
             AddRecordView(defaultDate: date, vm: AddRecordViewModel(), initialKind: .nightSleep,
                           onSave: onRecordUpsert)
 
+        case .finishNap(let parent):
+            FinishNapEditorView(parent: parent, records: records, onSave: onRecordUpsert)
+
         case .endSleep(let parent, let review):
             // Keep the editor's original revision/capabilities alive after a partial
             // write. The command revalidates persistence; notifications cannot replace
@@ -83,6 +86,119 @@ struct SleepListSheetRouter: View {
                 onSave: onWakeTimeSave
             )
         }
+    }
+}
+
+// MARK: - Quick Nap Completion
+
+private struct FinishNapEditorView: View {
+    let records: [SleepRecord]
+    let onSave: (SleepRecord) -> Bool
+    @Environment(\.dynamicTypeSize) private var dynamicType
+    @Environment(\.dismiss) private var dismiss
+    @State private var draft: NapCompletionDraft
+    @State private var saveFailed = false
+    @State private var cancellationFailed = false
+    @State private var failureMessage: String?
+
+    init(parent: SleepRecord, records: [SleepRecord], now: Date = Date(), calendar: Calendar = .current,
+         onSave: @escaping (SleepRecord) -> Bool) {
+        self.records = records
+        self.onSave = onSave
+        _draft = State(initialValue: NapCompletionDraft(parent: parent, now: now, calendar: calendar))
+    }
+
+    private func pickerBinding(changesDay: Bool) -> Binding<Date> {
+        Binding(get: { draft.end }, set: { draft.selectEnd($0, changesDay: changesDay) })
+    }
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            editor(now: context.date)
+        }
+    }
+
+    @ViewBuilder private func editor(now: Date) -> some View {
+        let validation = draft.validationMessage(records: records, now: now)
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 12) {
+                    VStack(spacing: 6) {
+                        Text("When did the nap end?")
+                            .font(.title3.weight(.bold))
+                            .foregroundStyle(Color.sleepInk)
+                        Text("Started \(RecordingFormat.timestamp(draft.parent.date, calendar: draft.calendar))")
+                            .font(.footnote.weight(.medium))
+                            .foregroundStyle(Color.sleepMuted)
+                            .accessibilityIdentifier("home.nap.start")
+                    }
+                    .multilineTextAlignment(.center)
+                    DatePicker("End date", selection: pickerBinding(changesDay: true), displayedComponents: .date)
+                        .datePickerStyle(.compact)
+                        .accessibilityIdentifier("home.nap.end.date")
+                    DatePicker("Nap end time", selection: pickerBinding(changesDay: false), displayedComponents: .hourAndMinute)
+                        .datePickerStyle(.wheel)
+                        .labelsHidden()
+                        .accessibilityLabel("Nap end time")
+                        .accessibilityIdentifier("home.nap.end.time")
+                        .frame(maxWidth: .infinity)
+                    Text(RecordingFormat.timestamp(draft.end, calendar: draft.calendar))
+                        .font(.footnote.weight(.medium))
+                        .foregroundStyle(Color.sleepMuted)
+                        .accessibilityIdentifier("home.nap.end.selection")
+                    if let validation { RecordingValidation(message: validation) }
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 16)
+            }
+            .background(Color.sleepBackground)
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                RecordingSaveButton(title: "Save End Time", enabled: validation == nil && !draft.isSubmitted, action: save)
+                    .padding(.horizontal, 20)
+                    .padding(.top, 12)
+                    .padding(.bottom, 16)
+                    .background(Color.sleepBackground)
+            }
+            .navigationTitle("Finish Nap")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel", action: cancel)
+                        .accessibilityIdentifier("home.nap.cancel")
+                }
+            }
+        }
+        .alert(cancellationFailed ? "Could Not Cancel" : "Could Not Finish Nap", isPresented: $saveFailed) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(cancellationFailed
+                 ? "Cancellation could not be saved. Your entry is still open; try Cancel again."
+                 : failureMessage ?? "Saving did not finish. Your selected end time is still here; please try again.")
+        }
+        .environment(\.calendar, draft.calendar)
+        .environment(\.timeZone, draft.calendar.timeZone)
+        .tint(RecordingColor.accent)
+        .presentationDetents(dynamicType.isAccessibilitySize ? [.large] : [.height(520), .large])
+        .presentationDragIndicator(.visible)
+        .interactiveDismissDisabled(draft.requiresExplicitCancellation)
+        .onDisappear { _ = draft.abandon() }
+    }
+
+    private func save() {
+        cancellationFailed = false
+        let now = Date()
+        // Re-read before submitting: an awake break may have been added while the sheet was open.
+        let currentRecords = SleepRecordPersistence().load() ?? []
+        failureMessage = draft.validationMessage(records: currentRecords, now: now)
+        guard failureMessage == nil else { saveFailed = true; return }
+        if !draft.submit(records: currentRecords, now: now, save: onSave, dismiss: { dismiss() }) {
+            saveFailed = true
+        }
+    }
+
+    private func cancel() {
+        if draft.abandon() { dismiss() } else { cancellationFailed = true; saveFailed = true }
     }
 }
 

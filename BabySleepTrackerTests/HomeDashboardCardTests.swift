@@ -1,7 +1,19 @@
+import UIKit
 import XCTest
 @testable import BabySleepTracker
 
 final class HomeDashboardCardTests: XCTestCase {
+    func testTodaySleepArtworkIsBundled() {
+        let names = [
+            "TodaySleepReadyBed", "TodaySleepNapActive", "TodaySleepNapCompleted", "TodaySleepNightActive",
+            "TodaySleepMorningConfirmed", "TodaySleepMorningUnconfirmed", "TodaySleepLikelyNext",
+            "TodaySleepBedtimeRoutine", "TodaySleepZzzCloud", "TodaySleepHeroCardBackground"
+        ]
+        for name in names {
+            XCTAssertNotNil(UIImage(named: name), "The app's asset catalog is missing \(name).")
+        }
+    }
+
     private var calendar: Calendar {
         var value = Calendar(identifier: .gregorian)
         value.timeZone = TimeZone(secondsFromGMT: 0)!

@@ -164,6 +164,9 @@ struct TodaySleepHeroModel {
 enum HeroUITestFixture {
     static var enabled: Bool { ProcessInfo.processInfo.environment["SLEEP_HERO_UI_TESTS"] == "1" }
     static var scenario: String { ProcessInfo.processInfo.environment["SLEEP_HERO_SCENARIO"] ?? "ready" }
+    private static var usesCardReferences: Bool {
+        ProcessInfo.processInfo.environment["SLEEP_HERO_CARD_REFERENCES"] == "1"
+    }
     // A relaunch can inspect the recorded wake on its own day through the normal Home projection.
     static var historicalReviewTime: Date? {
         guard enabled, scenario == "staleNight" else { return nil }
@@ -175,6 +178,9 @@ enum HeroUITestFixture {
         if scenario.hasPrefix("bedtime") {
             return Calendar.current.date(bySettingHour: scenario == "bedtimeBefore" ? 18 : 20,
                                          minute: scenario == "bedtimeBefore" ? 59 : 33, second: 0, of: Date())!
+        }
+        if usesCardReferences && scenario == "nightActive" {
+            return Calendar.current.date(bySettingHour: 22, minute: 12, second: 0, of: Date())!
         }
         let hour = scenario.hasPrefix("morning") ? 8 : (scenario == "nightActive" ? 3 : 12)
         return Calendar.current.date(bySettingHour: hour, minute: 0, second: 0, of: Date())!
@@ -194,8 +200,9 @@ enum HeroUITestFixture {
         SecureDataStore.shared.set("Baby", forKey: "babyName")
         let cal = Calendar.current
         let yesterday = cal.date(byAdding: .day, value: -1, to: now)!
-        let usesLiveNight = scenario == "nightActive" && ProcessInfo.processInfo.environment["SLEEP_HERO_LIVE_CLOCK"] == "1"
-        let nightStart = usesLiveNight ? now.addingTimeInterval(-7200) :
+        let usesRecentNight = scenario == "nightActive" &&
+            (usesCardReferences || ProcessInfo.processInfo.environment["SLEEP_HERO_LIVE_CLOCK"] == "1")
+        let nightStart = usesRecentNight ? now.addingTimeInterval(-7200) :
             cal.date(bySettingHour: 20, minute: 12, second: 0, of: yesterday)!
         var records: [SleepRecord] = []
         var wakes: [DailyWakeRecord] = []
@@ -217,7 +224,9 @@ enum HeroUITestFixture {
             SecureDataStore.shared.set(cal.date(byAdding: .month, value: -9, to: now), forKey: "babyBirthDate")
             SecureDataStore.shared.set(Double(cal.component(.hour, from: now)), forKey: "typicalBedHour")
         case "nightActive", "morningUnconfirmed":
-            records = [SleepRecord(id: parentID, date: nightStart, duration: 0, kind: .nightSleep, isOngoing: true, createdAt: nightStart)]
+            if scenario == "nightActive" || !usesCardReferences {
+                records = [SleepRecord(id: parentID, date: nightStart, duration: 0, kind: .nightSleep, isOngoing: true, createdAt: nightStart)]
+            }
         case "morningConfirmed":
             let wake = cal.date(bySettingHour: 7, minute: 15, second: 0, of: now)!
             records = [SleepRecord(id: parentID, date: nightStart, duration: Int(wake.timeIntervalSince(nightStart) / 60), kind: .nightSleep, createdAt: nightStart, endDate: wake)]
@@ -271,7 +280,8 @@ enum HeroUITestFixture {
             proposals.append(prediction(kind: .nextSleep, now: now, start: start, end: start.addingTimeInterval(4500)))
         }
         return TodaySleepHeroModel.make(records: records, wakeRecords: wakes, now: now, calendar: .current,
-            routine: routine, displayName: "Alex", babyName: "Baby", proposals: proposals,
+            routine: routine, displayName: "Alex", babyName: "Baby",
+            proposals: usesCardReferences && scenario != "likelyNext" ? [] : proposals,
             confirmation: confirmation, instant: ContinuousClock.now)
     }
     static func prediction(kind: HeroPrediction.Kind, now: Date, start: Date?, end: Date?,
