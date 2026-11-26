@@ -423,6 +423,13 @@ extension TodaySleepHeroUITests {
         let window = app.windows.firstMatch
         let nav = app.navigationBars["Day detail"]
         for _ in 0..<8 {
+            let foreground = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "exists == true AND hittable == true"), object: nav.buttons["Done"])
+            guard XCTWaiter.wait(for: [foreground], timeout: 3) == .completed else {
+                capture("day-detail-scroll-presented-unexpected-screen", app: app)
+                XCTFail("Scrolling left Day detail: \(app.debugDescription)")
+                return
+            }
             let bounds = window.frame
             let area = bounds.intersection(scroll.frame)
             let top = nav.exists ? max(area.minY, nav.frame.maxY) : area.minY
@@ -434,11 +441,12 @@ extension TodaySleepHeroUITests {
             let distance = frame.midY - viewport.midY
             let step = min(max(30, abs(distance)), viewport.height * 0.55)
             let startY = viewport.minY + viewport.height * (distance < 0 ? 0.18 : 0.82)
+            // Use the scroll content margin so a navigation drag cannot begin on a row action.
             let start = window.coordinate(withNormalizedOffset: .zero)
-                .withOffset(CGVector(dx: viewport.midX - bounds.minX, dy: startY - bounds.minY))
-            start.press(forDuration: 0.05,
+                .withOffset(CGVector(dx: viewport.minX + 8 - bounds.minX, dy: startY - bounds.minY))
+            start.press(forDuration: 0.01,
                         thenDragTo: start.withOffset(CGVector(dx: 0, dy: distance < 0 ? step : -step)),
-                        withVelocity: .slow, thenHoldForDuration: 0.1)
+                        withVelocity: .default, thenHoldForDuration: 0)
         }
         capture("day-detail-target-unreachable", app: app)
         XCTFail("Day Detail element was unreachable: \(element)\n\(app.debugDescription)")
@@ -575,10 +583,24 @@ extension TodaySleepHeroUITests {
         XCTAssertTrue((wake.value as? String)?.contains(wakeDay.formatted(date: .abbreviated, time: .omitted)) == true)
 
         tapHomeButton("sleep.dayRecords.0", app: app)
-        XCTAssertTrue(app.navigationBars[startDay.formatted(.dateTime.day().month(.abbreviated))].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["Night Sleep"].exists)
-        XCTAssertTrue(app.staticTexts["8:12 PM – 7:21 AM"].exists)
-        XCTAssertFalse(app.staticTexts["End unconfirmed"].exists)
+        XCTAssertTrue(app.navigationBars["Day detail"].waitForExistence(timeout: 5))
+        let selectedDay = app.staticTexts["history.day.date"]
+        XCTAssertTrue(selectedDay.waitForExistence(timeout: 5))
+        let dateStyle = Date.FormatStyle(date: .omitted, time: .omitted, locale: .current,
+                                         calendar: calendar, timeZone: calendar.timeZone)
+        XCTAssertEqual(selectedDay.label, startDay.formatted(dateStyle.weekday(.abbreviated).day().month(.abbreviated).year()),
+                       "The completed night must stay on its original Sleep Day after relaunch.")
+        let nightID = "22222222-2222-2222-2222-222222222222"
+        let night = app.descendants(matching: .any).matching(identifier: "history.sleep.record.\(nightID)").firstMatch
+        XCTAssertTrue(night.waitForExistence(timeout: 5))
+        revealDayDetail(night, app: app)
+        let timeStyle = dateStyle.hour().minute()
+        XCTAssertTrue(night.label.contains("\(start.formatted(timeStyle))–\(wakeTime.formatted(timeStyle))"), night.label)
+        XCTAssertTrue(night.label.contains("Ends \(wakeDay.formatted(dateStyle.day().month(.abbreviated)))"), night.label)
+        XCTAssertFalse(night.label.contains("End unconfirmed"), night.label)
+        let editNight = app.buttons["history.sleep.edit.\(nightID)"]
+        XCTAssertTrue(editNight.exists)
+        XCTAssertEqual(editNight.label, "Edit Night sleep")
         capture(timeFirst ? "historical-time-first-persisted" : "historical-date-first-persisted", app: app)
     }
 

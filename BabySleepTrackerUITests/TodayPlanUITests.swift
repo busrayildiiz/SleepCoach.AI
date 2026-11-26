@@ -211,6 +211,15 @@ final class TodayPlanUITests: XCTestCase {
     }
 
     func testOvernightCarryoverRemainsActiveAndKeepsOriginalDay() {
+        // TodayPlanUITestFixture anchors carryover at 01:55 today and seeds the
+        // same parent ID at 18:45 on the preceding calendar day.
+        let calendar = Calendar.current
+        let fixtureNow = calendar.date(bySettingHour: 1, minute: 55, second: 0, of: Date())!
+        let previousDay = calendar.date(byAdding: .day, value: -1, to: fixtureNow)!
+        let originalStart = calendar.date(bySettingHour: 18, minute: 45, second: 0, of: previousDay)!
+        let dateDisplay = Date.FormatStyle(date: .omitted, time: .omitted, locale: .current,
+                                          calendar: calendar, timeZone: calendar.timeZone)
+            .day().month(.abbreviated).weekday(.abbreviated).year()
         let app = launch("carryover")
         let night = event("record:\(parentID)", app: app)
         XCTAssertTrue(night.label.contains("Ongoing"), night.label)
@@ -224,7 +233,11 @@ final class TodayPlanUITests: XCTestCase {
         capture("night-carryover", app: app)
         assertOvernightLayout(app: app, elapsed: "7h 10m")
         app.buttons["home.plan.details"].tap()
-        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Sleep Day:")).firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars["Day detail"].waitForExistence(timeout: 5))
+        let selectedDate = app.staticTexts["history.day.date"]
+        XCTAssertTrue(selectedDate.waitForExistence(timeout: 5))
+        XCTAssertEqual(selectedDate.label, originalStart.formatted(dateDisplay),
+                       "The full plan must retain the carried night's original Sleep Day.")
         XCTAssertTrue(app.buttons["sleep.addBreak.\(parentID)"].waitForExistence(timeout: 5), "The full plan opens the carried night's original Sleep Day.")
     }
 

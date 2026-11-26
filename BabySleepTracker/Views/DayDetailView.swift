@@ -794,13 +794,25 @@ private struct DayDetailSleepRow: View {
                 }
             }
             .contentShape(Rectangle())
-            .onTapGesture(perform: onEdit)
-            .onLongPressGesture(minimumDuration: 0.4) {
-                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                onActions()
-            }
+            .gesture(
+                LongPressGesture(minimumDuration: 0.4)
+                    .exclusively(before: TapGesture())
+                    .onEnded { gesture in
+                        switch gesture {
+                        case .first(true):
+                            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                            onActions()
+                        case .second:
+                            onEdit()
+                        case .first(false):
+                            break
+                        }
+                    }
+            )
             .accessibilityElement(children: .combine)
             .accessibilityIdentifier("history.sleep.record.\(record.id)")
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction(.default, onEdit)
             .accessibilityAction(named: Text("Actions for \(title)"), onActions)
             if let netMinutes {
                 Text(dynamicType.isAccessibilitySize ? "\(TimeFormat.minutes(netMinutes)) net sleep" :

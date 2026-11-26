@@ -53,6 +53,14 @@ final class DaytimeCoverageReviewUITests: XCTestCase {
             let bounds = window.frame
             if let scroll {
                 let navigation = app.navigationBars[screen.navigationTitle]
+                let foreground = XCTNSPredicateExpectation(
+                    predicate: NSPredicate(format: "exists == true AND hittable == true"),
+                    object: navigation.buttons.firstMatch)
+                guard XCTWaiter.wait(for: [foreground], timeout: 3) == .completed else {
+                    captureReview("scroll-presented-unexpected-screen")
+                    XCTFail("Scrolling left \(screen.navigationTitle): \(app.debugDescription)")
+                    return
+                }
                 let body = bounds.intersection(scroll.frame)
                 let top = max(body.minY, navigation.exists ? navigation.frame.maxY : body.minY)
                 let footer = app.buttons["daytimeReview.save"].exists
@@ -92,10 +100,17 @@ final class DaytimeCoverageReviewUITests: XCTestCase {
             let step = min(max(30, abs(distance)), viewport.height * stride)
             let startY = scroll == nil ? viewport.midY :
                 viewport.minY + viewport.height * (scrollingUp ? 0.12 : 0.88)
+            // Keep navigation drags inside the scroll view's content margin,
+            // away from the wide Edit/Add awake break actions at large text sizes.
+            let startX = scroll == nil ? viewport.midX : viewport.minX + 8
             let start = window.coordinate(withNormalizedOffset: .zero)
-                .withOffset(CGVector(dx: viewport.midX - bounds.minX, dy: startY - bounds.minY))
+                .withOffset(CGVector(dx: startX - bounds.minX, dy: startY - bounds.minY))
             let end = start.withOffset(CGVector(dx: 0, dy: scrollingUp ? step : -step))
-            start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.1)
+            if scroll != nil {
+                start.press(forDuration: 0.01, thenDragTo: end, withVelocity: .default, thenHoldForDuration: 0)
+            } else {
+                start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.1)
+            }
             moves += 1
         }
         if scroll != nil { captureReview("scroll-target-unreachable") }
@@ -412,6 +427,18 @@ final class DaytimeCoverageReviewUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Day detail"].waitForExistence(timeout: 5))
         let selectedDay = app.staticTexts["history.day.date"].label
         captureReview("day-detail-historical-accessibility-overview")
+        let firstRecord = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "history.sleep.record.")).firstMatch
+        reveal(firstRecord, in: app, screen: .dayDetail)
+        let beforeScrollY = firstRecord.frame.midY
+        // A normal pan that begins on a record must scroll, not activate its tap or long press.
+        let start = firstRecord.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        start.press(forDuration: 0.01, thenDragTo: start.withOffset(CGVector(dx: 0, dy: -140)),
+                    withVelocity: .default, thenHoldForDuration: 0)
+        let recordingCancel = app.buttons["recording.cancel"]
+        XCTAssertFalse(recordingCancel.exists && recordingCancel.isHittable, "Scrolling a record must not open its editor.")
+        XCTAssertTrue(app.navigationBars["Day detail"].buttons["Done"].isHittable)
+        XCTAssertLessThan(firstRecord.frame.midY, beforeScrollY - 10, "The record pan must move the scroll content.")
         let reviewLink = app.buttons["daytimeReview.open"]
         reveal(reviewLink, in: app, screen: .dayDetail)
         captureReview("day-detail-historical-accessibility-review-link")
@@ -462,8 +489,7 @@ final class DaytimeCoverageReviewUITests: XCTestCase {
         XCTAssertFalse(first.label.contains("Verified"))
         let recordID = String(first.identifier.dropFirst("history.sleep.record.".count))
         let edit = app.buttons["history.sleep.edit.\(recordID)"]
-        reveal(edit, in: app, screen: .dayDetail)
-        edit.tap()
+        first.tap()
         let editor = app.navigationBars["Edit Nap"]
         XCTAssertTrue(editor.waitForExistence(timeout: 5))
         app.buttons["recording.cancel"].tap()
