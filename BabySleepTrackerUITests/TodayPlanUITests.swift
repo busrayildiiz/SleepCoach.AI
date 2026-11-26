@@ -7,14 +7,17 @@ final class TodayPlanUITests: XCTestCase {
     private let completedNightID = "55555555-5555-5555-5555-555555555555"
     private let wakeID = "66666666-6666-6666-6666-666666666666"
 
-    private func launch(_ scenario: String, dark: Bool = false, large: Bool = false) -> XCUIApplication {
+    private func launch(_ scenario: String, dark: Bool = false, large: Bool = false,
+                        contentSizeCategory: String? = nil) -> XCUIApplication {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchEnvironment["RECORDING_UI_TESTS"] = "1" // Existing offline LLM agent.
         app.launchEnvironment["TODAY_PLAN_UI_TESTS"] = "1"
         app.launchEnvironment["TODAY_PLAN_SCENARIO"] = scenario
         if dark { app.launchEnvironment["TODAY_PLAN_DARK"] = "1" }
-        if large { app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"] }
+        if let category = contentSizeCategory ?? (large ? "UICTContentSizeCategoryAccessibilityXXXL" : nil) {
+            app.launchArguments += ["-UIPreferredContentSizeCategoryName", category]
+        }
         app.launch()
         XCTAssertTrue(app.staticTexts["TEST FIXTURE — NOT A PREDICTION"].waitForExistence(timeout: 10))
         reveal(app.buttons["home.plan.details"], app: app)
@@ -339,6 +342,57 @@ final class TodayPlanUITests: XCTestCase {
         assertUnavailableIsDetailOnly(app: app)
     }
 
+    func testHomeIconWakeScreenshots() throws {
+        try HomeIconScreenshotAppearance.requireOptIn()
+        let recordedWake = "home.plan.event.record:\(wakeID)"
+        let overnightWake = "home.plan.wakeReference"
+        let scenarios = [
+            ("completed-event-icons", recordedWake, "Done"),
+            ("reference", recordedWake, "Done"),
+            ("overnight-routine", overnightWake, "Routine"),
+            ("overnight-estimate", overnightWake, "Estimated"),
+            ("carryover", overnightWake, "Awaiting wake")
+        ]
+
+        for appearance in HomeIconScreenshotAppearance.all {
+            for (scenario, identifier, caption) in scenarios {
+                let app = launch(scenario, dark: appearance.dark, contentSizeCategory: appearance.contentSizeCategory)
+                defer { app.terminate() }
+                let wake = app.descendants(matching: .any).matching(identifier: identifier).firstMatch
+                XCTAssertTrue(wake.exists)
+                XCTAssertTrue(wake.label.contains(caption), wake.label)
+                if scenario == "carryover" { XCTAssertTrue(wake.label.contains("—"), wake.label) }
+                revealWakeForScreenshot(wake, app: app)
+                appearance.attach(scenario, app: app, to: self)
+            }
+        }
+    }
+
+    private func revealWakeForScreenshot(_ wake: XCUIElement, app: XCUIApplication) {
+        let scroll = app.scrollViews["home.plan.scroll"]
+        if scroll.exists {
+            reveal(scroll, app: app)
+            for _ in 0..<8 {
+                let viewport = scroll.frame
+                let frame = wake.frame
+                let inset = min(frame.width / 2, viewport.width / 3)
+                if !frame.isEmpty && viewport.insetBy(dx: inset, dy: 0).contains(CGPoint(x: frame.midX, y: viewport.midY)) {
+                    reveal(wake, app: app)
+                    return
+                }
+                let distance = frame.isEmpty ? viewport.width : frame.midX - viewport.midX
+                let step = min(abs(distance), viewport.width * 0.4)
+                let start = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+                start.press(forDuration: 0.05,
+                            thenDragTo: start.withOffset(CGVector(dx: distance < 0 ? step : -step, dy: 0)),
+                            withVelocity: .slow, thenHoldForDuration: 0.1)
+            }
+            XCTFail("Wake artwork could not be reached within the horizontal timeline: \(wake)")
+            return
+        }
+        reveal(wake, app: app)
+    }
+
     private func assertOvernightLayout(app: XCUIApplication, elapsed: String?) {
         let night = event("record:\(parentID)", app: app)
         let wake = app.descendants(matching: .any).matching(identifier: "home.plan.wakeReference").firstMatch
@@ -381,5 +435,34 @@ final class TodayPlanUITests: XCTestCase {
     private func assertUnavailableIsDetailOnly(app: XCUIApplication) {
         XCTAssertFalse(app.staticTexts["home.plan.unavailable"].exists, "Recorded timelines do not need a persistent unavailable footer.")
         XCTAssertEqual(app.buttons["home.plan.details"].value as? String, "Predictions unavailable", "Prediction availability remains accessible through the neutral full-plan detail.")
+    }
+}
+
+@MainActor
+struct HomeIconScreenshotAppearance {
+    let dark: Bool
+    let large: Bool
+
+    static let all = [
+        Self(dark: false, large: false), Self(dark: true, large: false),
+        Self(dark: false, large: true), Self(dark: true, large: true)
+    ]
+
+    var contentSizeCategory: String {
+        large ? "UICTContentSizeCategoryAccessibilityXXXL" : "UICTContentSizeCategoryL"
+    }
+
+    static func requireOptIn() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["HOME_ICON_SCREENSHOTS"] == "1",
+                          "Run the Home icon screenshot capture phase to enable this test.")
+    }
+
+    func attach(_ scenario: String, app: XCUIApplication, to test: XCTestCase) {
+        let mode = dark ? "dark" : "light"
+        let size = large ? "accessibility-xxxl" : "default"
+        let image = XCTAttachment(screenshot: app.screenshot())
+        image.name = "HOME-ICONS-\(scenario)-\(mode)-\(size)"
+        image.lifetime = .keepAlways
+        test.add(image)
     }
 }

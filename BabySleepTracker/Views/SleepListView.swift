@@ -523,9 +523,15 @@ struct SleepListView: View {
                     )
                     .frame(width: 44, height: 44)
                     .rotationEffect(.degrees(-90))
-                Image(systemName: "sparkles")
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(Color(red: 0.45, green: 0.35, blue: 0.86))
+                Image(decorative: "HomeDaysWithRecords")
+                    .renderingMode(.original)
+                    .resizable()
+                    .interpolation(.high)
+                    .frame(width: 38.783505155, height: 38.783505155)
+                    .offset(y: -0.278350515)
+                    .frame(width: 44, height: 44)
+                    .accessibilityHidden(true)
+                    .allowsHitTesting(false)
             }
 
             VStack(alignment: .leading, spacing: 5) {
@@ -1491,26 +1497,15 @@ struct SleepListView: View {
 
             HStack(spacing: 10) {
 
-                ZStack {
-                    Circle()
-                        .fill(
-                            LinearGradient(
-                                colors: [
-                                    Color(red: 0.55, green: 0.45, blue: 0.98),
-                                    Color(red: 0.38, green: 0.28, blue: 0.82)
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
-                        .frame(width: 38, height: 38)
-                        .shadow(color: Color(red: 0.45, green: 0.35, blue: 0.92).opacity(0.4),
-                                radius: 6, x: 0, y: 3)
-
-                    Image(systemName: "brain.head.profile")
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(.white)
-                }
+                Image(decorative: "HomeAICoach")
+                    .renderingMode(.original)
+                    .resizable()
+                    .interpolation(.high)
+                    .frame(width: 46.647702407, height: 46.647702407)
+                    .offset(x: 0.557986871, y: -0.278993435)
+                    .frame(width: 38, height: 38)
+                    .accessibilityHidden(true)
+                    .allowsHitTesting(false)
 
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {

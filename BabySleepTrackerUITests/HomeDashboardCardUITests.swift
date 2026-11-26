@@ -123,4 +123,58 @@ final class HomeDashboardCardUITests: XCTestCase {
         tapVisibleRecordingCard(add, app: app)
         XCTAssertTrue(app.navigationBars["Add Nap"].waitForExistence(timeout: 5))
     }
+
+    func testHomeIconDaysAndCoachScreenshots() throws {
+        try HomeIconScreenshotAppearance.requireOptIn()
+        continueAfterFailure = false
+        let states = [("fallback", "Smart tip"), ("loading", "Analyzing..."), ("response", "AI")]
+        for appearance in HomeIconScreenshotAppearance.all {
+            for (state, badge) in states {
+                let app = XCUIApplication()
+                app.launchEnvironment["RECORDING_UI_TESTS"] = "1"
+                app.launchEnvironment["HOME_COACH_UI_TEST_STATE"] = state
+                app.launchEnvironment["SLEEP_HERO_UI_TESTS"] = "1"
+                app.launchEnvironment["SLEEP_HERO_SCENARIO"] = "staleNight"
+                app.launchEnvironment["SLEEP_HERO_LIVE_CLOCK"] = "1"
+                app.launchEnvironment["SLEEP_HERO_DARK"] = appearance.dark ? "1" : "0"
+                app.launchArguments += ["-UIPreferredContentSizeCategoryName", appearance.contentSizeCategory]
+                app.launch()
+                defer { app.terminate() }
+                XCTAssertTrue(app.staticTexts["TEST FIXTURE — NOT A PREDICTION"].waitForExistence(timeout: 10))
+
+                if state == "fallback" {
+                    let days = app.staticTexts["Days with records"]
+                    XCTAssertTrue(days.waitForExistence(timeout: 5))
+                    revealForScreenshot(days, app: app)
+                    XCTAssertTrue(app.staticTexts["1/14"].isHittable)
+                    XCTAssertTrue(app.staticTexts["Recording coverage is unconfirmed"].isHittable)
+                    appearance.attach("days-staleNight", app: app, to: self)
+                }
+
+                let indicator = app.staticTexts[badge]
+                XCTAssertTrue(indicator.waitForExistence(timeout: 5))
+                revealForScreenshot(indicator, app: app)
+                appearance.attach("coach-\(state)", app: app, to: self)
+            }
+        }
+    }
+
+    private func revealForScreenshot(_ text: XCUIElement, app: XCUIApplication) {
+        for _ in 0..<12 {
+            let window = app.windows.firstMatch.frame
+            let bottom = app.buttons["recording.addSleep"].frame.minY
+            let top = window.minY + 60
+            let viewport = CGRect(x: window.minX, y: top, width: window.width, height: bottom - top)
+            // Keep the icon and the rest of its header clear of the screen edges and tab bar.
+            if text.isHittable && viewport.insetBy(dx: 0, dy: 44).contains(text.frame) { return }
+            let distance = text.frame.midY - viewport.midY
+            let step = min(abs(distance), viewport.height * 0.4)
+            let start = app.coordinate(withNormalizedOffset: .zero)
+                .withOffset(CGVector(dx: viewport.midX, dy: viewport.midY))
+            start.press(forDuration: 0.05,
+                        thenDragTo: start.withOffset(CGVector(dx: 0, dy: distance < 0 ? step : -step)),
+                        withVelocity: .slow, thenHoldForDuration: 0.1)
+        }
+        XCTFail("Home card could not be positioned for capture: \(text)\n\(app.debugDescription)")
+    }
 }

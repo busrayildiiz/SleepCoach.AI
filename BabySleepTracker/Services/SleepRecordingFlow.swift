@@ -395,9 +395,23 @@ struct RecordingSubmission {
 #if DEBUG && targetEnvironment(simulator)
 /// Uses the existing injection point; UI recording tests never contact Gemini.
 final class RecordingUITestLLMAgent: SleepCoachLLMAgentProtocol {
+    private let homeCoachState = ProcessInfo.processInfo.environment["HOME_COACH_UI_TEST_STATE"]
+
     func generateInsight(snapshot: OrchestratedSnapshot, records: [SleepRecord],
                          trigger: LLMTrigger) async -> LLMCoachResponse? {
-        nil
+        switch homeCoachState {
+        case "loading":
+            // Hold the offline request open for the capture, with cancellation support.
+            try? await Task.sleep(for: .seconds(3_600))
+            return nil
+        case "response":
+            return LLMCoachResponse(patternInsight: "Offline test fixture",
+                                    coachMessage: "Offline UI test coaching response.",
+                                    alert: nil, confidenceNote: "Test fixture",
+                                    generatedAt: snapshot.generatedAt)
+        default:
+            return nil
+        }
     }
 }
 #endif

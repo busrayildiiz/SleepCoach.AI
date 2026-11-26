@@ -32,6 +32,11 @@ private struct OvernightPlanLayout: Layout {
 
 /// Only the compact top card from the approved design is product UI.
 struct TodayPlanCard: View {
+    private enum NodeArtwork {
+        case system(String)
+        case wake(subdued: Bool)
+    }
+
     let presentation: TodayPlanPresentation
     let now: Date
     var calendar: Calendar = .current
@@ -256,8 +261,14 @@ struct TodayPlanCard: View {
         .accessibilityElement(children: .contain)
     }
     private func node(_ item: SleepTimelineItem, overnight: Bool = false) -> some View {
-        VStack(spacing: 3) {
-            symbol(state: item.visualState, icon: TodayPlanPresentation.eventSymbol(for: item), overnight: overnight)
+        let artwork: NodeArtwork
+        switch (item.kind, item.source, item.visualState) {
+        case (.wake, .recorded, .completed): artwork = .wake(subdued: false)
+        case (.wake, _, _): artwork = .wake(subdued: true)
+        default: artwork = .system(TodayPlanPresentation.eventSymbol(for: item))
+        }
+        return VStack(spacing: 3) {
+            symbol(state: item.visualState, artwork: artwork, overnight: overnight)
                 .anchorPreference(key: PlanNodeAnchors.self, value: .bounds) { [item.id: $0] }
                 .padding(.vertical, 6)
                 .padding(.bottom, overnight ? overnightCaptionPadding : 0)
@@ -297,10 +308,11 @@ struct TodayPlanCard: View {
         case .plan: return Text("Plan")
         }
     }
-    private func symbol(state: SleepTimelineItem.VisualState, icon: String, overnight: Bool = false, muted: Bool = false) -> some View {
+    private func symbol(state: SleepTimelineItem.VisualState, artwork: NodeArtwork, overnight: Bool) -> some View {
         let active = state == .active
         let completed = state == .completed
         let next = state == .next
+        let diameter = overnight ? overnightNodeDiameter : nodeDiameter
         return ZStack {
             if active {
                 Circle().fill(CoachColor.purple.opacity(0.10)).padding(-6)
@@ -311,12 +323,32 @@ struct TodayPlanCard: View {
                 AnyShapeStyle(CoachColor.purple.opacity(completed ? 0.09 : 0.025)))
             Circle().strokeBorder(active ? Color.white.opacity(0.7) : CoachColor.purple.opacity(next ? 0.85 : 0.35),
                 style: StrokeStyle(lineWidth: next ? 1.8 : 1.4, dash: state == .future || state == .unavailable ? [4, 3] : []))
-            Image(systemName: icon)
-                .recordingFont(overnight ? 22 : 17, weight: .semibold)
-                .foregroundStyle(active ? Color.white : (completed || muted ? CoachColor.muted : accent))
+            switch artwork {
+            case .system(let icon):
+                Image(systemName: icon)
+                    .recordingFont(overnight ? 22 : 17, weight: .semibold)
+                    .foregroundStyle(active ? Color.white : (completed ? CoachColor.muted : accent))
+            case .wake(let subdued):
+                let scale = diameter / (overnight ? 44 : 34)
+                let canvasSize = (overnight ? 40.375 : 30.875) * scale
+                Image(decorative: "TodayPlanWakeTime")
+                    .renderingMode(.original)
+                    .resizable()
+                    .interpolation(.high)
+                    .frame(width: canvasSize, height: canvasSize)
+                    .offset(
+                        x: (overnight ? 0.096590909 : 0.073863636) * scale,
+                        y: (overnight ? -0.273674242 : -0.209280303) * scale
+                    )
+                    .frame(width: diameter, height: diameter)
+                    .saturation(subdued ? 0.55 : 1.0)
+                    .opacity(subdued ? 0.75 : 1.0)
+                    .accessibilityHidden(true)
+                    .allowsHitTesting(false)
+            }
         }
-        .frame(width: overnight ? overnightNodeDiameter : nodeDiameter,
-               height: overnight ? overnightNodeDiameter : nodeDiameter).accessibilityHidden(true)
+        .frame(width: diameter, height: diameter)
+        .accessibilityHidden(true)
     }
     @ViewBuilder private func status(_ item: SleepTimelineItem) -> some View {
         switch item.visualState {
@@ -354,7 +386,7 @@ struct TodayPlanCard: View {
     }
     private func morningWakeNode(_ wake: TodayPlanPresentation.MorningWake) -> some View {
         VStack(spacing: 3) {
-            symbol(state: .unavailable, icon: "sunrise.fill", overnight: true, muted: true)
+            symbol(state: .unavailable, artwork: .wake(subdued: true), overnight: true)
                 .anchorPreference(key: PlanNodeAnchors.self, value: .bounds) { [wake.id: $0] }
                 .padding(.vertical, 6)
                 .padding(.bottom, overnightCaptionPadding)
