@@ -53,12 +53,16 @@ final class DaytimeCoverageReviewUITests: XCTestCase {
             let bounds = window.frame
             if let scroll {
                 let navigation = app.navigationBars[screen.navigationTitle]
+                // A pushed review also exposes the parent Back button. Use the
+                // current screen's own action to verify that it is reachable.
+                let navigationAnchor = screen == .review
+                    ? navigation.buttons["daytimeReview.later"] : navigation.buttons["Done"]
                 let foreground = XCTNSPredicateExpectation(
                     predicate: NSPredicate(format: "exists == true AND hittable == true"),
-                    object: navigation.buttons.firstMatch)
+                    object: navigationAnchor)
                 guard XCTWaiter.wait(for: [foreground], timeout: 3) == .completed else {
-                    captureReview("scroll-presented-unexpected-screen")
-                    XCTFail("Scrolling left \(screen.navigationTitle): \(app.debugDescription)")
+                    captureReview("scroll-foreground-check-failed")
+                    XCTFail("\(screen.navigationTitle) has no reachable navigation action: \(app.debugDescription)")
                     return
                 }
                 let body = bounds.intersection(scroll.frame)
