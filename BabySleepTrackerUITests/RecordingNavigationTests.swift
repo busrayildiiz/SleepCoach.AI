@@ -17,7 +17,8 @@ final class RecordingNavigationTests: XCTestCase {
         return app
     }
 
-    private func reveal(_ element: XCUIElement, in app: XCUIApplication) {
+    @discardableResult
+    private func reveal(_ element: XCUIElement, in app: XCUIApplication) -> CGRect {
         for _ in 0..<8 {
             if element.exists && element.isHittable {
                 let form = app.collectionViews.containing(.any, identifier: element.identifier).firstMatch
@@ -30,12 +31,38 @@ final class RecordingNavigationTests: XCTestCase {
                     // button marks a conservative, measured bottom edge for visible content.
                     viewport.size.height = max(0, min(viewport.maxY, addSleep.frame.minY) - viewport.minY)
                 }
+                if element.identifier == "recording.ongoing" {
+                    let save = app.buttons["recording.save"]
+                    if save.exists && !save.frame.isEmpty {
+                        // RecordingScreen's fixed bottom inset starts 12pt above Save.
+                        // A wide AX switch can report hittable while its trailing thumb
+                        // is covered by that inset, especially with a two-date header.
+                        viewport.size.height = max(0, min(viewport.maxY, save.frame.minY - 12) - viewport.minY)
+                    } else {
+                        recordingDiagnostics("missing-save-viewport", element: element, app: app)
+                        XCTFail("Could not measure the fixed recording Save area.")
+                        return .null
+                    }
+                }
                 // A partially visible button can be hittable while its tap center is offscreen.
-                if !element.frame.isEmpty && viewport.contains(element.frame) { return }
+                if !element.frame.isEmpty && viewport.contains(element.frame) { return viewport }
             }
             app.swipeUp()
         }
+        recordingDiagnostics("visibility-failure", element: element, app: app)
         XCTFail("Could not fully reveal \(element.identifier) within eight scroll gestures.")
+        return .null
+    }
+
+    private func recordingDiagnostics(_ reason: String, element: XCUIElement, app: XCUIApplication) {
+        let save = app.buttons["recording.save"]
+        capture("recording-\(reason)", app: app)
+        print(app.debugDescription)
+        let description = element.exists
+            ? "frame=\(element.frame), hittable=\(element.isHittable), value=\(String(describing: element.value))"
+            : "element is absent"
+        let saveFrame = save.exists ? String(describing: save.frame) : "absent"
+        print("Recording \(reason): \(description), saveFrame=\(saveFrame), window=\(app.windows.firstMatch.frame)")
     }
 
     private func waitForDismissal(of navigationBar: XCUIElement,
@@ -146,17 +173,31 @@ final class RecordingNavigationTests: XCTestCase {
 
     private func setOngoing(_ enabled: Bool, in app: XCUIApplication) {
         let toggle = app.switches["recording.ongoing"]
-        reveal(toggle, in: app)
-        XCTAssertEqual(toggle.value as? String, enabled ? "0" : "1",
+        let viewport = reveal(toggle, in: app)
+        let initialValue = toggle.value as? String
+        if initialValue != (enabled ? "0" : "1") {
+            recordingDiagnostics("ongoing-initial-value-failure", element: toggle, app: app)
+        }
+        XCTAssertEqual(initialValue, enabled ? "0" : "1",
                        "The test must exercise a real Still Sleeping transition.")
         // SwiftUI exposes the label and switch as one wide accessibility frame.
         // Tap the trailing switch thumb rather than the row center at AX XXXL.
+        let frame = toggle.frame
+        let tapPoint = CGPoint(x: frame.maxX - 20, y: frame.midY)
+        guard toggle.isHittable, !frame.isEmpty, viewport.contains(frame),
+              frame.contains(tapPoint), viewport.contains(tapPoint) else {
+            recordingDiagnostics("ongoing-tap-obscured", element: toggle, app: app)
+            XCTFail("The full Still Sleeping switch and trailing tap point must be outside the fixed Save area.")
+            return
+        }
         toggle.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 0.5))
             .withOffset(CGVector(dx: -20, dy: 0)).tap()
         let changed = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "value == %@", enabled ? "1" : "0"), object: toggle
         )
-        XCTAssertEqual(XCTWaiter.wait(for: [changed], timeout: 5), .completed,
+        let result = XCTWaiter.wait(for: [changed], timeout: 5)
+        if result != .completed { recordingDiagnostics("ongoing-value-failure", element: toggle, app: app) }
+        XCTAssertEqual(result, .completed,
                        "Still Sleeping did not reach the requested value.")
         let endUpdated = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "exists == %@", NSNumber(value: !enabled)),

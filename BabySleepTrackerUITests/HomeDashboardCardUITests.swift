@@ -60,13 +60,82 @@ final class HomeDashboardCardUITests: XCTestCase {
         }
         XCTFail("Recording card has no visible, hittable 44-point tap area within eight scroll gestures.")
     }
-    func testWakeSaveHidesAndPersistsAcrossRelaunch() {
+
+    private func revealWakePickerHour(_ hour: XCUIElement, app: XCUIApplication) {
+        let scroll = app.scrollViews["home.wake.scroll"]
+        let navigation = app.navigationBars["Today's Wake-up"]
+        var previousY: CGFloat?
+        var stalledMoves = 0
+        for move in 0...4 {
+            guard scroll.exists && navigation.buttons["home.wake.cancel"].isHittable else { break }
+            let window = app.windows.firstMatch
+            let body = window.frame.intersection(scroll.frame)
+            let top = max(body.minY, navigation.frame.maxY)
+            guard !body.isEmpty && body.maxY > top else { break }
+            let viewport = CGRect(x: body.minX, y: top, width: body.width,
+                                  height: body.maxY - top).insetBy(dx: 2, dy: 2)
+            let frame = hour.exists ? hour.frame : .null
+            guard !frame.isNull && !frame.isEmpty && !viewport.isEmpty else { break }
+            let fits = frame.height <= viewport.height && frame.width <= viewport.width
+            let visible = fits ? viewport.contains(frame) : viewport.contains(CGPoint(x: frame.midX, y: frame.midY))
+            if visible && hour.isHittable { return }
+            if let previousY, abs(previousY - frame.midY) < 1 { stalledMoves += 1 }
+            else { stalledMoves = 0 }
+            previousY = frame.midY
+            guard move < 4 && stalledMoves < 2 else { break }
+            let distance = frame.midY - viewport.midY
+            let moveDown = distance < 0
+            let step = min(max(30, abs(distance)), viewport.height * 0.72)
+            let start = window.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
+                dx: viewport.minX + 8 - window.frame.minX,
+                dy: viewport.minY + viewport.height * (moveDown ? 0.12 : 0.88) - window.frame.minY))
+            let end = start.withOffset(CGVector(dx: 0, dy: moveDown ? step : -step))
+            // Move the sheet content along its margin, not the picker wheels.
+            start.press(forDuration: 0.01, thenDragTo: end, withVelocity: .default, thenHoldForDuration: 0)
+        }
+        screenshot("wake-picker-unreachable", app: app)
+        XCTFail("Wake hour is not reachable below the editor navigation bar: \(hour)\n\(app.debugDescription)")
+    }
+
+    func testWakeSaveHidesAndPersistsAcrossRelaunch() throws {
         let app = launch()
         screenshot("wake-visible", app: app)
         app.buttons["home.wake.add"].tap()
         XCTAssertTrue(app.navigationBars["Today's Wake-up"].waitForExistence(timeout: 5))
+
+        // The suggested 07:00 is still in the future when CI runs after midnight.
+        // Enter an observed time that has already elapsed on the local wake day.
+        let picker = app.datePickers["home.wake.time"]
+        XCTAssertTrue(picker.waitForExistence(timeout: 5), app.debugDescription)
+        let wheels = picker.pickerWheels
+        XCTAssertTrue(wheels.count == 2 || wheels.count == 3, picker.debugDescription)
+        let usesMeridiem = wheels.count == 3
+        let hour = wheels.element(boundBy: 0)
+        let minute = wheels.element(boundBy: 1)
+        revealWakePickerHour(hour, app: app)
+        XCTAssertTrue(hour.isHittable && minute.isHittable, picker.debugDescription)
+        let initialHourValue = try XCTUnwrap(hour.value as? String, picker.debugDescription)
+        let hourDigits = try XCTUnwrap(initialHourValue.split(whereSeparator: \.isWhitespace).first,
+                                      "The wake hour wheel did not report a value.")
+        XCTAssertNotNil(Int(hourDigits), "Unexpected wake hour format: \(initialHourValue)")
+        let midnightHour = usesMeridiem ? "12" : String(repeating: "0", count: hourDigits.count)
+        hour.adjust(toPickerWheelValue: midnightHour)
+        minute.adjust(toPickerWheelValue: "00")
+        if usesMeridiem {
+            let period = wheels.element(boundBy: 2)
+            XCTAssertTrue(period.isHittable, picker.debugDescription)
+            period.adjust(toPickerWheelValue: "AM")
+            XCTAssertEqual(period.value as? String, "AM", picker.debugDescription)
+        }
+        let hourValue = try XCTUnwrap(hour.value as? String, picker.debugDescription)
+        let minuteValue = try XCTUnwrap(minute.value as? String, picker.debugDescription)
+        XCTAssertEqual(Int(hourValue.split(whereSeparator: \.isWhitespace).first ?? ""),
+                       usesMeridiem ? 12 : 0, "Unexpected wake hour: \(hourValue)")
+        XCTAssertEqual(Int(minuteValue.split(whereSeparator: \.isWhitespace).first ?? ""),
+                       0, "Unexpected wake minute: \(minuteValue)")
         app.buttons["home.wake.save"].tap()
-        app.buttons["Confirm and Save"].tap()
+        XCTAssertFalse(app.buttons["Confirm and Save"].exists,
+                       "An explicitly edited wake time must not use the untouched-time confirmation.")
         disappears(app.navigationBars["Today's Wake-up"])
         disappears(app.buttons["home.wake.add"])
         screenshot("wake-hidden-after-save", app: app)

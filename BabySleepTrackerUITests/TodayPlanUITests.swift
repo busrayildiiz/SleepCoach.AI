@@ -350,7 +350,7 @@ final class TodayPlanUITests: XCTestCase {
                                               object: app.navigationBars["Day detail"])
         XCTAssertEqual(XCTWaiter.wait(for: [gone], timeout: 5), .completed)
         let observed = event("record:\(wakeID)", app: app)
-        reveal(observed, app: app)
+        revealPlanEvent(observed, app: app)
         XCTAssertTrue(observed.label.contains("8:35"), "Today's Plan must reload the observed correction: \(observed.label)")
         if linked {
             let night = event("record:\(completedNightID)", app: app)
@@ -368,6 +368,35 @@ final class TodayPlanUITests: XCTestCase {
                           "Displaying a completed night on the plan must retain its original Sleep Day: \(metadata)")
         }
         captureMorningWake("\(linked ? "linked" : "standalone")-refreshed-plan", app: app)
+    }
+
+    private func revealPlanEvent(_ element: XCUIElement, app: XCUIApplication) {
+        let scroll = app.scrollViews["home.plan.scroll"]
+        guard scroll.exists else {
+            reveal(element, app: app)
+            return
+        }
+        // At accessibility sizes the recorded nodes use a horizontal carousel.
+        // Reveal its vertical position first, then scroll within its actual bounds.
+        reveal(scroll, app: app)
+        var previousX: CGFloat?
+        var stalledMoves = 0
+        for move in 0...6 {
+            let viewport = scroll.frame.intersection(app.windows.firstMatch.frame)
+            let frame = element.exists ? element.frame : .null
+            if !frame.isNull && !frame.isEmpty {
+                // Geometry must precede isHittable for offscreen static text.
+                if viewport.contains(frame) && element.isHittable { return }
+                if let previousX, abs(previousX - frame.midX) < 1 { stalledMoves += 1 }
+                else { stalledMoves = 0 }
+                previousX = frame.midX
+            }
+            guard move < 6, stalledMoves < 2, !viewport.isEmpty else { break }
+            if !frame.isNull && frame.midX < viewport.midX { scroll.swipeRight() }
+            else { scroll.swipeLeft() }
+        }
+        captureMorningWake("unreachable-plan-event", app: app)
+        XCTFail("Plan event is not reachable inside its horizontal timeline: \(element)\n\(app.debugDescription)")
     }
 
     private func captureMorningWake(_ name: String, app: XCUIApplication) {
