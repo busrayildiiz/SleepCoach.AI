@@ -11,6 +11,7 @@ struct SleepListSheetRouter: View {
     let onBreakSaved: (SleepRecord) -> Bool
     let onDeleteRecords: (Set<UUID>) -> Void
     let onWakeTimeSave: (Date, WakeObservationCapture?, HomeWakeOperation, Calendar) -> String?
+    let onWakeCorrectionSave: (MorningWakeCorrectionDraft, Date, MorningWakeCorrectionConfirmation?) -> MorningWakeCorrectionOutcome
 
     var body: some View {
         switch sheet {
@@ -68,7 +69,8 @@ struct SleepListSheetRouter: View {
                 records: dayRecords,
                 onDelete: onDeleteRecords,
                 onRecordUpsert: onRecordUpsert,
-                onBreakSaved: onBreakSaved
+                onBreakSaved: onBreakSaved,
+                onWakeCorrectionSave: onWakeCorrectionSave
             )
 
         case .wakeTime(let association):
@@ -204,24 +206,88 @@ private struct FinishNapEditorView: View {
 
 // MARK: - Wake Time Editor
 
-private struct WakeTimeEditorView: View {
-    let onSave: (Date, WakeObservationCapture?, HomeWakeOperation, Calendar) -> String?
+struct WakeTimeEditorView: View {
+    let onSave: ((Date, WakeObservationCapture?, HomeWakeOperation, Calendar) -> String?)?
+    let onCorrectionSave: ((MorningWakeCorrectionDraft, Date, MorningWakeCorrectionConfirmation?) -> MorningWakeCorrectionOutcome)?
     let association: AssociatedHomeWake?
     @State private var calendar: Calendar
     @Environment(\.dynamicTypeSize) private var dynamicType
     @Environment(\.dismiss) private var dismiss
-    @State private var draft: WakeObservationDraft
+    @State private var draft: WakeObservationDraft?
+    @State private var correctionDraft: MorningWakeCorrectionDraft?
+    @State private var correctionSelection: Date
+    @State private var pairedConfirmation: MorningWakeCorrectionConfirmation?
+    @State private var proposedCorrectionTime: Date?
     @State private var saveFailed = false
     @State private var saveFailureMessage: String?
     @State private var cancellationFailed = false
     @State private var confirmSuggestedTime = false
+    @State private var confirmPairedCorrection = false
+    @State private var confirmAbandonCorrection = false
 
     init(initialTime: Date, association: AssociatedHomeWake?, calendar: Calendar, existing: DailyWakeRecord?,
          onSave: @escaping (Date, WakeObservationCapture?, HomeWakeOperation, Calendar) -> String?) {
         self.onSave = onSave
+        onCorrectionSave = nil
         self.association = association
         _calendar = State(initialValue: calendar)
         _draft = State(initialValue: WakeObservationDraft(initial: initialTime, existing: existing))
+        _correctionSelection = State(initialValue: initialTime)
+    }
+
+    init(correction: MorningWakeCorrectionDraft,
+         onSave: @escaping (MorningWakeCorrectionDraft, Date, MorningWakeCorrectionConfirmation?) -> MorningWakeCorrectionOutcome) {
+        self.onSave = nil
+        onCorrectionSave = onSave
+        association = nil
+        _calendar = State(initialValue: correction.context.calendar)
+        _correctionDraft = State(initialValue: correction)
+        _correctionSelection = State(initialValue: correction.context.wake.wakeTime)
+    }
+
+    private var isCorrection: Bool { correctionDraft != nil }
+    private var selectedTime: Date { isCorrection ? correctionSelection : draft?.selected ?? correctionSelection }
+    private var requiresExplicitCancellation: Bool {
+        correctionDraft?.requiresExplicitCancellation ?? draft?.requiresExplicitCancellation ?? false
+    }
+    private var selection: Binding<Date> {
+        Binding(get: { selectedTime }, set: { value in
+            if isCorrection {
+                guard correctionDraft?.pendingTime == nil else { return }
+                correctionSelection = value
+                pairedConfirmation = nil
+                proposedCorrectionTime = nil
+            } else {
+                draft?.selected = value
+            }
+        })
+    }
+    private var saveTitle: LocalizedStringKey {
+        if isCorrection { return correctionDraft?.pendingTime == nil ? "Save Changes" : "Retry Save" }
+        return association == nil ? "Save" : "Save and End Sleep"
+    }
+
+    @ViewBuilder private var explanation: some View {
+        if let night = correctionDraft?.context.linkedNight {
+            Text("This wake is linked to the night started \(RecordingFormat.timestamp(night.date, calendar: calendar)). Correcting the wake also updates that night's end.")
+                .accessibilityIdentifier("home.wake.linkedExplanation")
+        } else if isCorrection {
+            Text("Correct the morning wake time you observed.")
+        } else {
+            Text(association.map { "This also ends the night started \(RecordingFormat.timestamp($0.nightStart, calendar: calendar))." }
+                 ?? "Record an observed wake time to help plan today.")
+        }
+    }
+
+    @ViewBuilder private var wakePicker: some View {
+        if let context = correctionDraft?.context,
+           let interval = calendar.dateInterval(of: .day, for: context.day) {
+            let lastInstant = Date(timeIntervalSinceReferenceDate: interval.end.timeIntervalSinceReferenceDate.nextDown)
+            DatePicker("Wake-up time", selection: selection, in: interval.start...lastInstant,
+                       displayedComponents: .hourAndMinute)
+        } else {
+            DatePicker("Wake-up time", selection: selection, displayedComponents: .hourAndMinute)
+        }
     }
 
     var body: some View {
@@ -239,41 +305,61 @@ private struct WakeTimeEditorView: View {
                             .font(.title3.weight(.bold))
                             .foregroundStyle(Color.sleepInk)
                             .multilineTextAlignment(.center)
-                        Text(association.map { "This also ends the night started \(RecordingFormat.timestamp($0.nightStart, calendar: calendar))." }
-                             ?? "Record an observed wake time to help plan today.")
+                        explanation
                             .font(.footnote.weight(.medium))
                             .foregroundStyle(Color.sleepMuted)
                             .multilineTextAlignment(.center)
                             .padding(.horizontal, 24)
-                        if let association {
-                            Text("Wake date \(RecordingFormat.date(association.morning, calendar: calendar))")
+                        if let morning = correctionDraft?.context.day ?? association?.morning {
+                            Text("Wake date \(RecordingFormat.date(morning, calendar: calendar))")
                                 .font(.subheadline.weight(.semibold))
                                 .accessibilityIdentifier("home.wake.date")
                         }
                     }
-                    DatePicker(
-                        "Wake-up time",
-                        selection: $draft.selected,
-                        displayedComponents: .hourAndMinute
-                    )
-                    .datePickerStyle(.wheel).labelsHidden()
-                    .frame(maxHeight: 150).clipped()
+                    wakePicker
+                        .datePickerStyle(.wheel)
+                        .labelsHidden()
+                        .accessibilityLabel("Wake-up time")
+                        .accessibilityIdentifier("home.wake.time")
+                        .frame(maxWidth: .infinity)
+                        .disabled(correctionDraft?.pendingTime != nil)
+                    if isCorrection {
+                        Text(RecordingFormat.timestamp(selectedTime, calendar: calendar))
+                            .font(.footnote.weight(.medium))
+                            .foregroundStyle(Color.sleepMuted)
+                            .multilineTextAlignment(.center)
+                            .accessibilityIdentifier("home.wake.selection")
+                        if correctionDraft?.pendingTime != nil {
+                            Text("This correction has not finished. Retry the same time to complete it.")
+                                .font(.footnote)
+                                .foregroundStyle(ObservationStatusColor.caution)
+                                .multilineTextAlignment(.center)
+                                .accessibilityIdentifier("home.wake.pending")
+                        }
+                    }
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.top, 24)
+                .padding(.horizontal, isCorrection ? 20 : 0)
+                .padding(.bottom, 16)
             }
+            .accessibilityIdentifier("home.wake.scroll")
             .background(Color.sleepBackground)
-            .navigationTitle(association == nil ? "Today's Wake-up" : "Morning Wake")
+            .navigationTitle(isCorrection ? "Edit Morning Wake" : association == nil ? "Today's Wake-up" : "Morning Wake")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("Cancel") {
-                        if draft.abandon() { dismiss() } else { cancellationFailed = true; saveFailed = true }
+                        if correctionDraft?.pendingTime != nil { confirmAbandonCorrection = true }
+                        else { cancel() }
                     }.accessibilityIdentifier("home.wake.cancel")
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button(association == nil ? "Save" : "Save and End Sleep") {
-                        if draft.needsTimeConfirmation && !draft.requiresExplicitCancellation {
+                    Button(saveTitle) {
+                        if correctionDraft?.context.requiresPairedConfirmation == true && pairedConfirmation == nil {
+                            proposedCorrectionTime = correctionSelection
+                            confirmPairedCorrection = true
+                        } else if draft?.needsTimeConfirmation == true && !requiresExplicitCancellation {
                             confirmSuggestedTime = true
                         } else {
                             save()
@@ -287,7 +373,32 @@ private struct WakeTimeEditorView: View {
             Button("Confirm and Save") { save() }
             Button("Cancel", role: .cancel) { }
         } message: {
-            Text("Save this time only if you observed your baby wake at \(RecordingFormat.timestamp(draft.selected, calendar: calendar)).")
+            Text("Save this time only if you observed your baby wake at \(RecordingFormat.timestamp(selectedTime, calendar: calendar)).")
+        }
+        .confirmationDialog("Update wake and night end?", isPresented: $confirmPairedCorrection, titleVisibility: .visible) {
+            Button("Update both") {
+                guard let proposed = proposedCorrectionTime, proposed == correctionSelection,
+                      let confirmation = correctionDraft?.confirmUpdateBoth(at: proposed) else {
+                    saveFailureMessage = "This correction changed. Reopen the morning wake and confirm it again."
+                    saveFailed = true
+                    return
+                }
+                pairedConfirmation = confirmation
+                save()
+            }
+            .accessibilityIdentifier("home.wake.updateBoth")
+            Button("Cancel", role: .cancel) { proposedCorrectionTime = nil }
+                .accessibilityIdentifier("home.wake.updateBoth.cancel")
+        } message: {
+            if let night = correctionDraft?.context.linkedNight, let proposed = proposedCorrectionTime {
+                Text("This wake is linked to the night that started on \(RecordingFormat.date(night.date, calendar: calendar)). Update the wake time and that night's end to \(RecordingFormat.timestamp(proposed, calendar: calendar))?")
+            }
+        }
+        .confirmationDialog("Leave unfinished correction?", isPresented: $confirmAbandonCorrection, titleVisibility: .visible) {
+            Button("Leave editor", role: .destructive, action: cancel)
+            Button("Keep editing", role: .cancel) { }
+        } message: {
+            Text("Saving has not finished. Leaving does not undo any changes already saved. These records may still need recovery.")
         }
         .alert(cancellationFailed ? "Could not cancel wake time" : "Could not save wake time", isPresented: $saveFailed) {
             Button("OK", role: .cancel) { }
@@ -299,18 +410,37 @@ private struct WakeTimeEditorView: View {
         .environment(\.calendar, calendar)
         .environment(\.timeZone, calendar.timeZone)
         .tint(Color.sleepPurpleDeep)
-        .presentationDetents(dynamicType.isAccessibilitySize ? [.large] : [.height(390), .large])
+        .presentationDetents(dynamicType.isAccessibilitySize || isCorrection ? [.large] : [.height(390), .large])
         .presentationDragIndicator(.visible)
-        .interactiveDismissDisabled(draft.requiresExplicitCancellation)
-        .onDisappear { _ = draft.abandon() }
+        .interactiveDismissDisabled(requiresExplicitCancellation)
+        .onDisappear { _ = abandon() }
     }
 
     private func save() {
         cancellationFailed = false
+        if let correctionDraft, let onCorrectionSave {
+            let outcome = onCorrectionSave(correctionDraft, correctionSelection, pairedConfirmation)
+            if outcome.succeeded {
+                dismiss()
+            } else {
+                if case .requiresConfirmation = outcome { pairedConfirmation = nil }
+                saveFailureMessage = outcome.message
+                saveFailed = true
+            }
+            return
+        }
+        guard let draft, let onSave else { return }
         let operation = association.map(HomeWakeOperation.associated) ?? .independent
         if draft.submit(save: { date, capture in
             saveFailureMessage = onSave(date, capture, operation, calendar)
             return saveFailureMessage == nil
         }) { dismiss() } else { saveFailed = true }
+    }
+
+    private func abandon() -> Bool { correctionDraft?.abandon() ?? draft?.abandon() ?? true }
+
+    private func cancel() {
+        if abandon() { dismiss() }
+        else { cancellationFailed = true; saveFailed = true }
     }
 }

@@ -149,6 +149,20 @@ struct SleepListView: View {
         return "Saving did not finish. Review your wake time and try again."
     }
 
+    private func saveMorningWakeCorrection(_ draft: MorningWakeCorrectionDraft, time: Date,
+                                          confirmation: MorningWakeCorrectionConfirmation?) -> MorningWakeCorrectionOutcome {
+        var now = Date()
+        #if DEBUG && targetEnvironment(simulator)
+        if let fixtureNow = TodayPlanUITestFixture.morningWakeCorrectionNow { now = fixtureNow }
+        #endif
+        let outcome = draft.submit(time, confirmation: confirmation, at: now, calendar: .current)
+        // Reload actual persisted observations even after an interrupted submission.
+        // Existing observation notifications regenerate the dependent plan/projections.
+        loadRecords()
+        loadWakeRecords()
+        return outcome
+    }
+
     // MARK: - Derived Data
 
     private var sleeps: [SleepRecord] {
@@ -451,7 +465,8 @@ struct SleepListView: View {
             onDeleteRecords: { ids in
                 deleteRecords(ids)
             },
-            onWakeTimeSave: saveWakeTime
+            onWakeTimeSave: saveWakeTime,
+            onWakeCorrectionSave: saveMorningWakeCorrection
         )
     }
     // MARK: - Header

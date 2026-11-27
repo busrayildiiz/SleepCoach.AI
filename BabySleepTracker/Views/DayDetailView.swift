@@ -13,17 +13,36 @@ struct DayDetailView: View {
     let onDelete: (_ ids: Set<UUID>) -> Void
     let onRecordUpsert: (SleepRecord) -> Bool
     let onBreakSaved: (_ newBreak: SleepRecord) -> Bool
+    let onWakeCorrectionSave: (MorningWakeCorrectionDraft, Date, MorningWakeCorrectionConfirmation?) -> MorningWakeCorrectionOutcome
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.dynamicTypeSize) private var dynamicType
     @State private var showHistoricalWake = false
+    @State private var wakeCorrection: WakeCorrectionDestination?
+    @State private var wakeCorrectionUnavailable = false
     @State private var showAddMenu = false
     @State private var recordingSheet: RecordingSheet?
     @State private var contextNap: SleepRecord?
     @State private var showNapActions = false
     @StateObject private var orchestrator = SleepCoachOrchestrator.shared
     @State private var cal = Calendar.current
-    @State private var now = Date()
+    @State private var now = DayDetailView.referenceNow
+
+    private struct WakeCorrectionDestination: Identifiable {
+        let id = UUID()
+        let draft: MorningWakeCorrectionDraft
+
+        init(context: MorningWakeCorrectionContext) {
+            draft = MorningWakeCorrectionDraft(context: context)
+        }
+    }
+
+    private static var referenceNow: Date {
+        #if DEBUG && targetEnvironment(simulator)
+        if let fixtureNow = TodayPlanUITestFixture.morningWakeCorrectionNow { return fixtureNow }
+        #endif
+        return Date()
+    }
 
     private var isToday: Bool { cal.isDate(day, inSameDayAs: now) }
     private var isHistorical: Bool { cal.startOfDay(for: day) < cal.startOfDay(for: now) }
@@ -104,6 +123,16 @@ struct DayDetailView: View {
                                               now: now, calendar: calendar).records(on: savedDay)
                 }
             }
+            .sheet(item: $wakeCorrection, onDismiss: refreshPresentation) { destination in
+                // The item owns the opening baseline. Observation notifications may
+                // refresh this day, but cannot replace an active editor's retry state.
+                WakeTimeEditorView(correction: destination.draft, onSave: onWakeCorrectionSave)
+            }
+            .alert("Could not open morning wake", isPresented: $wakeCorrectionUnavailable) {
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text("This wake's current records or sleep relationship could not be verified. Reopen Day detail and try again after any pending sleep entry finishes.")
+            }
             .fullScreenCover(item: $recordingSheet, onDismiss: refreshPresentation) { destination in
                 switch destination {
                 case .sleep(let editing, let date):
@@ -131,7 +160,25 @@ struct DayDetailView: View {
             .receive(on: RunLoop.main)
     }
 
-    private func refreshPresentation() { now = Date() }
+    private func refreshPresentation() { now = Self.referenceNow }
+
+    private func openWakeCorrection() {
+        let openedAt = Self.referenceNow
+        guard let wakes = DailyWakeRecordPersistence().load(),
+              let wake = DailyWakeRecord.uniqueObservation(in: wakes, on: day, at: openedAt, calendar: cal),
+              let context = MorningWakeCorrectionContext.load(wakeID: wake.id, at: openedAt, calendar: cal)
+        else {
+            wakeCorrectionUnavailable = true
+            return
+        }
+        if isHistorical && !context.requiresPairedConfirmation {
+            // Keep the historical standalone recording flow and its saved-day return.
+            // A missing/unreadable relationship never enters this fallback.
+            showHistoricalWake = true
+        } else {
+            wakeCorrection = WakeCorrectionDestination(context: context)
+        }
+    }
 
     private func displayedRecords(_ accounting: SleepAccounting) -> [SleepRecord] {
         let selected = accounting.records(on: day)
@@ -260,14 +307,27 @@ struct DayDetailView: View {
             .accessibilityElement(children: .combine)
             .accessibilityIdentifier(wake == .ambiguous ? "history.day.wake.ambiguous" : "history.day.wake")
 
-            if isHistorical {
+            if isToday || isHistorical {
                 switch wake {
                 case .recorded:
-                    historicalWakeButton("Edit", icon: "pencil", spokenLabel: "Edit morning wake")
+                    Button(action: openWakeCorrection) {
+                        Label("Edit", systemImage: "pencil")
+                            .font(.subheadline)
+                            .frame(minWidth: 44, minHeight: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(RecordingColor.accent)
+                    .accessibilityLabel(Text("Edit morning wake, \(day.formatted(fullDate))"))
+                    .accessibilityIdentifier(isHistorical ? "history.wake.review" : "history.wake.edit")
                 case .missing:
-                    historicalWakeButton("Record", icon: "plus", spokenLabel: "Record morning wake")
+                    if isHistorical {
+                        historicalWakeButton("Record", icon: "plus", spokenLabel: "Record morning wake")
+                    }
                 case .ambiguous, .unavailable:
-                    historicalWakeButton("Review", icon: "exclamationmark.circle", spokenLabel: "Review morning wakes")
+                    if isHistorical {
+                        historicalWakeButton("Review", icon: "exclamationmark.circle", spokenLabel: "Review morning wakes")
+                    }
                 }
             }
         }
